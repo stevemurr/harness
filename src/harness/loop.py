@@ -19,6 +19,7 @@ back when the loop is reliable and when there is a measurement to justify its sh
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -64,7 +65,13 @@ class Limits:
 
 
 ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]
-Observer = Callable[[Turn], None]
+
+#: Told about each completed turn. May be sync or async, and the loop awaits it either way.
+#:
+#: Async because persistence is an observer, and a store write that is not awaited is a
+#: write that has not happened -- a run recorded only on a clean exit does not survive the
+#: crash the recording exists for. Rendering stays a plain function.
+Observer = Callable[[Turn], Awaitable[None] | None]
 
 
 @dataclass
@@ -118,7 +125,7 @@ class AgentLoop:
             if not assistant.tool_calls:
                 # No tools asked for: the model is answering rather than working. That is
                 # the only ordinary way a run ends.
-                self._observe(Turn(assistant))
+                await self._observe(Turn(assistant))
                 return Outcome(transcript, StopReason("done"), turns)
 
             results = await self._run_calls(assistant.tool_calls)
@@ -132,7 +139,7 @@ class AgentLoop:
             else:
                 consecutive_failures = 0
 
-            self._observe(Turn(assistant, results))
+            await self._observe(Turn(assistant, results))
 
             if consecutive_failures >= self.limits.max_consecutive_tool_failures:
                 return Outcome(
@@ -169,12 +176,18 @@ class AgentLoop:
             answered.append((call, result.truncated(TOOL_OUTPUT_LIMIT)))
         return tuple(answered)
 
-    def _observe(self, turn: Turn) -> None:
+    async def _observe(self, turn: Turn) -> None:
         for observer in self.observers:
             try:
-                observer(turn)
+                outcome = observer(turn)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except asyncio.CancelledError:
+                raise
             except Exception:
-                # An observer is a spectator. One that raises must not end a run.
+                # An observer is a spectator. One that raises must not end a run -- but it
+                # must be loud, because a persistence observer that fails silently loses
+                # the record while the run reports success.
                 log.exception("observer failed")
 
 

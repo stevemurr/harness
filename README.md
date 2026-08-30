@@ -67,7 +67,40 @@ src/harness/
     base.py      the persistence contract
     jsonl.py     one append-only file per session
     memory.py    for tests
+  agent.py       the composition root
+  cli.py         the terminal front end
 ```
+
+## Running it
+
+```sh
+export HARNESS_BASE_URL=https://api.openai.com/v1   # or any compatible endpoint
+export HARNESS_API_KEY=sk-...
+export HARNESS_MODEL=gpt-4o
+
+harness "add a test for the parser"      # asks before anything changes
+harness -y "..."                          # approve everything (no sandbox -- read that again)
+harness --sessions                        # what has been run
+harness --resume <session> "now do X"     # continue where it left off
+```
+
+## The entry point is not an interface
+
+`Agent` is the composition root, and a composition root is the one thing that must be
+concrete -- behind an interface, something above it would choose which root, and that would
+be the real root. What varies between front ends is two of its collaborators, and both are
+already interfaces:
+
+  * a CLI passes an asker that prompts and an observer that renders
+  * a server passes an asker that suspends until a client answers, and an observer that
+    publishes events
+  * a script passes `approve_all` and no observer
+
+Same `Agent`, three front ends, no new abstractions.
+
+Persistence is one of those observers, so the loop never learns that storage exists and a
+run with no store takes the same path. Observers may be async precisely for this: a store
+write that is not awaited has not happened.
 
 ## Storage is a file per session
 

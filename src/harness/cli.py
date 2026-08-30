@@ -1,0 +1,171 @@
+"""The terminal front end.
+
+Two collaborators are all that make this a CLI rather than a server: an asker that prints a
+prompt and reads a key, and an observer that renders turns. Everything else is the same
+`Agent`.
+
+No dependencies beyond the standard library. Colour is ANSI written directly and suppressed
+when the output is not a terminal or `NO_COLOR` is set, because a harness whose output is
+piped into a file should not fill it with escape codes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+from harness.agent import build
+from harness.approval import Approvals, Decision, Policy, Request
+from harness.loop import Turn
+from harness.providers.openai import OpenAICompatible
+from harness.store import JsonlStore
+
+SESSIONS = Path("~/.harness/sessions").expanduser()
+
+_COLOUR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def paint(text: str, code: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _COLOUR else text
+
+
+dim = lambda t: paint(t, "2")  # noqa: E731
+bold = lambda t: paint(t, "1")  # noqa: E731
+red = lambda t: paint(t, "31")  # noqa: E731
+green = lambda t: paint(t, "32")  # noqa: E731
+yellow = lambda t: paint(t, "33")  # noqa: E731
+
+
+def render(turn: Turn) -> None:
+    """One turn, as the person watching sees it."""
+    if turn.assistant.content.strip():
+        print(f"\n{turn.assistant.content.strip()}\n")
+    for call, result in turn.results:
+        mark = green("✓") if result.ok else red("✗")
+        first = result.content.strip().splitlines()
+        summary = first[0][:100] if first else ""
+        extra = f" {dim(f'(+{len(first) - 1} lines)')}" if len(first) > 1 else ""
+        print(f"  {mark} {bold(call.name)} {dim(summary)}{extra}")
+
+
+async def ask_in_terminal(request: Request) -> Decision:
+    """Prompt, and read one line.
+
+    Asked on a worker thread because `input` blocks, and blocking the event loop here would
+    stall anything else the run has in flight. The default on a bare Enter is *no*: a
+    prompt whose safest answer needs a keystroke is one people fumble.
+    """
+    print(f"\n{yellow('⏵')} {bold(request.summary)}")
+    print(dim("  [y]es  [n]o  [a]lways for this session   (default: no)"))
+    try:
+        answer = (await asyncio.to_thread(input, "  > ")).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return Decision.DENY
+    if answer in {"a", "always"}:
+        return Decision.ALLOW_ALWAYS
+    if answer in {"y", "yes"}:
+        return Decision.ALLOW
+    return Decision.DENY
+
+
+async def main_async(args: argparse.Namespace) -> int:
+    if not args.api_key and not args.base_url.startswith("http://localhost"):
+        print(
+            red("no API key.") + " Set HARNESS_API_KEY or pass --api-key "
+            "(not needed for a local endpoint).",
+            file=sys.stderr,
+        )
+        return 2
+
+    provider = OpenAICompatible(
+        base_url=args.base_url,
+        model=args.model,
+        api_key=args.api_key,
+        max_tokens=args.max_tokens,
+    )
+    approvals = Approvals(
+        policy=Policy(approve_everything=args.yes),
+        ask=ask_in_terminal,
+    )
+    agent = build(
+        args.folder,
+        provider,
+        store=JsonlStore(SESSIONS),
+        approvals=approvals,
+        observers=[render],
+    )
+
+    print(dim(f"harness · {provider.name} · {agent.workspace.root}"))
+    if args.yes:
+        print(yellow("approving everything: nothing will be asked about."))
+
+    try:
+        session_id, outcome = await agent.run(args.prompt, session_id=args.resume)
+    except KeyboardInterrupt:
+        print(dim("\ninterrupted."))
+        return 130
+    finally:
+        await provider.aclose()
+
+    print(dim(f"\n{outcome.turns} turns · {outcome.stop.kind} · session {session_id}"))
+    if not outcome.stop.ok:
+        print(red(outcome.stop.detail or outcome.stop.kind), file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="harness", description="Run a coding agent over a folder."
+    )
+    parser.add_argument("prompt", help="What you want done.")
+    parser.add_argument(
+        "-C", "--folder", default=".", help="Folder to work in (default: here)."
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("HARNESS_MODEL", "gpt-4o"),
+        help="Model name (env: HARNESS_MODEL).",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("HARNESS_BASE_URL", "https://api.openai.com/v1"),
+        help="OpenAI-compatible endpoint (env: HARNESS_BASE_URL).",
+    )
+    parser.add_argument(
+        "--api-key", default=os.environ.get("HARNESS_API_KEY", ""), help="env: HARNESS_API_KEY"
+    )
+    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument(
+        "--resume", metavar="SESSION", help="Continue a session instead of starting one."
+    )
+    parser.add_argument(
+        "--sessions", action="store_true", help="List recent sessions and exit."
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Approve everything without asking. Nothing stands between the agent and "
+        "your filesystem -- there is no sandbox.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.sessions:
+        return asyncio.run(_list_sessions())
+    return asyncio.run(main_async(args))
+
+
+async def _list_sessions() -> int:
+    for info in await JsonlStore(SESSIONS).sessions():
+        when = info.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        print(f"{bold(info.session_id)}  {dim(when)}  {info.title or dim('(no prompt)')}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
