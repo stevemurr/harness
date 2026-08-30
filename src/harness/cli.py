@@ -20,6 +20,7 @@ from pathlib import Path
 from harness.agent import build
 from harness.approval import Approvals, Decision, Policy, Request
 from harness.loop import Turn
+from harness.mode import NORMAL, PLAN
 from harness.providers.openai import OpenAICompatible
 from harness.store import JsonlStore
 
@@ -117,11 +118,20 @@ async def main_async(args: argparse.Namespace) -> int:
         store=JsonlStore(SESSIONS),
         approvals=approvals,
         observers=[render],
+        mode=PLAN if args.plan else NORMAL,
     )
 
     print(dim(f"harness · {provider.name} · {agent.workspace.root}"))
+    if args.plan:
+        print(dim("plan mode: read-only until you approve a plan."))
     if args.yes:
         print(yellow("approving everything: nothing will be asked about."))
+    if args.plan and args.yes:
+        print(
+            red("--plan with --yes approves the plan unread, which is the one approval "
+                "worth reading."),
+            file=sys.stderr,
+        )
 
     try:
         session_id, outcome = await agent.run(args.prompt, session_id=args.resume)
@@ -165,6 +175,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--sessions", action="store_true", help="List recent sessions and exit."
+    )
+    parser.add_argument(
+        "-p",
+        "--plan",
+        action="store_true",
+        help="Start read-only. The agent researches and proposes a plan; nothing changes "
+        "until you approve it.",
     )
     parser.add_argument(
         "-y",

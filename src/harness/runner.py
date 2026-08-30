@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from harness.approval import Approvals, Request
+from harness.mode import ModeState
 from harness.tools.base import Registry, Tool, ToolContext
 from harness.types import ToolCall, ToolResult
 
@@ -37,12 +38,26 @@ class ToolRunner:
     registry: Registry
     context: ToolContext
     approvals: Approvals
+    modes: ModeState | None = None
 
     async def run(self, call: ToolCall) -> ToolResult:
         tool = self.registry.get(call.name)
         if tool is None:
             known = ", ".join(sorted(self.registry.names())) or "none"
             return ToolResult(f"no tool named {call.name!r}. Available: {known}", ok=False)
+
+        # The mode is checked here, not only where tools are offered. Withholding a tool
+        # from the offer list is a hint; this is the boundary. A model can ask for a tool
+        # it was never given -- a resumed transcript can carry the call, and models invent
+        # names -- and before this check one did, and the file was written.
+        if self.modes is not None:
+            mode = self.modes.current
+            if not mode.permits(tool.spec.name, tool.spec.mutates):
+                return ToolResult(
+                    f"{tool.spec.name} is not available in {mode.name} mode. "
+                    "Call exit_plan_mode with a plan to ask the user to unlock it.",
+                    ok=False,
+                )
 
         summary, grant_key = describe(tool, call.arguments)
         allowed, refusal = await self.approvals.check(

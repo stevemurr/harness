@@ -119,6 +119,32 @@ effects here to be part-way through.
 `tests/test_store.py` is a conformance suite parameterised over every implementation, so
 adding a store means running tests that already exist.
 
+## Plan mode
+
+`harness --plan` starts read-only. The agent reads, works out what it would do, and calls
+`exit_plan_mode` with a plan; nothing changes until you approve it. Reject it and the agent
+stays read-only and revises.
+
+This is the half of Claude's approach with real leverage: **one approval, made while you can
+still redirect the work**, instead of twenty made after the direction is set and each too
+small to refuse.
+
+A mode is **data, not an interface** -- two fields, `allow_mutating` and a prompt. Every mode
+anyone can name differs only in which tools are offered and what the model is told. A
+protocol would let a mode run arbitrary code to decide, which is more power than a mode
+needs and more than can be tested. That restraint is inherited: the predecessor grew five
+abstractions over "what may this run do" (`IntentKind`, `ExecutionDisposition`,
+`EffectScope`, `CompletionPolicy`, `WorkerAuthority`) and removed every one as a footgun.
+They all began as a small enum. The difference that makes this safe: **a person picks the
+mode, never the model.**
+
+`Mode.permits` is asked twice -- once to choose what to offer, once to decide whether to
+dispatch what was actually called -- and it is one function, because those must never become
+two derivations that can disagree. Withholding a tool from the offer list is a hint;
+refusing at dispatch is the boundary. A model can call a tool it was never offered: a
+resumed transcript can carry one, and models invent names. Before the dispatch check
+existed, a scripted model asked for `write_file` in plan mode and the file was written.
+
 ## The plan
 
 One checklist, two tools. `write_plan` replaces it; `update_plan` changes steps by id and

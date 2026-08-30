@@ -22,11 +22,12 @@ from pathlib import Path
 
 from harness.approval import Approvals
 from harness.loop import AgentLoop, Limits, Observer, Outcome, Turn, system, user
+from harness.mode import NORMAL, Mode, ModeState
 from harness.plan import Plan
-from harness.providers.base import Provider, bind
+from harness.providers.base import Provider
 from harness.runner import ToolRunner
 from harness.store.base import Store
-from harness.tools.base import Registry, ToolContext
+from harness.tools.base import Registry, ToolContext, ToolSpec
 from harness.types import Message, Role, Transcript
 from harness.workspace import Workspace
 
@@ -70,6 +71,9 @@ class Agent:
     #: the loop reads it and no outcome depends on it -- see `tests/test_plan.py`. It is here
     #: because a plan nobody can see is a plan that may as well not exist.
     plan: Plan | None = None
+    #: What the agent may do. A person sets this, never the model -- the model can only ask
+    #: to leave plan mode, and a person answers.
+    modes: ModeState = field(default_factory=ModeState)
 
     async def run(self, prompt: str, session_id: str | None = None) -> tuple[str, Outcome]:
         """Do one exchange. Returns the session id and how it ended.
@@ -88,14 +92,33 @@ class Agent:
         await self._write(session_id, opening)
 
         loop = AgentLoop(
-            complete=bind(self.provider, self.registry.specs()),
+            # Tools are chosen per call rather than once, because the mode can change
+            # mid-run: approving a plan unlocks the writing tools from the next turn on.
+            complete=self._complete,
             run_tool=ToolRunner(
-                self.registry, ToolContext(paths=self.workspace), self.approvals
+                self.registry,
+                ToolContext(paths=self.workspace),
+                self.approvals,
+                modes=self.modes,
             ).run,
             limits=self.limits,
             observers=[*self.observers, self._recorder(session_id)],
         )
         return session_id, await loop.run(transcript)
+
+    async def _complete(self, transcript: Transcript) -> Message:
+        return await self.provider.complete(transcript, self._specs())
+
+    def _specs(self) -> tuple[ToolSpec, ...]:
+        """The tools this mode offers.
+
+        Plan mode withholds every mutating tool, which is what makes it a boundary rather
+        than an instruction -- a model in plan mode cannot edit a file if it decides to,
+        because the tool is not on the list it was given. `exit_plan_mode` is the exception
+        it needs to get out.
+        """
+        mode = self.modes.current
+        return tuple(s for s in self.registry.specs() if mode.permits(s.name, s.mutates))
 
     async def _open(self, session_id: str | None) -> tuple[Transcript, str, bool]:
         """The transcript to continue, its session id, and whether it is new.
@@ -107,7 +130,7 @@ class Agent:
             loaded = await self.store.load(session_id)
             if loaded is not None:
                 return loaded, session_id, False
-        fresh = Transcript([system(self.system_prompt)])
+        fresh = Transcript([system(self.system_prompt + self.modes.current.prompt)])
         if self.store is None:
             return fresh, session_id or "unsaved", True
         return fresh, await self.store.create(self.workspace.root), True
@@ -137,7 +160,9 @@ class Agent:
             await self.store.append(session_id, messages)
 
 
-def default_registry(plan: Plan | None = None) -> tuple[Registry, Plan]:
+def default_registry(
+    plan: Plan | None = None, modes: ModeState | None = None
+) -> tuple[Registry, Plan, ModeState]:
     """Every tool a coding agent gets by default, and the plan two of them share.
 
     The plan comes back so a front end can render it. It is held by its tools rather than
@@ -145,11 +170,14 @@ def default_registry(plan: Plan | None = None) -> tuple[Registry, Plan]:
     context growing a field per stateful tool would hand every tool everything.
     """
     from harness.tools.files import file_tools
+    from harness.tools.mode import mode_tools
     from harness.tools.plan import plan_tools
     from harness.tools.shell import shell_tools
 
     planning, plan = plan_tools(plan)
-    return Registry([*file_tools(), *shell_tools(), *planning]), plan
+    modes = modes or ModeState()
+    registry = Registry([*file_tools(), *shell_tools(), *planning, *mode_tools(modes)])
+    return registry, plan, modes
 
 
 def build(
@@ -159,6 +187,7 @@ def build(
     store: Store | None = None,
     approvals: Approvals | None = None,
     observers: list[Observer] | None = None,
+    mode: Mode = NORMAL,
 ) -> Agent:
     """An agent over a folder, with the defaults a coding agent wants.
 
@@ -170,12 +199,14 @@ def build(
     sessions = Path("~/.harness/sessions").expanduser()
     protected = (sessions,) if sessions.is_relative_to(root) else ()
 
-    registry, plan = default_registry()
+    modes = ModeState(current=mode)
+    registry, plan, modes = default_registry(modes=modes)
     return Agent(
         workspace=Workspace.at(root, protected=protected),
         provider=provider,
         registry=registry,
         plan=plan,
+        modes=modes,
         approvals=approvals or Approvals(),
         store=store,
         observers=observers or [],
