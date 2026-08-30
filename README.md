@@ -59,6 +59,7 @@ src/harness/
   tools/
     base.py      the tool contract: ToolSpec, ToolContext, Registry
     files.py     read, write, edit, list, glob, grep
+    plan.py      write_plan / update_plan
     shell.py     run a command (see the warning below)
   providers/
     base.py      the model contract
@@ -117,6 +118,35 @@ effects here to be part-way through.
 
 `tests/test_store.py` is a conformance suite parameterised over every implementation, so
 adding a store means running tests that already exist.
+
+## The plan
+
+One checklist, two tools. `write_plan` replaces it; `update_plan` changes steps by id and
+can add, remove and reword them.
+
+Both exist because full replacement -- what Codex's `update_plan` does -- costs two things
+when the model only wants to tick a box: the tokens, and, the one that actually bites, a
+model re-emitting a list from memory silently drops steps it has forgotten. An update
+naming `s3` cannot lose `s5`. Ids are assigned by the tool and never reused, because
+positional references shift the moment a step is inserted and a model updating "step 3"
+after something moved is a silent wrong edit.
+
+**It is not control state.** Nothing in the loop reads the plan, nothing gates on it, and a
+run finishes identically whether the model wrote ten plans or never called the tool -- there
+is a test that says exactly that. The moment the runtime believes the plan, the plan becomes
+a thing the model can mislead the runtime with. So the only rules enforced are shape rules;
+conventions about *good* plans (one step in progress, don't plan a one-step task) live in
+the tool descriptions, which is the only kind of rule a plan is allowed to have.
+
+Neither tool is ever asked about. A checklist is not a change to your machine, and a prompt
+on every tick is the approval fatigue that makes people stop reading the ones that matter.
+
+```
+plan
+  ● [s1] read the parser
+  ◐ [s2] add trailing-comma support
+  ○ [s4] update the changelog
+```
 
 ## Adding a tool
 

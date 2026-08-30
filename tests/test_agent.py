@@ -55,7 +55,7 @@ def agent_over(folder: Path, model, **kw) -> Agent:
     return Agent(
         workspace=Workspace.at(folder),
         provider=model,
-        registry=default_registry(),
+        registry=default_registry()[0],
         approvals=kw.pop("approvals", Approvals(policy=Policy(approve_everything=True))),
         **kw,
     )

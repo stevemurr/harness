@@ -39,16 +39,36 @@ green = lambda t: paint(t, "32")  # noqa: E731
 yellow = lambda t: paint(t, "33")  # noqa: E731
 
 
+PLAN_TOOLS = {"write_plan", "update_plan"}
+
+
 def render(turn: Turn) -> None:
     """One turn, as the person watching sees it."""
     if turn.assistant.content.strip():
         print(f"\n{turn.assistant.content.strip()}\n")
     for call, result in turn.results:
+        if call.name in PLAN_TOOLS and result.ok:
+            # The plan is the one tool result worth showing whole: it is written for a
+            # person to read, and a one-line summary of a checklist is not a checklist.
+            print(f"\n{dim('plan')}")
+            for line in result.content.splitlines():
+                print(f"  {_plan_line(line)}")
+            print()
+            continue
         mark = green("✓") if result.ok else red("✗")
         first = result.content.strip().splitlines()
         summary = first[0][:100] if first else ""
         extra = f" {dim(f'(+{len(first) - 1} lines)')}" if len(first) > 1 else ""
         print(f"  {mark} {bold(call.name)} {dim(summary)}{extra}")
+
+
+def _plan_line(line: str) -> str:
+    """Colour a rendered plan row by its glyph, leaving anything else alone."""
+    if line.startswith("●"):
+        return dim(line)
+    if line.startswith("◐"):
+        return bold(line)
+    return line
 
 
 async def ask_in_terminal(request: Request) -> Decision:

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from harness.approval import Approvals
 from harness.loop import AgentLoop, Limits, Observer, Outcome, Turn, system, user
+from harness.plan import Plan
 from harness.providers.base import Provider, bind
 from harness.runner import ToolRunner
 from harness.store.base import Store
@@ -33,6 +34,12 @@ SYSTEM_PROMPT = """You are a coding agent working in a single folder.
 
 Work by using the tools, not by describing what should be done. When the task is finished,
 reply with a short summary and no tool calls -- that is what ends the turn.
+
+For work with more than a couple of steps, call write_plan once near the start, then keep it
+current with update_plan -- mark a step in_progress when you start it and completed when it
+is actually done, one in progress at a time. Do not plan a one-step task, and do not rewrite
+the whole plan to tick a box: update_plan changes steps by id and cannot drop the ones you
+did not mention.
 
 Before editing a file, read it. Copy the exact text you intend to replace, including its
 indentation; edit_file refuses an ambiguous match rather than guessing which one you meant.
@@ -59,6 +66,10 @@ class Agent:
     observers: list[Observer] = field(default_factory=list)
     limits: Limits = field(default_factory=Limits)
     system_prompt: str = SYSTEM_PROMPT
+    #: The checklist the plan tools write, exposed so a front end can render it. Nothing in
+    #: the loop reads it and no outcome depends on it -- see `tests/test_plan.py`. It is here
+    #: because a plan nobody can see is a plan that may as well not exist.
+    plan: Plan | None = None
 
     async def run(self, prompt: str, session_id: str | None = None) -> tuple[str, Outcome]:
         """Do one exchange. Returns the session id and how it ended.
@@ -126,12 +137,19 @@ class Agent:
             await self.store.append(session_id, messages)
 
 
-def default_registry() -> Registry:
-    """Every tool a coding agent gets by default."""
+def default_registry(plan: Plan | None = None) -> tuple[Registry, Plan]:
+    """Every tool a coding agent gets by default, and the plan two of them share.
+
+    The plan comes back so a front end can render it. It is held by its tools rather than
+    put on `ToolContext`, which stays the small set of things *every* tool may reach -- a
+    context growing a field per stateful tool would hand every tool everything.
+    """
     from harness.tools.files import file_tools
+    from harness.tools.plan import plan_tools
     from harness.tools.shell import shell_tools
 
-    return Registry([*file_tools(), *shell_tools()])
+    planning, plan = plan_tools(plan)
+    return Registry([*file_tools(), *shell_tools(), *planning]), plan
 
 
 def build(
@@ -152,10 +170,12 @@ def build(
     sessions = Path("~/.harness/sessions").expanduser()
     protected = (sessions,) if sessions.is_relative_to(root) else ()
 
+    registry, plan = default_registry()
     return Agent(
         workspace=Workspace.at(root, protected=protected),
         provider=provider,
-        registry=default_registry(),
+        registry=registry,
+        plan=plan,
         approvals=approvals or Approvals(),
         store=store,
         observers=observers or [],
