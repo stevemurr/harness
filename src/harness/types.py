@@ -13,7 +13,6 @@ the simple thing instead, and `--resume` is transcript replay in both.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
@@ -40,18 +39,6 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
 
-    def to_openai(self) -> dict[str, Any]:
-        return {
-            "id": self.call_id,
-            "type": "function",
-            "function": {
-                "name": self.name,
-                # Arguments travel as a JSON *string* on the wire, not an object. Providers
-                # differ on whether they tolerate an object; none rejects the string.
-                "arguments": json.dumps(self.arguments),
-            },
-        }
-
 
 @dataclass(frozen=True, slots=True)
 class Message:
@@ -61,14 +48,6 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     #: Set only on TOOL messages: which call this answers.
     call_id: str | None = None
-
-    def to_openai(self) -> dict[str, Any]:
-        if self.role is Role.TOOL:
-            return {"role": "tool", "tool_call_id": self.call_id, "content": self.content}
-        body: dict[str, Any] = {"role": self.role.value, "content": self.content}
-        if self.tool_calls:
-            body["tool_calls"] = [call.to_openai() for call in self.tool_calls]
-        return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,9 +107,6 @@ class Transcript:
             if message.role is Role.USER:
                 return ()
         return ()
-
-    def to_openai(self) -> list[dict[str, Any]]:
-        return [message.to_openai() for message in self.messages]
 
 
 @dataclass(frozen=True, slots=True)

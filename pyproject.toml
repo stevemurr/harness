@@ -1,14 +1,20 @@
 [project]
 name = "harness"
 version = "0.0.1"
-description = "A small coding-agent harness: one loop, real tools, an OS sandbox"
+description = "A small coding-agent harness: one loop, real tools, approval before anything changes"
 readme = "README.md"
 # Matching the interpreter the predecessor settled on: 3.14 is installed on this Mac but
 # several dependencies still lag it.
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "httpx>=0.27",   # OpenAI-compatible provider client
-    "orjson>=3.9",
+    "httpx>=0.27",       # provider client
+    # Tool-argument validation. `fastjsonschema` is ~100x faster and gets there by
+    # generating and exec'ing Python from the schema -- which, once tool schemas can come
+    # from anywhere but this repository, means running code derived from untrusted input
+    # inside the component whose job is to withhold permission. The speed argument does not
+    # apply either: one validation per tool call, against a model round-trip measured in
+    # seconds.
+    "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]

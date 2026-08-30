@@ -1,0 +1,206 @@
+"""OpenAI-compatible chat completions.
+
+The shape almost everything speaks: OpenAI itself, vLLM, llama.cpp, Ollama, LM Studio,
+Together, Groq, OpenRouter. One implementation reaches all of them, which is why it is the
+first one written.
+
+Everything OpenAI-shaped lives in this file. The rest of the harness holds `Message`,
+`ToolCall` and `ToolSpec`, and never sees a wire dict.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+
+from harness.loop import parse_arguments
+from harness.providers.base import ProviderError
+from harness.tools.base import ToolSpec
+from harness.types import Message, Role, ToolCall, Transcript
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class OpenAICompatible:
+    """One endpoint and model name."""
+
+    base_url: str
+    model: str
+    api_key: str = ""
+    temperature: float = 0.0
+    max_tokens: int | None = None
+    timeout: float = 300.0
+    max_retries: int = 3
+    _client: httpx.AsyncClient | None = field(default=None, repr=False)
+
+    @property
+    def name(self) -> str:
+        return f"{self.model} @ {self.base_url}"
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url.rstrip("/"), headers=headers, timeout=self.timeout
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def complete(
+        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+    ) -> Message:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [encode_message(m) for m in transcript.messages],
+            "temperature": self.temperature,
+        }
+        if tools:
+            body["tools"] = [encode_tool(spec) for spec in tools]
+        if self.max_tokens is not None:
+            body["max_tokens"] = self.max_tokens
+
+        last: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                return await self._once(body)
+            except ProviderError as exc:
+                last = exc
+                if not exc.retryable or attempt == self.max_retries - 1:
+                    raise
+                delay = 2**attempt
+                log.warning("provider retry %d after %s (%.0fs)", attempt + 1, exc, delay)
+                await asyncio.sleep(delay)
+        raise last or ProviderError("no attempt was made")
+
+    async def _once(self, body: dict[str, Any]) -> Message:
+        try:
+            response = await self._http().post("/chat/completions", json=body)
+        except httpx.TimeoutException as exc:
+            raise ProviderError(f"timed out after {self.timeout}s", retryable=True) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"cannot reach {self.base_url}: {exc}", retryable=True) from exc
+
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"{response.status_code} from {self.base_url}: {response.text[:500]}",
+                retryable=response.status_code in {408, 409, 429}
+                or response.status_code >= 500,
+            )
+
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise ProviderError(f"response was not JSON: {response.text[:200]}") from exc
+
+        choices = payload.get("choices") or []
+        if not choices:
+            raise ProviderError(f"response carried no choices: {json.dumps(payload)[:300]}")
+        return decode_message(choices[0].get("message") or {})
+
+
+# --- wire encoding ----------------------------------------------------------------------
+
+
+def encode_tool(spec: ToolSpec) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+        },
+    }
+
+
+def encode_message(message: Message) -> dict[str, Any]:
+    if message.role is Role.TOOL:
+        return {
+            "role": "tool",
+            "tool_call_id": message.call_id,
+            "content": message.content,
+        }
+    body: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    if message.tool_calls:
+        body["tool_calls"] = [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    # Arguments travel as a JSON *string*, not an object. Providers differ
+                    # on whether they tolerate an object; none rejects the string.
+                    "arguments": json.dumps(call.arguments),
+                },
+            }
+            for call in message.tool_calls
+        ]
+    return body
+
+
+def decode_message(raw: dict[str, Any]) -> Message:
+    """One provider message, as ours.
+
+    `content` is `None` rather than `""` whenever a model returns only tool calls, which is
+    the common case for a working agent -- so the `or ""` is load-bearing.
+    """
+    calls: list[ToolCall] = []
+    for entry in raw.get("tool_calls") or []:
+        function = entry.get("function") or {}
+        name = function.get("name") or ""
+        if not name:
+            # Unanswerable and undispatchable: it would leave a call the transcript can
+            # never close, which the loop then refuses to send.
+            log.warning("dropping a tool call with no function name: %s", entry)
+            continue
+        calls.append(
+            ToolCall(
+                call_id=entry.get("id") or f"call_{len(calls)}",
+                name=name,
+                arguments=parse_arguments(function.get("arguments") or ""),
+            )
+        )
+    return Message(Role.ASSISTANT, raw.get("content") or "", tuple(calls))
+
+
+def merge_tool_call_deltas(deltas: list[dict[str, Any]]) -> list[ToolCall]:
+    """Reassemble streamed tool calls.
+
+    Keyed by `index`, the only field every delta carries. `id` and `name` arrive once on a
+    call's first delta; `arguments` arrives as string shards that must be concatenated in
+    order. Keying by `id` loses every shard after the first, because they do not repeat it.
+    """
+    building: dict[int, dict[str, Any]] = {}
+    for delta in deltas:
+        for entry in delta.get("tool_calls") or []:
+            index = entry.get("index", 0)
+            slot = building.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            if entry.get("id"):
+                slot["id"] = entry["id"]
+            function = entry.get("function") or {}
+            if function.get("name"):
+                slot["name"] = function["name"]
+            if function.get("arguments"):
+                slot["arguments"] += function["arguments"]
+
+    return [
+        ToolCall(
+            call_id=slot["id"] or f"call_{index}",
+            name=slot["name"],
+            arguments=parse_arguments(slot["arguments"]),
+        )
+        for index, slot in sorted(building.items())
+        if slot["name"]
+    ]

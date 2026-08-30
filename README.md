@@ -1,6 +1,6 @@
 # harness
 
-A small coding-agent harness. One loop, real tools, an OS sandbox.
+A small coding-agent harness. One loop, real tools, approval before anything changes.
 
 It is modelled on how Claude Code and Codex actually work, which is simpler than it looks
 from the outside:
@@ -51,11 +51,76 @@ not as a topology.
 
 ```
 src/harness/
-  types.py     transcript, messages, tool calls -- the state
-  loop.py      the agent loop
+  types.py       transcript, messages, tool calls -- the state
+  loop.py        the agent loop
+  workspace.py   path resolution and containment; tools never resolve their own
+  approval.py    what may proceed without asking
+  runner.py      joins the registry to approvals
+  tools/
+    base.py      the tool contract: ToolSpec, ToolContext, Registry
+    files.py     read, write, edit, list, glob, grep
+    shell.py     run a command (see the warning below)
+  providers/
+    base.py      the model contract
+    openai.py    OpenAI-compatible endpoints
 ```
 
-Tools, the provider client, the sandbox, and persistence land next.
+Persistence lands next.
+
+## Adding a tool
+
+One class, one registration. Nothing else in the harness changes.
+
+```python
+@dataclass(frozen=True, slots=True)
+class WordCount:
+    spec = ToolSpec(
+        name="word_count",
+        description="Count words in a workspace file.",
+        parameters=schema({"path": {"type": "string"}}, required=["path"]),
+        mutates=False,          # read-only, so never asked about
+    )
+
+    async def run(self, args, ctx):
+        return ToolResult(str(len(ctx.paths.read(args["path"]).split())))
+
+registry.register(WordCount())
+```
+
+Two things are taken away from you on purpose: **arguments are validated against your
+schema before `run` is called**, so you never write defensive parsing and cannot disagree
+with your own schema; and **paths are resolved by `ctx.paths`, never by you**, so a tool
+cannot escape the workspace. A tool that resolved its own paths is how the predecessor
+deleted its own control journal.
+
+## Adding a provider
+
+Implement `Provider` in one file under `providers/`. All wire translation lives there --
+`Message`, `ToolCall` and `ToolSpec` know nothing about JSON shapes, because those shapes
+differ (OpenAI wants tool results as a `tool` role message; Anthropic wants
+`tool_result` blocks inside a `user` message). Putting `to_openai()` on a domain type would
+make the first provider written the one every other has to imitate.
+
+## There is no sandbox
+
+`run` executes commands with the same authority as the user who started the harness. The
+workspace is its working directory, not its boundary. **The boundary is you** -- a person
+reading the command before it runs, which is how Claude Code works by default.
+
+Reads are never asked about. Anything that mutates asks once, and you can answer "always"
+to stop being asked about that program for the session, or set standing rules:
+
+```python
+Approvals(policy=Policy(always_allow={"run:git", "run:ls", "write_file"}))
+Approvals(policy=Policy(approve_everything=True))   # Codex's danger-full-access
+```
+
+With no approver configured, mutating tools refuse. Silence is not consent.
+
+Structured writes *are* contained -- `write_file` and `edit_file` cannot leave the
+workspace or touch a protected path, because the harness makes those syscalls itself and
+checks first. It is only `run` that is unconfined, because no Python check can see inside
+`bash -c`.
 
 ## Two properties worth knowing
 
