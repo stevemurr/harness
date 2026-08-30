@@ -63,9 +63,27 @@ src/harness/
   providers/
     base.py      the model contract
     openai.py    OpenAI-compatible endpoints
+  store/
+    base.py      the persistence contract
+    jsonl.py     one append-only file per session
+    memory.py    for tests
 ```
 
-Persistence lands next.
+## Storage is a file per session
+
+`JsonlStore` writes one append-only JSONL file per session, which is what Claude Code does
+-- its sessions live at `~/.claude/projects/<slug>/<session-id>.jsonl` and `--resume` is
+reading one back. A crash loses at most the turn in progress; `tail -f` follows a live run;
+there is no schema to migrate.
+
+Four methods, because the transcript is the state and there is nothing else to store:
+`create`, `append`, `load`, `sessions`. No event table, no outbox, no snapshots, no
+sequence numbers. The predecessor needed those to resume *mid-effect* -- to work out which
+declared side effects had been claimed or half-executed without repeating one. There are no
+effects here to be part-way through.
+
+`tests/test_store.py` is a conformance suite parameterised over every implementation, so
+adding a store means running tests that already exist.
 
 ## Adding a tool
 

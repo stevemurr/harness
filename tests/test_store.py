@@ -1,0 +1,185 @@
+"""The store contract, proven against every implementation.
+
+Parameterised over all of them, so adding a store means running tests that already exist
+rather than writing new ones. That is most of the reason `Store` is a protocol: a
+conformance suite is only possible if the contract is written down somewhere other than in
+one class.
+
+It also catches the thing a single implementation cannot. `MemoryStore` keeps `Message`
+objects and would pass a round-trip test that compares them by identity; `JsonlStore` has
+to encode and decode, and only the pair together prove the contract is about *values*.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from harness.store import JsonlStore, MemoryStore, StoreError
+from harness.store.codec import decode, encode
+from harness.types import Message, Role, ToolCall
+
+
+@pytest.fixture(params=["jsonl", "memory"])
+def store(request: pytest.FixtureRequest, tmp_path: Path):
+    if request.param == "jsonl":
+        return JsonlStore(tmp_path / "sessions")
+    return MemoryStore()
+
+
+def conversation() -> list[Message]:
+    """A transcript exercising every shape a message can take."""
+    return [
+        Message(Role.SYSTEM, "you are a coding agent"),
+        Message(Role.USER, "add a test"),
+        Message(
+            Role.ASSISTANT,
+            "",
+            (ToolCall("call_1", "read_file", {"path": "src/main.py", "limit": 20}),),
+        ),
+        Message(Role.TOOL, "     1\tprint('hi')", call_id="call_1"),
+        Message(Role.ASSISTANT, "done"),
+    ]
+
+
+# --- the contract ----------------------------------------------------------------------
+
+
+async def test_a_session_round_trips_every_message_shape(store) -> None:
+    """Content, tool calls with structured arguments, and the tool answer's join key."""
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, conversation())
+
+    loaded = await store.load(session)
+
+    assert loaded is not None
+    assert loaded.messages == conversation()
+
+
+async def test_appending_twice_keeps_order(store) -> None:
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [Message(Role.USER, "first")])
+    await store.append(session, [Message(Role.USER, "second")])
+
+    loaded = await store.load(session)
+
+    assert [m.content for m in loaded.messages] == ["first", "second"]
+
+
+async def test_a_loaded_transcript_can_be_appended_to(store) -> None:
+    """Resume: load it back, keep going. The whole point of storing anything."""
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, conversation())
+
+    resumed = await store.load(session)
+    resumed.append(Message(Role.USER, "one more thing"))
+    await store.append(session, [Message(Role.USER, "one more thing")])
+
+    assert (await store.load(session)).messages == resumed.messages
+
+
+async def test_an_unknown_session_loads_as_none_rather_than_raising(store) -> None:
+    """'Does this exist' is an ordinary question, not an exceptional condition."""
+    assert await store.load("20200101T000000-deadbeef") is None
+
+
+async def test_appending_to_an_unknown_session_is_an_error(store) -> None:
+    with pytest.raises(StoreError):
+        await store.append("20200101T000000-deadbeef", [Message(Role.USER, "hi")])
+
+
+async def test_appending_nothing_is_harmless(store) -> None:
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [])
+
+    assert (await store.load(session)).messages == []
+
+
+async def test_sessions_list_newest_first_with_a_readable_title(store) -> None:
+    """A listing of opaque ids is a listing nobody uses."""
+    first = await store.create(Path("/tmp/a"))
+    await store.append(first, [Message(Role.USER, "fix the parser\nsecond line")])
+    second = await store.create(Path("/tmp/b"))
+    await store.append(second, [Message(Role.USER, "write the README")])
+
+    listed = await store.sessions()
+
+    assert [s.session_id for s in listed] == [second, first]
+    assert listed[1].title == "fix the parser"
+    assert listed[1].message_count == 1
+
+
+async def test_the_session_limit_is_honoured(store) -> None:
+    for _ in range(5):
+        await store.create(Path("/tmp/x"))
+
+    assert len(await store.sessions(limit=2)) == 2
+
+
+# --- the codec -------------------------------------------------------------------------
+
+
+def test_the_stored_shape_is_ours_not_a_providers() -> None:
+    """A stored transcript that was really an OpenAI request body would make every old
+    session unreadable the day a second provider arrives."""
+    message = Message(Role.ASSISTANT, "", (ToolCall("c1", "run", {"command": "ls"}),))
+
+    assert encode(message) == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"call_id": "c1", "name": "run", "arguments": {"command": "ls"}}],
+    }
+
+
+def test_an_unknown_role_does_not_crash_a_read() -> None:
+    """A transcript written by a newer version must stay loadable by an older one."""
+    assert decode({"role": "oracle", "content": "hm"}).content == "hm"
+
+
+# --- jsonl specifics -------------------------------------------------------------------
+
+
+async def test_a_torn_final_line_loses_only_the_last_turn(tmp_path: Path) -> None:
+    """What a crash mid-append looks like. Refusing to load the whole session would be a
+    far worse answer than losing the turn that did not finish."""
+    store = JsonlStore(tmp_path)
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [Message(Role.USER, "intact")])
+    with store.path_for(session).open("a") as handle:
+        handle.write('{"role": "assistant", "content": "tor')
+
+    loaded = await store.load(session)
+
+    assert [m.content for m in loaded.messages] == ["intact"]
+
+
+async def test_a_session_file_is_readable_by_a_person(tmp_path: Path) -> None:
+    """`cat` and `tail -f` are worth more during development than any query language."""
+    store = JsonlStore(tmp_path)
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [Message(Role.USER, "hello")])
+
+    lines = store.path_for(session).read_text().strip().splitlines()
+
+    assert json.loads(lines[0])["kind"] == "session"
+    assert json.loads(lines[1]) == {"role": "user", "content": "hello"}
+
+
+def test_a_session_id_cannot_walk_out_of_the_store(tmp_path: Path) -> None:
+    """Ids reach this from callers, and `root / '../../etc/passwd'` is a traversal hiding
+    in something that does not look like a path handler."""
+    store = JsonlStore(tmp_path)
+
+    for hostile in ("../escape", "a/b", "", "..", "/etc/passwd"):
+        with pytest.raises(StoreError):
+            store.path_for(hostile)
+
+
+async def test_a_directory_of_sessions_survives_a_stray_file(tmp_path: Path) -> None:
+    store = JsonlStore(tmp_path)
+    await store.create(Path("/tmp/project"))
+    (tmp_path / "notes.jsonl").write_text("not json at all\n")
+
+    assert len(await store.sessions()) == 1
