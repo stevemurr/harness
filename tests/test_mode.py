@@ -127,6 +127,35 @@ async def test_plan_mode_still_offers_reading_and_the_way_out(folder: Path) -> N
     assert "exit_plan_mode" in offered
 
 
+async def test_the_checklist_is_available_in_plan_mode(folder: Path) -> None:
+    """A plan is a message, not an artifact -- so keeping one costs no write authority.
+
+    Both reference implementations work this way: Claude's approved plan is the argument to
+    ExitPlanMode and lives in the transcript, and Codex's update_plan is session state that
+    works under a read-only sandbox.
+    """
+    model = ScriptedModel(
+        calls(("c1", "write_plan", {"steps": [{"text": "read the parser"}]})),
+        Message(Role.ASSISTANT, "still looking"),
+    )
+    agent = agent_over(folder, model, mode=PLAN)
+
+    _, outcome = await agent.run("how would you fix this?")
+
+    assert "write_plan" in model.tools_offered[0]
+    assert "update_plan" in model.tools_offered[0]
+    assert [s.text for s in agent.plan.steps] == ["read the parser"]
+    assert agent.modes.planning
+    assert outcome.stop.ok
+
+
+async def test_the_plan_prompt_says_the_checklist_is_still_available(folder: Path) -> None:
+    """`write_plan` is named 'write', and the prompt says writing tools are unavailable. A
+    model could reasonably conclude its checklist was among them."""
+    assert "write_plan" in PLAN.prompt
+    assert "despite its name" in PLAN.prompt
+
+
 async def test_normal_mode_offers_everything_except_the_way_out(folder: Path) -> None:
     """`exit_plan_mode` outside plan mode is a tool that can only confuse."""
     model = ScriptedModel(Message(Role.ASSISTANT, "done"))
