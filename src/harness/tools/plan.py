@@ -49,15 +49,20 @@ class WritePlan:
                 "near the start, when the work has more than a couple of steps -- a plan "
                 "for a one-step task is noise. Keep steps short and outcome-shaped ('make "
                 "the parser accept trailing commas'), not tool-shaped ('call edit_file'). "
-                "To tick a box or revise a step afterwards use update_plan, which will not "
-                "silently drop steps the way rewriting the list from memory can. Returns "
-                "the plan with the step ids you will need."
+"To tick a box or revise a step afterwards use update_plan instead -- this tool "
+                "REPLACES the plan, so calling it to mark one step done discards the rest. "
+                "Returns the plan with the step ids update_plan will need."
             ),
             parameters=schema(
                 {
                     "steps": {
                         "type": "array",
                         "minItems": 1,
+                        "description": (
+                            "The steps, in order. Each is {text} plus an optional status -- "
+                            "NO id. Ids belong to update_plan, which is a different tool; "
+                            "this one issues them and returns them to you."
+                        ),
                         "items": {
                             "type": "object",
                             "properties": {
@@ -99,7 +104,9 @@ class UpdatePlan:
         default=ToolSpec(
             name="update_plan",
             description=(
-                "Change steps in an existing plan, by id. Mark a step in_progress when you "
+                "Change steps in an existing plan, by id, leaving the others untouched. Its "
+                "argument is `changes`, not `steps` -- passing the whole list is write_plan's "
+                "job and replaces everything. Mark a step in_progress when you "
                 "start it and completed when it is genuinely done -- not when you intend to "
                 "do it. Keep one step in progress at a time. You may also append new steps "
                 "or drop ones that turned out not to be needed; say why in `note` when the "
@@ -136,11 +143,18 @@ class UpdatePlan:
                     },
                     "add": {
                         "type": "array",
-                        "description": "Steps to append. They are given fresh ids.",
+                        "description": (
+                            "New steps to append. Same shape as write_plan's -- {text} and "
+                            "an optional status, NO id, because these do not exist yet and "
+                            "are given fresh ids here."
+                        ),
                         "items": {
                             "type": "object",
                             "properties": {
-                                "text": {"type": "string"},
+                                "text": {
+                                    "type": "string",
+                                    "description": "What the new step achieves.",
+                                },
                                 "status": _STATUS,
                             },
                             "required": ["text"],
