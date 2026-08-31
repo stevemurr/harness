@@ -28,6 +28,7 @@ from typing import Any
 from harness.code.base import CodeIndexError, Indexes, Location, Symbol
 from harness.tools.base import ToolContext, ToolSpec, schema
 from harness.types import ToolResult
+from harness.workspace import PathEscape, PathRefused, WorkspaceError
 
 #: Enough for a person to choose between, and few enough to read. `run` has 71 candidates
 #: in this repository, which is a list nobody scans -- and a model that needs the 60th is
@@ -84,7 +85,13 @@ class FindDefinition:
     )
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        near = ctx.paths.resolve(args["path"]) if args.get("path") else None
+        try:
+            near = ctx.paths.resolve(args["path"]) if args.get("path") else None
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
+        except WorkspaceError as exc:
+            return ToolResult(str(exc), ok=False)
+
         try:
             found = await self.indexes.definitions(args["symbol"], near)
         except CodeIndexError as exc:
@@ -153,7 +160,19 @@ class FindReferences:
     )
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path = ctx.paths.resolve(args["path"])
+        # Caught here, exactly as `files.py` catches it. A path outside the folder is the
+        # README's own example of a REFUSAL -- the harness declining to act -- and letting
+        # it escape as an exception makes the loop report it as a failure instead. That is
+        # not cosmetic: the stall counter counts refusals only, so the same bad path is a
+        # stall signal through `read_file` and invisible through this tool. Found when a
+        # model mistyped an absolute path in an eval run. (2026-08-31)
+        try:
+            path = ctx.paths.resolve(args["path"])
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
+        except WorkspaceError as exc:
+            return ToolResult(str(exc), ok=False)
+
         symbol = Symbol(name=args["symbol"], location=Location(path, int(args["line"])))
         try:
             places = await self.indexes.references(symbol)

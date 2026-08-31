@@ -416,3 +416,25 @@ async def test_the_tools_are_offered_in_plan_mode(project: Path) -> None:
 
     for tool in tools:
         assert PLAN.permits(tool.spec.name, tool.spec.mutates)
+
+
+async def test_a_path_outside_the_workspace_is_refused_not_failed(project: Path) -> None:
+    """The README's own example of a refusal: "a path outside the folder".
+
+    It matters beyond naming. The loop's stall counter counts refusals and not failures, so
+    a tool that lets `PathEscape` escape as an exception makes the same bad path a stall
+    signal through `read_file` and invisible through this one. `files.py` catches it; these
+    did not, until a model mistyped an absolute path in an eval run and the result came back
+    labelled `failed`. (2026-08-31)
+    """
+    registry = Registry(code_tools(Indexes([Fake(project)]))[0])
+    ctx = ToolContext(paths=Workspace.at(project))
+
+    for call in (
+        ToolCall("c", "find_definition", {"symbol": "Widget", "path": "/etc/passwd"}),
+        ToolCall("c", "find_references", {"symbol": "W", "path": "/etc/passwd", "line": 1}),
+    ):
+        result = await registry.run(call, ctx)
+
+        assert result.refused, f"{call.name} should refuse a path outside the folder"
+        assert not result.ok
