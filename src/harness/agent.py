@@ -29,6 +29,7 @@ from pathlib import Path
 
 from harness.approval import Approvals
 from harness.code.base import Indexes
+from harness.code.servers import for_workspace
 from harness.compaction import (
     State,
     anchor_for,
@@ -97,6 +98,9 @@ class Agent:
     #: What the agent may do. A person sets this, never the model -- the model can only ask
     #: to leave plan mode, and a person answers.
     modes: ModeState = field(default_factory=ModeState)
+    #: The code indexes this agent's tools share. Held so a front end can close them: they
+    #: own subprocesses, and nothing else knows they exist.
+    indexes: Indexes = field(default_factory=Indexes)
     #: Told when a compaction happened, with the summary and what it saved. Optional and
     #: ordinary, like every other collaborator: the CLI prints a line, a server publishes an
     #: event, a script passes nothing.
@@ -407,6 +411,7 @@ def build(
     observers: list[Observer] | None = None,
     mode: Mode = NORMAL,
     ask: Questioner | None = None,
+    settings: Settings | None = None,
 ) -> Agent:
     """An agent over a folder, with the defaults a coding agent wants.
 
@@ -415,11 +420,13 @@ def build(
     that cannot read the folder it was pointed at is not useful.
     """
     root = Path(folder).expanduser().resolve()
+    settings = settings or Settings()
     threads = Path("~/.harness/threads").expanduser()
     protected = (threads,) if threads.is_relative_to(root) else ()
 
     modes = ModeState(current=mode)
-    registry, plan, modes = default_registry(modes=modes, ask=ask)
+    indexes = for_workspace(root, settings.code)
+    registry, plan, modes = default_registry(modes=modes, ask=ask, indexes=indexes)
     return Agent(
         workspace=Workspace.at(root, protected=protected),
         provider=provider,
@@ -429,4 +436,6 @@ def build(
         approvals=approvals or Approvals(),
         store=store,
         observers=observers or [],
+        settings=settings,
+        indexes=indexes,
     )

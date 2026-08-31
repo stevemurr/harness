@@ -289,6 +289,13 @@ def main(argv: list[str] | None = None) -> int:
         "--threads", action="store_true", help="List recent threads and exit."
     )
     parser.add_argument(
+        "--install-servers",
+        action="store_true",
+        help="Set up the language servers code search uses, under ~/.harness/servers/bin. "
+        "Adopts what is already installed by linking it, and only downloads what is not "
+        "there. Run once; never happens during a run.",
+    )
+    parser.add_argument(
         "--init",
         action="store_true",
         help="Write a starter ~/.harness/config.toml and exit.",
@@ -308,8 +315,13 @@ def main(argv: list[str] | None = None) -> int:
         "your filesystem -- there is no sandbox.",
     )
     args = parser.parse_args(argv)
-    if not args.prompt and not (args.init or args.threads):
-        parser.error("a prompt is required unless --init or --threads is given")
+    if not args.prompt and not (args.init or args.threads or args.install_servers):
+        parser.error(
+            "a prompt is required unless --init, --threads or --install-servers is given"
+        )
+
+    if args.install_servers:
+        return asyncio.run(_install_servers())
 
     if args.init:
         try:
@@ -326,6 +338,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.threads:
         return asyncio.run(_list_sessions())
     return asyncio.run(main_async(args))
+
+
+async def _install_servers() -> int:
+    """Provision every language server, and say plainly what happened to each.
+
+    A command rather than something a run does for itself: basedpyright is 272MB, and a
+    download inside a tool call would blow the request timeout and fail where a model can
+    only report it as a broken tool.
+    """
+    from harness.code.servers import provision, servers_bin
+
+    print(dim(f"language servers in {servers_bin()}"))
+    outcomes = await provision()
+    for outcome in outcomes:
+        mark = green("✓") if outcome.ready else yellow("⊘")
+        print(f"  {mark} {bold(outcome.name)} {dim(outcome.detail)}")
+    missing = [o for o in outcomes if not o.ready]
+    if missing:
+        print(
+            dim("\nCode search works for the languages that are ready; grep covers the rest.")
+        )
+    return 0
 
 
 async def _list_sessions() -> int:

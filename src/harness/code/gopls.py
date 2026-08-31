@@ -12,14 +12,24 @@ rather than the harness's, and it surfaces the same way any other empty result d
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from harness.code.lsp import LspIndex
+from harness.code.lsp import LspIndex, Recipe
 
 
 @dataclass
 class Gopls(LspIndex):
     name: str = "gopls"
-    command: tuple[str, ...] = ("gopls", "serve")
+    arguments: tuple[str, ...] = ("serve",)
     extensions: tuple[str, ...] = (".go",)
     language_id: str = "go"
+    recipe: Recipe = field(
+        default_factory=lambda: Recipe(
+            binary="gopls",
+            # Needs a Go toolchain, and `go install` puts it in GOBIN rather than anywhere
+            # this can predict -- so provisioning finds it and links it. Nobody writing Go
+            # lacks a toolchain, which is why no download is offered here.
+            install=("go", "install", "golang.org/x/tools/gopls@latest"),
+            doc="go install golang.org/x/tools/gopls@latest",
+        )
+    )

@@ -23,7 +23,6 @@ reached, and the refusal names the missing field.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from harness.code.base import CodeIndexError, Indexes, Location, Symbol
@@ -83,25 +82,22 @@ class FindDefinition:
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         near = ctx.paths.resolve(args["path"]) if args.get("path") else None
-        index = self.indexes.choose(near)
-        if index is None:
-            return _no_index(self.indexes, near)
-
         try:
-            found = await index.definitions(args["symbol"], near=near)
+            found = await self.indexes.definitions(args["symbol"], near)
         except CodeIndexError as exc:
             return _broken(exc)
 
         if not found:
             # Nothing found is an answer, exactly as `grep` finding nothing is. `ok`.
             return ToolResult(
-                f"No definition of {args['symbol']!r} found by {index.name}. "
-                "It may be defined dynamically, come from a dependency, or not exist; "
-                "grep would say whether the text appears at all."
+                f"No definition of {args['symbol']!r} found in "
+                f"{self.indexes.languages()}. It may be defined dynamically, come from a "
+                "dependency, be in a language with no index, or not exist; grep would say "
+                "whether the text appears at all."
             )
 
         order = sorted(found, key=_rank)
-        lines = [f"{len(found)} definition(s) of {args['symbol']!r} ({index.name}):"]
+        lines = [f"{len(found)} definition(s) of {args['symbol']!r}:"]
         for symbol in order[:SHOWN]:
             where = ctx.paths.relative(symbol.location.path)
             lines.append(
@@ -152,15 +148,9 @@ class FindReferences:
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = ctx.paths.resolve(args["path"])
-        index = self.indexes.choose(path)
-        if index is None:
-            return _no_index(self.indexes, path)
-
-        symbol = Symbol(
-            name=args["symbol"], location=Location(path, int(args["line"]))
-        )
+        symbol = Symbol(name=args["symbol"], location=Location(path, int(args["line"])))
         try:
-            places = await index.references(symbol)
+            places = await self.indexes.references(symbol)
         except CodeIndexError as exc:
             return _broken(exc)
 
@@ -170,7 +160,7 @@ class FindReferences:
                 f"{ctx.paths.relative(path)}:{symbol.location.line}."
             )
 
-        lines = [f"{len(places)} reference(s) to {symbol.name!r} ({index.name}):"]
+        lines = [f"{len(places)} reference(s) to {symbol.name!r}:"]
         for place in places[:SHOWN]:
             lines.append(
                 f"  {ctx.paths.relative(place.path)}:{place.line}  {place.text.strip()[:110]}"
@@ -190,19 +180,6 @@ def _broken(exc: CodeIndexError) -> ToolResult:
     is the message naming grep as the way through.
     """
     return ToolResult(str(exc), ok=False)
-
-
-def _no_index(indexes: Indexes, near: Path | None) -> ToolResult:
-    if not indexes.available:
-        return ToolResult(
-            "No code index is configured. Use grep and read_file.", ok=False
-        )
-    languages = ", ".join(sorted({e for i in indexes.available for e in i.extensions}))
-    subject = f"{near.suffix} files" if near is not None else "that"
-    return ToolResult(
-        f"No code index for {subject}. Indexed here: {languages}. Use grep instead.",
-        ok=False,
-    )
 
 
 def code_tools(indexes: Indexes | None = None) -> tuple[list[Any], Indexes]:

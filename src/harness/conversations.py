@@ -36,6 +36,7 @@ from uuid import uuid4
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals
+from harness.code.servers import for_workspace
 from harness.events import Visibility
 from harness.loop import Observer, Turn
 from harness.mode import NORMAL, PLAN, ModeState
@@ -293,7 +294,10 @@ def open_conversation(
     (2026-08-30)
     """
     live = Live()
-    registry, plan, modes = default_registry(modes=ModeState(), ask=_questioner(live))
+    indexes = for_workspace(root, (settings or Settings()).code)
+    registry, plan, modes = default_registry(
+        modes=ModeState(), ask=_questioner(live), indexes=indexes
+    )
     approvals = Approvals()
     agent = Agent(
         workspace=Workspace.at(root, protected=_protected(root)),
@@ -305,6 +309,7 @@ def open_conversation(
         store=store,
         observers=[observer_for(live)],
         settings=settings or Settings(),
+        indexes=indexes,
         on_compaction=compaction_reporter(live),
     )
     return Conversation(
@@ -474,6 +479,10 @@ class Runtime:
         tasks = [run.task for run in live if run.task is not None]
         if tasks:
             await asyncio.wait(tasks, timeout=timeout)
+        # Language servers before the provider, and both before returning: they are
+        # subprocesses this process started, and nothing else will reap them.
+        for conversation in self.conversations.values():
+            await conversation.agent.indexes.aclose()
         await self.provider.aclose()
 
     def for_thread(self, thread_id: str) -> list[Run]:

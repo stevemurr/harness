@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.code.base import CodeIndexError, Location, Symbol
+from harness.code.servers import servers_bin
 from harness.settings import Code
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,31 @@ def _path(uri: str) -> Path:
     return Path(unquote(urlparse(uri).path))
 
 
+@dataclass(frozen=True, slots=True)
+class Recipe:
+    """How to obtain one server, and what to say when it cannot be obtained.
+
+    On the language's own file, beside its command and extensions, because adding a
+    language must stay one file -- an install recipe kept in a central table is a second
+    place to edit and a second place to forget.
+
+    `install` is argv, run only by `harness --install-servers`, never during a run. Fetching
+    272MB inside a tool call would blow the request timeout, and failing halfway is strictly
+    worse than "not installed, use grep", which already degrades correctly.
+
+    `doc` is for the servers that cannot be installed for you -- `gopls` is `go install`
+    only, with no official prebuilt binary, so a machine without a Go toolchain gets a
+    sentence a person can act on instead of a failed download.
+    """
+
+    #: The executable to look for and to link as. Also the name in the bin folder.
+    binary: str
+    #: Argv that provisions it, or empty when only a person can.
+    install: tuple[str, ...] = ()
+    #: What to tell someone who has to do it themselves.
+    doc: str = ""
+
+
 @dataclass
 class LspIndex:
     """One language server process, over one folder.
@@ -75,15 +101,28 @@ class LspIndex:
     settings: Code = field(default_factory=Code)
 
     name: str = "lsp"
-    #: The default argv. `settings.commands` may replace it by name, so swapping
-    #: basedpyright for `ty` is one line of config and no code.
-    command: tuple[str, ...] = ()
+    #: Arguments after the binary. The binary itself comes from the harness's own bin
+    #: folder -- see `argv`.
+    arguments: tuple[str, ...] = ()
     extensions: tuple[str, ...] = ()
     language_id: str = ""
+    recipe: Recipe = field(default_factory=lambda: Recipe(binary=""))
 
     @property
     def argv(self) -> tuple[str, ...]:
-        return tuple(self.settings.commands.get(self.name) or self.command)
+        """What to run: an override, or the binary the harness manages.
+
+        One lookup location, deliberately. `PATH` is not consulted, because a server found
+        there is one nobody chose: it may be any version, and on a server started at boot it
+        may be absent entirely while a developer shell has it. `--install-servers` links
+        what is on `PATH` into the harness's folder, which turns "happens to be installed"
+        into "was adopted on purpose" -- and makes the missing case one sentence a person
+        can act on rather than a guess about their environment.
+        """
+        override = self.settings.commands.get(self.name)
+        if override:
+            return tuple(override)
+        return (str(servers_bin() / self.recipe.binary), *self.arguments)
 
     _process: asyncio.subprocess.Process | None = field(default=None, repr=False)
     _reader: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -117,8 +156,9 @@ class LspIndex:
                 # `available=False`: this will not become installed during the run, so the
                 # caller must stop asking rather than spend the budget re-discovering it.
                 raise CodeIndexError(
-                    f"{self.argv[0]} is not installed or not on PATH. "
-                    "Install it, or use grep and read_file instead.",
+                    f"{self.recipe.binary} is not set up for the harness. "
+                    f"Run `harness --install-servers` to provision it, "
+                    f"or use grep and read_file instead.",
                     available=False,
                 ) from exc
 

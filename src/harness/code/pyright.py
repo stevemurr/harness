@@ -10,14 +10,25 @@ reaches 1.0 it is one line of `[code.commands]` away, with no code change at all
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from harness.code.lsp import LspIndex
+from harness.code.lsp import LspIndex, Recipe
 
 
 @dataclass
 class Pyright(LspIndex):
     name: str = "basedpyright"
-    command: tuple[str, ...] = ("basedpyright-langserver", "--stdio")
+    arguments: tuple[str, ...] = ("--stdio",)
     extensions: tuple[str, ...] = (".py", ".pyi")
     language_id: str = "python"
+    recipe: Recipe = field(
+        default_factory=lambda: Recipe(
+            binary="basedpyright-langserver",
+            # `uv` is already this project's tool, and the wheel bundles its own Node, so
+            # there is no separate runtime to install. It is 272MB on disk, which is the
+            # Node runtime, and is the reason this is a command someone runs rather than
+            # something that happens during a tool call.
+            install=("uv", "tool", "install", "basedpyright"),
+            doc="pip install basedpyright (or uv tool install basedpyright)",
+        )
+    )

@@ -134,30 +134,79 @@ class CodeIndex(Protocol):
 
 @dataclass
 class Indexes:
-    """The indexes one workspace has, chosen by file extension.
+    """The indexes one workspace has, and which of them answers.
 
     Held by the tools that use it, the way `Plan` is held by `UpdatePlan`: `ToolContext` is
     `paths` and nothing else on purpose, and a context that grew a field per stateful tool
     would hand every tool everything.
+
+    **Polyglot is the ordinary case, not the exception.** Almost every repository is mixed
+    in the trivial sense -- Markdown, TOML, a shell script beside the code -- and many are
+    mixed in the real one. So a question with a file attached goes to that file's language,
+    and a question without one goes to *all* of them and the answers are merged. Returning
+    nothing because two languages were configured, which is what choosing one index would
+    do, is the wrong answer to a question that has a right one.
     """
 
     available: list[CodeIndex] = field(default_factory=list)
 
-    def _for(self, extension: str) -> CodeIndex | None:
+    def by_extension(self, extension: str) -> CodeIndex | None:
         return next(
             (i for i in self.available if extension.lower() in i.extensions), None
         )
 
-    def choose(self, near: Path | None) -> CodeIndex | None:
-        """The index for a file, or the only one there is.
+    def languages(self) -> str:
+        return ", ".join(sorted({e for i in self.available for e in i.extensions}))
 
-        With no file to go on, a single registered index answers -- a harness configured for
-        one language should not demand the language be named. With several, the question is
-        genuinely ambiguous and the tool says so.
+    async def definitions(self, name: str, near: Path | None = None) -> tuple[Symbol, ...]:
+        """Every definition of `name`, from whichever language can speak about it.
+
+        With a file, one index answers. Without one, every index does and the results are
+        concatenated -- a name may genuinely be defined in two languages, and a repository
+        with a Go service and a Python client is exactly where someone asks.
+
+        One backend failing does not fail the question: a Go server that is not provisioned
+        should not hide the Python answer. It is raised only when nothing could answer at
+        all, which is the case where the caller has nothing else to go on.
         """
+        chosen = self._asked(near)
+        if not chosen:
+            raise CodeIndexError(self._nothing_for(near), available=False)
+
+        found: list[Symbol] = []
+        failures: list[CodeIndexError] = []
+        for index in chosen:
+            try:
+                found.extend(await index.definitions(name, near=near))
+            except CodeIndexError as exc:
+                failures.append(exc)
+        if failures and not found and len(failures) == len(chosen):
+            raise failures[0]
+        return tuple(found)
+
+    async def references(self, symbol: Symbol) -> tuple[Location, ...]:
+        """Uses of one symbol. Never ambiguous: a symbol always carries its file."""
+        index = self.by_extension(symbol.location.path.suffix)
+        if index is None:
+            raise CodeIndexError(
+                self._nothing_for(symbol.location.path), available=False
+            )
+        return await index.references(symbol)
+
+    def _asked(self, near: Path | None) -> list[CodeIndex]:
         if near is not None:
-            return self._for(near.suffix)
-        return self.available[0] if len(self.available) == 1 else None
+            index = self.by_extension(near.suffix)
+            return [index] if index is not None else []
+        return list(self.available)
+
+    def _nothing_for(self, near: Path | None) -> str:
+        if not self.available:
+            return (
+                "No code index is set up. Run `harness --install-servers`, or use grep "
+                "and read_file."
+            )
+        subject = f"{near.suffix} files" if near is not None and near.suffix else "that"
+        return f"No code index for {subject}. Indexed here: {self.languages()}. Use grep."
 
     async def aclose(self) -> None:
         for index in self.available:

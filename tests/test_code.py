@@ -14,7 +14,6 @@ protocol. Everything asserted below is asserted against both.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -22,6 +21,7 @@ import pytest
 from harness.code.base import CodeIndex, CodeIndexError, Indexes, Location, Symbol
 from harness.code.gopls import Gopls
 from harness.code.pyright import Pyright
+from harness.code.servers import servers_bin
 from harness.settings import Code
 from harness.tools.base import Registry, ToolContext
 from harness.tools.code import code_tools
@@ -132,8 +132,13 @@ DIALECT = {
 }
 
 
-def installed(binary: str) -> bool:
-    return shutil.which(binary) is not None
+def provisioned(binary: str) -> bool:
+    """Set up for the harness, not merely present on PATH.
+
+    The same question `LspIndex.argv` asks. Checking `PATH` instead would skip when the
+    harness would have worked, and run when it would not.
+    """
+    return (servers_bin() / binary).exists()
 
 
 @pytest.fixture(params=["fake", "pyright", "gopls"])
@@ -149,12 +154,12 @@ def index(request: pytest.FixtureRequest, project: Path):
     if request.param == "fake":
         index = Fake(project)
     elif request.param == "pyright":
-        if not installed("basedpyright-langserver"):
-            pytest.skip("basedpyright-langserver is not installed")
+        if not provisioned("basedpyright-langserver"):
+            pytest.skip("run `harness --install-servers` to exercise basedpyright")
         index = Pyright(project, slow)
     else:
-        if not installed("gopls"):
-            pytest.skip("gopls is not installed")
+        if not provisioned("gopls"):
+            pytest.skip("run `harness --install-servers` to exercise gopls")
         index = Gopls(project, slow)
     index.words = DIALECT[request.param]
     return index
@@ -231,20 +236,79 @@ async def test_closing_twice_is_not_an_error(index) -> None:
 # --- choosing an index --------------------------------------------------------------------
 
 
-def test_a_single_index_answers_without_being_named(tmp_path: Path) -> None:
-    """A harness configured for one language should not demand the language be named."""
-    only = Indexes([Fake(tmp_path)])
+class Go:
+    """A second language, so the polyglot behaviour has two things to be about."""
 
-    assert only.choose(None) is not None
-    assert only.choose(tmp_path / "a.py") is not None
+    name = "fake-go"
+    extensions = (".go",)
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.asked: list[str] = []
+
+    async def definitions(self, name: str, *, near: Path | None = None) -> tuple[Symbol, ...]:
+        self.asked.append(name)
+        if name != "Widget":
+            return ()
+        return (Symbol("Widget", Location(self.root / "shop.go", 3, "type Widget"), "struct"),)
+
+    async def references(self, symbol: Symbol) -> tuple[Location, ...]:
+        return (Location(self.root / "shop.go", 3, "type Widget"),)
+
+    async def aclose(self) -> None:
+        return None
 
 
-def test_an_unknown_extension_has_no_index(tmp_path: Path) -> None:
-    assert Indexes([Fake(tmp_path)]).choose(tmp_path / "main.go") is None
+async def test_a_question_with_no_file_asks_every_language(project: Path) -> None:
+    """Polyglot is the ordinary case. Choosing one index would answer "nothing" to a
+    question that has an answer, because two languages were configured."""
+    both = Indexes([Fake(project), Go(project)])
+
+    found = await both.definitions("Widget")
+
+    assert {s.location.path.suffix for s in found} == {".py", ".go"}
 
 
-def test_with_no_index_at_all_there_is_nothing_to_choose(tmp_path: Path) -> None:
-    assert Indexes().choose(None) is None
+async def test_a_question_about_one_file_asks_only_its_language(project: Path) -> None:
+    """A Go server should not be started to answer about a Python file."""
+    go = Go(project)
+    both = Indexes([Fake(project), go])
+
+    found = await both.definitions("Widget", project / "shop.py")
+
+    assert [s.location.path.suffix for s in found] == [".py"]
+    assert go.asked == [], "the Go index should not have been consulted"
+
+
+async def test_one_language_failing_does_not_hide_the_others(project: Path) -> None:
+    """An unprovisioned Go server must not suppress the Python answer."""
+
+    class Broken(Go):
+        async def definitions(self, name, *, near=None):
+            raise CodeIndexError("gopls is not set up", available=False)
+
+    both = Indexes([Fake(project), Broken(project)])
+
+    found = await both.definitions("Widget")
+
+    assert [s.location.path.suffix for s in found] == [".py"]
+
+
+async def test_a_file_in_a_language_with_no_index_says_which_are_indexed(project: Path) -> None:
+    """The trivial polyglot case: a shell script beside the code."""
+    only_python = Indexes([Fake(project)])
+
+    with pytest.raises(CodeIndexError) as caught:
+        await only_python.definitions("main", project / "deploy.sh")
+
+    assert ".sh" in str(caught.value) and "grep" in str(caught.value)
+
+
+async def test_with_no_index_at_all_the_message_names_the_command(project: Path) -> None:
+    with pytest.raises(CodeIndexError) as caught:
+        await Indexes().definitions("Widget")
+
+    assert "--install-servers" in str(caught.value)
 
 
 # --- the tools ----------------------------------------------------------------------------

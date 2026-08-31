@@ -62,6 +62,7 @@ src/harness/
     lsp.py       one language server, over LSP on a pipe -- shared by every LSP backend
     pyright.py   Python, via basedpyright
     gopls.py     Go, via gopls
+    servers.py   ~/.harness/servers/bin, provisioning, and which languages a folder holds
   runner.py      joins the registry to approvals
   tools/
     base.py      the tool contract: ToolSpec, ToolContext, Registry
@@ -473,8 +474,40 @@ The tool surface enforces it with the machinery that already exists -- `path` an
 `required` in the schema, so `Registry.run` refuses a one-step call before the tool is
 reached and names the missing field. No new concept.
 
-**Adding a language is one file.** `gopls.py` is fifteen lines: a name, a command, the
-extensions and a language id. Everything else is `lsp.py`, which was written for Python and
+**Polyglot is the ordinary case.** Almost every repository is mixed -- Markdown, TOML, a
+shell script beside the code -- and many are mixed in earnest. A question naming a file goes
+to that file's language; a question without one goes to *all* of them and the answers merge,
+because returning nothing on the grounds that two languages are configured is the wrong
+answer to a question that has a right one. One backend failing does not hide the others: an
+unprovisioned Go server must not suppress the Python answer.
+
+Only languages a folder actually contains are registered, from one bounded walk of the
+extensions present -- so a Python repository starts no Go process. Constructing an index
+starts nothing anyway; the server waits for the first query.
+
+**Servers live in `~/.harness/servers/bin`, and nowhere else is consulted.**
+
+```sh
+harness --install-servers
+  ✓ basedpyright  linked basedpyright-langserver -> /Users/you/.local/bin/basedpyright-langserver
+  ✓ gopls         linked gopls -> /Users/you/go/bin/gopls
+```
+
+`PATH` is a property of whoever's shell started the process: a developer terminal has
+`gopls`, a server started at boot by a supervisor does not, and neither knows which version
+it found. Adopting a binary into one folder turns "happens to be installed" into "was
+chosen", and makes the missing case a sentence someone can act on rather than a guess about
+their environment.
+
+Symlink before download: a Go developer already has `gopls` and does not want a second copy.
+Only when nothing is there does a recipe run, and only from this command -- never during a
+run, where basedpyright's 272MB (a bundled Node runtime) would blow the request timeout and
+fail where a model can only report it as a broken tool.
+
+**Adding a language is one file.** `gopls.py` is a name, the arguments, the extensions, a
+language id, and a `Recipe` saying how to obtain it -- the install instructions live beside
+the language, because a recipe in a central table is a second place to edit and a second
+place to forget. Everything else is `lsp.py`, which was written for Python and
 then shared once Go proved what actually differed. A backend that does not speak LSP at all
 satisfies `CodeIndex` directly and ignores that file, which is why the protocol lives in
 `base.py` and not beside the transport.
