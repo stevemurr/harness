@@ -238,8 +238,8 @@ async def test_a_run_ends_identically_whether_a_plan_was_written_or_not(tmp_path
             approvals=Approvals(policy=Policy(approve_everything=True)),
         )
 
-    _, without = await agent_for(Message(Role.ASSISTANT, "done")).run("do it")
-    _, with_plan = await agent_for(
+    without = await agent_for(Message(Role.ASSISTANT, "done")).run("do it")
+    with_plan = await agent_for(
         Message(
             Role.ASSISTANT, "",
             (ToolCall("c1", "write_plan", {"steps": [{"text": "a"}, {"text": "b"}]}),),

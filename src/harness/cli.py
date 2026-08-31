@@ -134,7 +134,9 @@ async def main_async(args: argparse.Namespace) -> int:
         )
 
     try:
-        session_id, outcome = await agent.run(args.prompt, session_id=args.resume)
+        # Opened before the run so the session id can be reported even if the run fails.
+        session_id = await agent.open_session(args.resume)
+        outcome = await agent.run(args.prompt, session_id)
     except KeyboardInterrupt:
         print(dim("\ninterrupted."))
         return 130

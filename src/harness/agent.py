@@ -5,14 +5,17 @@ approval asker, the observers -- and this is the one place that picks implementa
 composition root behind an interface would need something above it to choose which root,
 and that thing would be the real root.
 
-What varies between front ends is not this class. It is two of its collaborators:
+What varies between front ends is not this class -- it is its collaborators:
 
-  a CLI      passes an asker that prints a prompt, and an observer that renders turns
-  a server   passes an asker that suspends and waits for a client, and an observer that
-             publishes events
-  a script   passes `approve_all` and no observer
+  a CLI      an asker that prints a prompt, an observer that renders turns
+  a server   an asker that suspends until a client answers, an observer that publishes events
+  a script   `approve_all`, and no observer
 
-Same agent, three front ends, no new abstractions.
+This said "two collaborators" until an HTTP server was actually written against it, which is
+the only way that kind of claim gets checked. No new abstraction was needed and nothing in
+`AgentLoop`, `Agent` or any tool changed -- but the count was optimistic, and `run`'s
+signature was wrong: it returned the session id when the run *finished*, and a client needs
+it when the run *starts*. Hence `open_session`. (2026-08-30)
 """
 
 from __future__ import annotations
@@ -75,15 +78,44 @@ class Agent:
     #: to leave plan mode, and a person answers.
     modes: ModeState = field(default_factory=ModeState)
 
-    async def run(self, prompt: str, session_id: str | None = None) -> tuple[str, Outcome]:
-        """Do one exchange. Returns the session id and how it ended.
+    async def open_session(self, session_id: str | None = None) -> str:
+        """Resolve or create the session, and return its id -- before any work happens.
 
-        Resuming is the same method with a session id: the transcript is the state, so
-        continuing is loading it and appending. There is no separate resume path to keep in
-        step with this one, which is the whole benefit of the transcript being the state
-        rather than a rendering of it.
+        Separate from `run` because they are two operations, and conflating them cost a
+        caller something real: `run` used to return the id when it *finished*, and an HTTP
+        client needs it when the run *starts* -- `POST /runs` answers with a run id the
+        client immediately opens a stream against, long before the work is done. The server
+        worked around it by minting sessions itself and passing the id in, ignoring the one
+        that came back. That workaround was the evidence. (2026-08-30)
+
+        An unknown id opens a fresh session rather than raising: the id may simply be stale,
+        and refusing to work is a worse answer than working and saying where.
         """
-        transcript, session_id, fresh = await self._open(session_id)
+        if (
+            session_id is not None
+            and self.store is not None
+            and await self.store.load(session_id) is not None
+        ):
+            return session_id
+        if self.store is None:
+            return session_id or "unsaved"
+        return await self.store.create(self.workspace.root)
+
+    async def run(self, prompt: str, session_id: str | None = None) -> Outcome:
+        """Do one exchange, in the session given or a fresh one.
+
+        Omit `session_id` when you do not need to know it -- a script, a test. Call
+        `open_session` first when you do, which is what a client that must answer with an id
+        before the work starts does. The id is deliberately not returned from here: it was,
+        and returning it at the *end* is useless to the caller who needed it at the start.
+
+        Resuming is this same method with an id: the transcript is the state, so continuing
+        is loading it and appending. There is no separate resume path to keep in step with
+        this one, which is the whole benefit of the transcript being the state rather than a
+        rendering of it.
+        """
+        session_id = await self.open_session(session_id)
+        transcript, fresh = await self._open(session_id)
         transcript.append(user(prompt))
 
         # The opening messages, before the first turn -- so a run that dies during that
@@ -104,7 +136,7 @@ class Agent:
             limits=self.limits,
             observers=[*self.observers, self._recorder(session_id)],
         )
-        return session_id, await loop.run(transcript)
+        return await loop.run(transcript)
 
     async def _complete(self, transcript: Transcript) -> Message:
         return await self.provider.complete(transcript, self._specs())
@@ -120,20 +152,18 @@ class Agent:
         mode = self.modes.current
         return tuple(s for s in self.registry.specs() if mode.permits(s.name, s.mutates))
 
-    async def _open(self, session_id: str | None) -> tuple[Transcript, str, bool]:
-        """The transcript to continue, its session id, and whether it is new.
+    async def _open(self, session_id: str) -> tuple[Transcript, bool]:
+        """The transcript to continue, and whether this is its first exchange.
 
-        An unknown session id starts a fresh session rather than raising: the id may simply
-        be stale, and refusing to work is a worse answer than working and saying where.
+        The session already exists -- `open_session` made or found it -- so this only decides
+        whether there is a transcript to continue or a new one to start. A session that was
+        opened but never run has no stored messages yet, which is the `fresh` case.
         """
-        if session_id is not None and self.store is not None:
+        if self.store is not None:
             loaded = await self.store.load(session_id)
-            if loaded is not None:
-                return loaded, session_id, False
-        fresh = Transcript([system(self.system_prompt + self.modes.current.prompt)])
-        if self.store is None:
-            return fresh, session_id or "unsaved", True
-        return fresh, await self.store.create(self.workspace.root), True
+            if loaded is not None and loaded.messages:
+                return loaded, False
+        return Transcript([system(self.system_prompt + self.modes.current.prompt)]), True
 
     def _recorder(self, session_id: str) -> Observer:
         """Persist each turn as it completes.

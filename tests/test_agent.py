@@ -65,7 +65,7 @@ async def test_a_plain_answer_ends_the_run(folder: Path) -> None:
     model = ScriptedModel(Message(Role.ASSISTANT, "nothing to do"))
     agent = agent_over(folder, model)
 
-    _, outcome = await agent.run("say hello")
+    outcome = await agent.run("say hello")
 
     assert outcome.stop.ok
     assert outcome.turns == 1
@@ -79,7 +79,7 @@ async def test_the_agent_actually_changes_the_folder(folder: Path) -> None:
     )
     agent = agent_over(folder, model)
 
-    _, outcome = await agent.run("create hello.py")
+    outcome = await agent.run("create hello.py")
 
     assert outcome.stop.ok
     assert (folder / "hello.py").read_text() == "print('hi')\n"
@@ -112,7 +112,7 @@ async def test_a_refused_tool_is_reported_and_nothing_is_written(folder: Path) -
     )
     agent = agent_over(folder, model, approvals=Approvals(ask=deny_all))
 
-    _, outcome = await agent.run("write x.py")
+    outcome = await agent.run("write x.py")
 
     assert outcome.stop.ok
     assert not (folder / "x.py").exists()
@@ -130,7 +130,7 @@ async def test_a_provider_failure_ends_the_run_without_raising(folder: Path) -> 
         async def aclose(self):
             return None
 
-    _, outcome = await agent_over(folder, Broken()).run("do it")
+    outcome = await agent_over(folder, Broken()).run("do it")
 
     assert outcome.stop.kind == "error"
     assert "endpoint is down" in outcome.stop.detail
@@ -147,7 +147,8 @@ async def test_a_run_is_recorded_turn_by_turn(folder: Path) -> None:
     )
     agent = agent_over(folder, model, store=store)
 
-    session_id, _ = await agent.run("read the notes")
+    session_id = await agent.open_session()
+    await agent.run("read the notes", session_id)
 
     recorded = await store.load(session_id)
     roles = [m.role for m in recorded.messages]
@@ -159,7 +160,9 @@ async def test_resuming_continues_the_same_transcript(folder: Path) -> None:
     step, because the transcript is the state rather than a rendering of it."""
     store = MemoryStore()
     first = ScriptedModel(Message(Role.ASSISTANT, "first answer"))
-    session_id, _ = await agent_over(folder, first, store=store).run("first question")
+    first_agent = agent_over(folder, first, store=store)
+    session_id = await first_agent.open_session()
+    await first_agent.run("first question", session_id)
 
     second = ScriptedModel(Message(Role.ASSISTANT, "second answer"))
     await agent_over(folder, second, store=store).run("second question", session_id=session_id)
@@ -178,20 +181,52 @@ async def test_resuming_an_unknown_session_starts_a_new_one(folder: Path) -> Non
     store = MemoryStore()
     model = ScriptedModel(Message(Role.ASSISTANT, "ok"))
 
-    session_id, outcome = await agent_over(folder, model, store=store).run(
-        "hi", session_id="nope"
-    )
+    agent = agent_over(folder, model, store=store)
+    session_id = await agent.open_session("nope")
+    outcome = await agent.run("hi", session_id)
 
     assert outcome.stop.ok
     assert session_id != "nope"
     assert await store.load(session_id) is not None
 
 
+async def test_a_session_id_is_knowable_before_any_work_happens(folder: Path) -> None:
+    """The reason `open_session` exists. A client that answers `POST /runs` with an id and
+    then streams against it needs the id at the *start*; `run` used to return it at the end,
+    which is the one moment it is no longer useful.
+    """
+    store = MemoryStore()
+    model = ScriptedModel(Message(Role.ASSISTANT, "done"))
+    agent = agent_over(folder, model, store=store)
+
+    session_id = await agent.open_session()
+
+    # It exists and is loadable before a single message has been sent to the model.
+    assert await store.load(session_id) is not None
+    assert model.seen == []
+
+    await agent.run("now do it", session_id)
+
+    recorded = await store.load(session_id)
+    assert [m.content for m in recorded.messages if m.role is Role.USER] == ["now do it"]
+
+
+async def test_opening_the_same_session_twice_returns_it_rather_than_forking(
+    folder: Path,
+) -> None:
+    store = MemoryStore()
+    agent = agent_over(folder, ScriptedModel(Message(Role.ASSISTANT, "x")), store=store)
+    first = await agent.open_session()
+    await agent.run("hello", first)
+
+    assert await agent.open_session(first) == first
+
+
 async def test_a_run_without_a_store_takes_the_same_path(folder: Path) -> None:
     """Persistence is an observer, so no-store is not a special case in the loop."""
     model = ScriptedModel(Message(Role.ASSISTANT, "done"))
 
-    _, outcome = await agent_over(folder, model, store=None).run("hi")
+    outcome = await agent_over(folder, model, store=None).run("hi")
 
     assert outcome.stop.ok
 

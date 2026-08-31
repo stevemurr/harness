@@ -90,7 +90,7 @@ async def test_calling_a_withheld_tool_anyway_is_refused_and_writes_nothing(
     )
     agent = agent_over(folder, model, mode=PLAN)
 
-    _, outcome = await agent.run("how would you fix this?")
+    outcome = await agent.run("how would you fix this?")
 
     assert not (folder / "sneaky.py").exists()
     assert agent.modes.planning
@@ -140,7 +140,7 @@ async def test_the_checklist_is_available_in_plan_mode(folder: Path) -> None:
     )
     agent = agent_over(folder, model, mode=PLAN)
 
-    _, outcome = await agent.run("how would you fix this?")
+    outcome = await agent.run("how would you fix this?")
 
     assert "write_plan" in model.tools_offered[0]
     assert "update_plan" in model.tools_offered[0]
@@ -192,7 +192,7 @@ async def test_approving_a_plan_unlocks_the_writing_tools_on_the_next_turn(
     )
     agent = agent_over(folder, model, mode=PLAN)
 
-    _, outcome = await agent.run("fix it")
+    outcome = await agent.run("fix it")
 
     assert "write_file" not in model.tools_offered[0]  # asked for the plan
     assert "write_file" in model.tools_offered[1]  # and then had the tools
@@ -209,7 +209,7 @@ async def test_a_rejected_plan_leaves_the_agent_locked(folder: Path) -> None:
     )
     agent = agent_over(folder, model, mode=PLAN, approvals=Approvals(ask=deny_all))
 
-    _, outcome = await agent.run("fix it")
+    outcome = await agent.run("fix it")
 
     assert agent.modes.planning
     assert "write_file" not in model.tools_offered[1]
