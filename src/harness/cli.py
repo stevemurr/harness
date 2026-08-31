@@ -24,6 +24,7 @@ from harness.loop import Turn
 from harness.mode import NORMAL, PLAN
 from harness.providers.openai import OpenAICompatible
 from harness.store import JsonlStore
+from harness.store.base import StoreError
 
 THREADS = Path("~/.harness/threads").expanduser()
 
@@ -83,7 +84,7 @@ async def approve(request: Request) -> Decision:
     prompt whose safest answer needs a keystroke is one people fumble.
     """
     print(f"\n{yellow('⏵')} {bold(request.summary)}")
-    print(dim("  [y]es  [n]o  [a]lways for this session   (default: no)"))
+    print(dim("  [y]es  [n]o  [a]lways for this thread   (default: no)"))
     try:
         answer = (await asyncio.to_thread(input, "  > ")).strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -171,16 +172,22 @@ async def main_async(args: argparse.Namespace) -> int:
         )
 
     try:
-        # Opened before the run so the session id can be reported even if the run fails.
-        session_id = await agent.open_session(args.resume)
-        outcome = await agent.run(args.prompt, session_id)
+        # Opened before the run so the thread id can be reported even if the run fails.
+        try:
+            thread_id = await agent.open_thread(args.resume)
+        except StoreError as exc:
+            # A bad --resume is caller input, not a defect. It reached the terminal as a
+            # traceback until 2026-08-31, which tells a person nothing they can act on.
+            print(red(str(exc)), file=sys.stderr)
+            return 2
+        outcome = await agent.run(args.prompt, thread_id)
     except KeyboardInterrupt:
         print(dim("\ninterrupted."))
         return 130
     finally:
         await provider.aclose()
 
-    print(dim(f"\n{outcome.turns} turns · {outcome.stop.kind} · session {session_id}"))
+    print(dim(f"\n{outcome.turns} turns · {outcome.stop.kind} · thread {thread_id}"))
     if not outcome.stop.ok:
         print(red(outcome.stop.detail or outcome.stop.kind), file=sys.stderr)
         return 1
@@ -218,10 +225,10 @@ def main(argv: list[str] | None = None) -> int:
         "otherwise answers with an empty string. (env: HARNESS_EXTRA_BODY)",
     )
     parser.add_argument(
-        "--resume", metavar="SESSION", help="Continue a session instead of starting one."
+        "--resume", metavar="SESSION", help="Continue a thread instead of starting one."
     )
     parser.add_argument(
-        "--sessions", action="store_true", help="List recent sessions and exit."
+        "--threads", action="store_true", help="List recent threads and exit."
     )
     parser.add_argument(
         "-p",
@@ -239,15 +246,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.sessions:
+    if args.threads:
         return asyncio.run(_list_sessions())
     return asyncio.run(main_async(args))
 
 
 async def _list_sessions() -> int:
-    for info in await JsonlStore(THREADS).sessions():
+    for info in await JsonlStore(THREADS).threads():
         when = info.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
-        print(f"{bold(info.session_id)}  {dim(when)}  {info.title or dim('(no prompt)')}")
+        print(f"{bold(info.thread_id)}  {dim(when)}  {info.title or dim('(no prompt)')}")
     return 0
 
 

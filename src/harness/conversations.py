@@ -68,7 +68,6 @@ class Live:
     """
 
     run: Run | None = None
-    session_id: str | None = None
 
 
 @dataclass
@@ -219,10 +218,6 @@ class Conversation:
     runs: list[Run] = field(default_factory=list)
 
     @property
-    def session_id(self) -> str | None:
-        return self.live.session_id
-
-    @property
     def busy(self) -> bool:
         run = self.live.run
         return run is not None and run.status not in TERMINAL_STATUSES
@@ -260,8 +255,6 @@ def open_conversation(
     workspace_id: str,
     provider: Provider,
     store: Store,
-    *,
-    session_id: str | None = None,
 ) -> Conversation:
     """Build the agent for one conversation, with the front end's collaborators in place.
 
@@ -272,10 +265,10 @@ def open_conversation(
     The session is not opened here because opening it is `await`-able and this is not; the
     caller opens it before the first run. A `BoundStore` wrapper used to sit in this list,
     intercepting `store.create` to learn the id `Agent.run` would not report until the run
-    ended. `Agent.open_session` reports it before the run starts, so the wrapper went.
+    ended. `Agent.open_thread` reports it before the run starts, so the wrapper went.
     (2026-08-30)
     """
-    live = Live(session_id=session_id)
+    live = Live()
     registry, plan, modes = default_registry(modes=ModeState(), ask=_questioner(live))
     approvals = Approvals()
     agent = Agent(
@@ -333,8 +326,6 @@ class Runtime:
         thread_id: str,
         root: Path,
         workspace_id: str,
-        *,
-        session_id: str | None = None,
     ) -> Conversation:
         existing = self.conversations.get(thread_id)
         if existing is not None:
@@ -345,7 +336,6 @@ class Runtime:
             workspace_id,
             self.provider,
             self.store,
-            session_id=session_id,
         )
         self.conversations[thread_id] = opened
         return opened
@@ -408,9 +398,9 @@ class Runtime:
             # Before any work, so a first run cancelled before it returns still leaves the
             # conversation bound to the transcript it started rather than opening a second
             # one on the next attempt. That property used to belong to a store wrapper.
-            if conversation.live.session_id is None:
-                conversation.live.session_id = await conversation.agent.open_session()
-            outcome = await conversation.agent.run(run.message, conversation.session_id)
+            # Under the thread's own id, so the client's id and the store's are one thing.
+            # They were two, in two shapes, and `thread_id` was what held the difference.
+            outcome = await conversation.agent.run(run.message, conversation.thread_id)
         except asyncio.CancelledError:
             run.finish("run.cancelled", "Cancelled.")
             raise

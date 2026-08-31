@@ -366,7 +366,7 @@ async def test_continuing_a_thread_appends_to_the_one_transcript(folder, tmp_pat
         await _settle(app)
 
     conversation = app.state.runtime.conversations[thread_id]
-    stored = await app.state.runtime.store.load(conversation.session_id)
+    stored = await app.state.runtime.store.load(conversation.thread_id)
     assert [m.content for m in stored.messages if m.role is Role.USER] == ["one", "two"]
 
 

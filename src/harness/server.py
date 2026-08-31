@@ -44,13 +44,13 @@ log = logging.getLogger(__name__)
 API = "/api/v1"
 PROTOCOL_VERSION = "1"
 
-#: Where the terminal front end keeps its sessions, and where this one keeps them too. One
+#: Where the terminal front end keeps its threads, and where this one keeps them too. One
 #: place, so `harness --sessions` lists what the server ran and `--resume` continues it.
 THREADS = Path("~/.harness/threads").expanduser()
 
 
 def is_id(value: str) -> bool:
-    """Whether a client-supplied id may be used as a store session id.
+    """Whether a client-supplied id may be used as a store thread id.
 
     `JsonlStore` refuses anything else, and rightly -- `root / "../../etc/passwd"` is a path
     traversal in a store that looks nothing like a path handler. Asking here means the
@@ -161,7 +161,7 @@ def create_app(
         open_conversation(thread_id, record)
         return JSONResponse({"thread_id": thread_id}, status_code=201)
 
-    def open_conversation(thread_id: str, record: WorkspaceRecord, session_id: str = ""):
+    def open_conversation(thread_id: str, record: WorkspaceRecord):
         """Every conversation is opened here, so a folder that has gone is one answer.
 
         `Workspace.at` refuses a root that is not a directory, and a registration outlives
@@ -172,7 +172,6 @@ def create_app(
                 thread_id,
                 Path(record.root_path),
                 record.workspace_id,
-                session_id=session_id or None,
             )
         except WorkspaceError as exc:
             raise ApiError(400, "no_such_folder", str(exc)) from exc
@@ -182,7 +181,7 @@ def create_app(
         limit = read_int(request, "limit", 50) or 50
         rows: list[dict[str, Any]] = []
 
-        bound = {c.session_id for c in runtime.conversations.values() if c.session_id}
+        bound = {c.thread_id for c in runtime.conversations.values()}
         # Newest first, which is the order a picker wants and the order the store already
         # returns its own rows in.
         for conversation in reversed(list(runtime.conversations.values())):
@@ -190,15 +189,15 @@ def create_app(
                 continue
             rows.append(thread_row(conversation.thread_id, conversation_title(conversation)))
 
-        for info in await store.sessions(limit=limit):
+        for info in await store.threads(limit=limit):
             # A conversation this process is holding is listed under the thread id its
-            # client knows, not twice -- once here and once under the session it created.
-            if info.session_id in bound or info.session_id in runtime.conversations:
+            # client knows, not twice -- once here and once under the thread it created.
+            if info.thread_id in bound or info.thread_id in runtime.conversations:
                 continue
             if wanted and workspace_id_for(info.workspace) != wanted:
                 continue
             rows.append(
-                thread_row(info.session_id, info.title, updated_at=info.created_at.isoformat())
+                thread_row(info.thread_id, info.title, updated_at=info.created_at.isoformat())
             )
         return JSONResponse({"threads": rows[:limit]})
 
@@ -228,11 +227,11 @@ def create_app(
         )
 
     async def open_thread(thread_id: str, workspace_id: str = ""):
-        """The conversation for a thread id, opening it from the store when it is a session.
+        """The conversation for a thread id, opening it from the store when it has one.
 
         Three cases, and none of them is an error: this process is already holding it; it is
-        a session on disk from an earlier process; or it is an id a client minted and no run
-        has used yet. The last mirrors `Agent._open`, which starts a fresh session for an
+        a thread on disk from an earlier process; or it is an id a client minted and no run
+        has used yet. The last mirrors `Agent._open`, which starts a fresh thread for an
         unknown id rather than refusing -- the id may simply be stale, and refusing to work
         is a worse answer than working.
         """
@@ -242,12 +241,10 @@ def create_app(
         if held is not None:
             return held
 
-        for info in await store.sessions(limit=500):
-            if info.session_id == thread_id:
+        for info in await store.threads(limit=500):
+            if info.thread_id == thread_id:
                 titles[thread_id] = info.title
-                return open_conversation(
-                    thread_id, folders.remember(info.workspace), session_id=thread_id
-                )
+                return open_conversation(thread_id, folders.remember(info.workspace))
 
         if not workspace_id:
             raise ApiError(404, "no_such_thread", f"no conversation {thread_id}.")

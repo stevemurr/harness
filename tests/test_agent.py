@@ -147,10 +147,10 @@ async def test_a_run_is_recorded_turn_by_turn(folder: Path) -> None:
     )
     agent = agent_over(folder, model, store=store)
 
-    session_id = await agent.open_session()
-    await agent.run("read the notes", session_id)
+    thread_id = await agent.open_thread()
+    await agent.run("read the notes", thread_id)
 
-    recorded = await store.load(session_id)
+    recorded = await store.load(thread_id)
     roles = [m.role for m in recorded.messages]
     assert roles == [Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.TOOL, Role.ASSISTANT]
 
@@ -161,11 +161,11 @@ async def test_resuming_continues_the_same_transcript(folder: Path) -> None:
     store = MemoryStore()
     first = ScriptedModel(Message(Role.ASSISTANT, "first answer"))
     first_agent = agent_over(folder, first, store=store)
-    session_id = await first_agent.open_session()
-    await first_agent.run("first question", session_id)
+    thread_id = await first_agent.open_thread()
+    await first_agent.run("first question", thread_id)
 
     second = ScriptedModel(Message(Role.ASSISTANT, "second answer"))
-    await agent_over(folder, second, store=store).run("second question", session_id=session_id)
+    await agent_over(folder, second, store=store).run("second question", thread_id=thread_id)
 
     sent = second.seen[0].messages
     assert [m.content for m in sent if m.role is Role.USER] == [
@@ -175,23 +175,30 @@ async def test_resuming_continues_the_same_transcript(folder: Path) -> None:
     assert "first answer" in [m.content for m in sent]
 
 
-async def test_resuming_an_unknown_session_starts_a_new_one(folder: Path) -> None:
-    """Better than raising: the id may be stale, and refusing to work is a worse answer
-    than working in a fresh session and saying which one."""
+async def test_resuming_an_unknown_session_opens_that_id_rather_than_another(
+    folder: Path,
+) -> None:
+    """Better than raising: the id may be stale, and refusing to work is a worse answer than
+    working and saying where.
+
+    It keeps the id it was given. Minting a different one is what left a server holding two
+    ids for one thread -- the client's and the store's -- in two shapes, which is what
+    `thread_id` was quietly carrying. (2026-08-31)
+    """
     store = MemoryStore()
     model = ScriptedModel(Message(Role.ASSISTANT, "ok"))
 
     agent = agent_over(folder, model, store=store)
-    session_id = await agent.open_session("nope")
-    outcome = await agent.run("hi", session_id)
+    thread_id = await agent.open_thread("thr_stale")
+    outcome = await agent.run("hi", thread_id)
 
     assert outcome.stop.ok
-    assert session_id != "nope"
-    assert await store.load(session_id) is not None
+    assert thread_id == "thr_stale"
+    assert await store.load("thr_stale") is not None
 
 
-async def test_a_session_id_is_knowable_before_any_work_happens(folder: Path) -> None:
-    """The reason `open_session` exists. A client that answers `POST /runs` with an id and
+async def test_a_thread_id_is_knowable_before_any_work_happens(folder: Path) -> None:
+    """The reason `open_thread` exists. A client that answers `POST /runs` with an id and
     then streams against it needs the id at the *start*; `run` used to return it at the end,
     which is the one moment it is no longer useful.
     """
@@ -199,15 +206,15 @@ async def test_a_session_id_is_knowable_before_any_work_happens(folder: Path) ->
     model = ScriptedModel(Message(Role.ASSISTANT, "done"))
     agent = agent_over(folder, model, store=store)
 
-    session_id = await agent.open_session()
+    thread_id = await agent.open_thread()
 
     # It exists and is loadable before a single message has been sent to the model.
-    assert await store.load(session_id) is not None
+    assert await store.load(thread_id) is not None
     assert model.seen == []
 
-    await agent.run("now do it", session_id)
+    await agent.run("now do it", thread_id)
 
-    recorded = await store.load(session_id)
+    recorded = await store.load(thread_id)
     assert [m.content for m in recorded.messages if m.role is Role.USER] == ["now do it"]
 
 
@@ -216,10 +223,10 @@ async def test_opening_the_same_session_twice_returns_it_rather_than_forking(
 ) -> None:
     store = MemoryStore()
     agent = agent_over(folder, ScriptedModel(Message(Role.ASSISTANT, "x")), store=store)
-    first = await agent.open_session()
+    first = await agent.open_thread()
     await agent.run("hello", first)
 
-    assert await agent.open_session(first) == first
+    assert await agent.open_thread(first) == first
 
 
 async def test_a_run_without_a_store_takes_the_same_path(folder: Path) -> None:
@@ -234,25 +241,25 @@ async def test_a_run_without_a_store_takes_the_same_path(folder: Path) -> None:
 # --- the built defaults -------------------------------------------------------------------
 
 
-def test_build_protects_the_session_directory_when_it_is_inside_the_folder(
+def test_build_protects_the_thread_directory_when_it_is_inside_the_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A run that can rewrite the record of what it did makes every other record
     unreliable."""
     home = tmp_path / "home"
-    (home / ".harness" / "sessions").mkdir(parents=True)
+    (home / ".harness" / "threads").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
 
     agent = build(home, ScriptedModel(Message(Role.ASSISTANT, "x")))
 
-    assert agent.workspace.protected == ((home / ".harness" / "sessions").resolve(),)
+    assert agent.workspace.protected == ((home / ".harness" / "threads").resolve(),)
 
 
-def test_build_protects_nothing_when_sessions_live_elsewhere(
+def test_build_protects_nothing_when_threads_live_elsewhere(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
-    (home / ".harness" / "sessions").mkdir(parents=True)
+    (home / ".harness" / "threads").mkdir(parents=True)
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setenv("HOME", str(home))

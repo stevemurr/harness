@@ -473,7 +473,7 @@ async def test_a_paused_run_stops_before_the_next_tool_and_resumes(folder, tmp_p
 # -- conversations -----------------------------------------------------------------------
 
 
-async def test_a_conversation_binds_to_its_transcript_as_the_session_is_created(
+async def test_a_conversation_and_its_transcript_share_one_id(
     folder, tmp_path
 ) -> None:
     """The store wrapper's whole reason: `Agent.run` returns the id only at the end."""
@@ -481,11 +481,11 @@ async def test_a_conversation_binds_to_its_transcript_as_the_session_is_created(
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
     run = runtime.start(conversation, "first", mode="auto", policy="safe")
-    await _until(lambda: conversation.session_id is not None)
-    bound = conversation.session_id
+    await _until(lambda: conversation.thread_id is not None)
+    bound = conversation.thread_id
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
 
-    assert conversation.session_id == bound
+    assert conversation.thread_id == bound
     stored = await runtime.store.load(bound)
     assert [m.role.value for m in stored.messages] == ["system", "user", "assistant"]
 
@@ -498,7 +498,7 @@ async def test_a_second_run_continues_the_same_transcript(folder, tmp_path) -> N
         run = runtime.start(conversation, message, mode="auto", policy="safe")
         await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
 
-    stored = await runtime.store.load(conversation.session_id)
+    stored = await runtime.store.load(conversation.thread_id)
     assert [m.content for m in stored.messages if m.role.value == "user"] == ["first", "second"]
     assert len(runtime.for_thread("thr_1")) == 2
 

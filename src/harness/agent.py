@@ -14,8 +14,8 @@ What varies between front ends is not this class -- it is its collaborators:
 This said "two collaborators" until an HTTP server was actually written against it, which is
 the only way that kind of claim gets checked. No new abstraction was needed and nothing in
 `AgentLoop`, `Agent` or any tool changed -- but the count was optimistic, and `run`'s
-signature was wrong: it returned the session id when the run *finished*, and a client needs
-it when the run *starts*. Hence `open_session`. (2026-08-30)
+signature was wrong: it returned the thread id when the run *finished*, and a client needs
+it when the run *starts*. Hence `open_thread`. (2026-08-30)
 """
 
 from __future__ import annotations
@@ -79,34 +79,36 @@ class Agent:
     #: to leave plan mode, and a person answers.
     modes: ModeState = field(default_factory=ModeState)
 
-    async def open_session(self, session_id: str | None = None) -> str:
-        """Resolve or create the session, and return its id -- before any work happens.
+    async def open_thread(self, thread_id: str | None = None) -> str:
+        """Resolve or create the thread, and return its id -- before any work happens.
 
         Separate from `run` because they are two operations, and conflating them cost a
         caller something real: `run` used to return the id when it *finished*, and an HTTP
         client needs it when the run *starts* -- `POST /runs` answers with a run id the
         client immediately opens a stream against, long before the work is done. The server
-        worked around it by minting sessions itself and passing the id in, ignoring the one
+        worked around it by minting threads itself and passing the id in, ignoring the one
         that came back. That workaround was the evidence. (2026-08-30)
 
-        An unknown id opens a fresh session rather than raising: the id may simply be stale,
+        An unknown id opens a fresh thread rather than raising: the id may simply be stale,
         and refusing to work is a worse answer than working and saying where.
         """
         if (
-            session_id is not None
+            thread_id is not None
             and self.store is not None
-            and await self.store.load(session_id) is not None
+            and await self.store.load(thread_id) is not None
         ):
-            return session_id
+            return thread_id
         if self.store is None:
-            return session_id or "unsaved"
-        return await self.store.create(self.workspace.root)
+            return thread_id or "unsaved"
+        # The caller's id is kept rather than replaced. An unknown id used to open a thread
+        # under a DIFFERENT id, which is how a server ended up holding two.
+        return await self.store.create(self.workspace.root, thread_id or "")
 
-    async def run(self, prompt: str, session_id: str | None = None) -> Outcome:
-        """Do one exchange, in the session given or a fresh one.
+    async def run(self, prompt: str, thread_id: str | None = None) -> Outcome:
+        """Do one exchange, in the thread given or a fresh one.
 
-        Omit `session_id` when you do not need to know it -- a script, a test. Call
-        `open_session` first when you do, which is what a client that must answer with an id
+        Omit `thread_id` when you do not need to know it -- a script, a test. Call
+        `open_thread` first when you do, which is what a client that must answer with an id
         before the work starts does. The id is deliberately not returned from here: it was,
         and returning it at the *end* is useless to the caller who needed it at the start.
 
@@ -115,14 +117,14 @@ class Agent:
         this one, which is the whole benefit of the transcript being the state rather than a
         rendering of it.
         """
-        session_id = await self.open_session(session_id)
-        transcript, fresh = await self._open(session_id)
+        thread_id = await self.open_thread(thread_id)
+        transcript, fresh = await self._open(thread_id)
         transcript.append(user(prompt))
 
         # The opening messages, before the first turn -- so a run that dies during that
-        # turn still leaves a session showing what was asked.
+        # turn still leaves a thread showing what was asked.
         opening = transcript.messages[:] if fresh else [transcript.messages[-1]]
-        await self._write(session_id, opening)
+        await self._write(thread_id, opening)
 
         loop = AgentLoop(
             # Tools are chosen per call rather than once, because the mode can change
@@ -135,7 +137,7 @@ class Agent:
                 modes=self.modes,
             ).run,
             limits=self.limits,
-            observers=[*self.observers, self._recorder(session_id)],
+            observers=[*self.observers, self._recorder(thread_id)],
         )
         return await loop.run(transcript)
 
@@ -153,15 +155,15 @@ class Agent:
         mode = self.modes.current
         return tuple(s for s in self.registry.specs() if mode.permits(s.name, s.mutates))
 
-    async def _open(self, session_id: str) -> tuple[Transcript, bool]:
+    async def _open(self, thread_id: str) -> tuple[Transcript, bool]:
         """The transcript to continue, and whether this is its first exchange.
 
-        The session already exists -- `open_session` made or found it -- so this only decides
-        whether there is a transcript to continue or a new one to start. A session that was
+        The thread already exists -- `open_thread` made or found it -- so this only decides
+        whether there is a transcript to continue or a new one to start. A thread that was
         opened but never run has no stored messages yet, which is the `fresh` case.
         """
         if self.store is not None:
-            loaded = await self.store.load(session_id)
+            loaded = await self.store.load(thread_id)
             if loaded is not None and loaded.messages:
                 return loaded, False
         opening = "\n\n".join(
@@ -174,7 +176,7 @@ class Agent:
         )
         return Transcript([system(opening)]), True
 
-    def _recorder(self, session_id: str) -> Observer:
+    def _recorder(self, thread_id: str) -> Observer:
         """Persist each turn as it completes.
 
         An observer rather than a step inside the loop, so the loop never learns storage
@@ -190,13 +192,13 @@ class Agent:
                 Message(Role.TOOL, result.content, call_id=call.call_id)
                 for call, result in turn.results
             )
-            await self._write(session_id, messages)
+            await self._write(thread_id, messages)
 
         return record
 
-    async def _write(self, session_id: str, messages: list[Message]) -> None:
+    async def _write(self, thread_id: str, messages: list[Message]) -> None:
         if self.store is not None and messages:
-            await self.store.append(session_id, messages)
+            await self.store.append(thread_id, messages)
 
 
 def default_registry(
@@ -236,13 +238,13 @@ def build(
 ) -> Agent:
     """An agent over a folder, with the defaults a coding agent wants.
 
-    The harness's own session directory is protected: a run that can rewrite the record of
+    The harness's own thread directory is protected: a run that can rewrite the record of
     what it did makes every other record unreliable. Reads are not restricted -- an agent
     that cannot read the folder it was pointed at is not useful.
     """
     root = Path(folder).expanduser().resolve()
-    sessions = Path("~/.harness/sessions").expanduser()
-    protected = (sessions,) if sessions.is_relative_to(root) else ()
+    threads = Path("~/.harness/threads").expanduser()
+    protected = (threads,) if threads.is_relative_to(root) else ()
 
     modes = ModeState(current=mode)
     registry, plan, modes = default_registry(modes=modes, ask=ask)

@@ -1,8 +1,8 @@
 """Where transcripts live.
 
 Four methods, because the transcript is the state and there is nothing else to store:
-start a session, append to it, load it back, list what exists. Resume is `load` then keep
-going. History is `sessions`.
+start a thread, append to it, load it back, list what exists. Resume is `load` then keep
+going. History is `threads`.
 
 Adding a store is implementing this protocol in one file. There is a conformance suite in
 `tests/test_store.py` parameterised over every implementation, so a new store is proven by
@@ -31,10 +31,10 @@ from harness.types import Message, Transcript
 
 
 @dataclass(frozen=True, slots=True)
-class SessionInfo:
-    """One session, as a listing shows it."""
+class ThreadInfo:
+    """One thread, as a listing shows it."""
 
-    session_id: str
+    thread_id: str
     created_at: datetime
     workspace: Path
     #: The first thing the user asked, trimmed. What makes a listing readable -- a list of
@@ -44,33 +44,38 @@ class SessionInfo:
 
 
 class StoreError(Exception):
-    """The store could not do that. Never raised for an absent session -- see `load`."""
+    """The store could not do that. Never raised for an absent thread -- see `load`."""
 
 
 @runtime_checkable
 class Store(Protocol):
     """Durable transcripts."""
 
-    async def create(self, workspace: Path) -> str:
-        """Begin a session and return its id."""
+    async def create(self, workspace: Path, thread_id: str = "") -> str:
+        """Begin a thread and return its id.
+
+        `thread_id` lets a caller name it. A server must answer `POST /threads` with an id
+        before any run exists, and minting there and again here gave one thread two ids in
+        two shapes -- which is what `thread_id` was quietly holding. Empty means mint one.
+        """
         ...
 
-    async def append(self, session_id: str, messages: Sequence[Message]) -> None:
-        """Add messages to a session, in order.
+    async def append(self, thread_id: str, messages: Sequence[Message]) -> None:
+        """Add messages to a thread, in order.
 
         Called after each turn rather than at the end, because a store that only persists
         on a clean exit does not survive the crash it exists for.
         """
         ...
 
-    async def load(self, session_id: str) -> Transcript | None:
-        """The session's transcript, or None if there is no such session.
+    async def load(self, thread_id: str) -> Transcript | None:
+        """The thread's transcript, or None if there is no such thread.
 
-        None rather than raising: "does this session exist" is an ordinary question a
+        None rather than raising: "does this thread exist" is an ordinary question a
         caller asks, not an exceptional condition.
         """
         ...
 
-    async def sessions(self, limit: int = 50) -> list[SessionInfo]:
+    async def threads(self, limit: int = 50) -> list[ThreadInfo]:
         """Sessions, most recently created first."""
         ...

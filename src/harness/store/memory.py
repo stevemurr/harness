@@ -13,13 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from harness.store.base import SessionInfo, StoreError
+from harness.store.base import StoreError, ThreadInfo
 from harness.types import Message, Transcript
 
 
 @dataclass
 class _Held:
-    info: SessionInfo
+    info: ThreadInfo
     messages: list[Message] = field(default_factory=list)
 
 
@@ -27,36 +27,36 @@ class _Held:
 class MemoryStore:
     _held: dict[str, _Held] = field(default_factory=dict)
 
-    async def create(self, workspace: Path) -> str:
-        session_id = uuid4().hex[:16]
-        self._held[session_id] = _Held(
-            SessionInfo(session_id, datetime.now(UTC), Path(workspace))
+    async def create(self, workspace: Path, thread_id: str = "") -> str:
+        thread_id = thread_id or uuid4().hex[:16]
+        self._held[thread_id] = _Held(
+            ThreadInfo(thread_id, datetime.now(UTC), Path(workspace))
         )
-        return session_id
+        return thread_id
 
-    async def append(self, session_id: str, messages: Sequence[Message]) -> None:
-        held = self._held.get(session_id)
+    async def append(self, thread_id: str, messages: Sequence[Message]) -> None:
+        held = self._held.get(thread_id)
         if held is None:
-            raise StoreError(f"no such session: {session_id}")
+            raise StoreError(f"no such thread: {thread_id}")
         held.messages.extend(messages)
         title = held.info.title
         if not title:
             first = next((m for m in messages if m.role.value == "user"), None)
             if first is not None:
                 title = first.content.strip().splitlines()[0][:80] if first.content else ""
-        held.info = SessionInfo(
-            held.info.session_id,
+        held.info = ThreadInfo(
+            held.info.thread_id,
             held.info.created_at,
             held.info.workspace,
             title,
             len(held.messages),
         )
 
-    async def load(self, session_id: str) -> Transcript | None:
-        held = self._held.get(session_id)
+    async def load(self, thread_id: str) -> Transcript | None:
+        held = self._held.get(thread_id)
         return Transcript(list(held.messages)) if held else None
 
-    async def sessions(self, limit: int = 50) -> list[SessionInfo]:
+    async def threads(self, limit: int = 50) -> list[ThreadInfo]:
         ordered = sorted(
             (h.info for h in self._held.values()),
             key=lambda i: i.created_at,
