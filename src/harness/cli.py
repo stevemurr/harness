@@ -57,7 +57,9 @@ def render(turn: Turn) -> None:
                 print(f"  {_plan_line(line)}")
             print()
             continue
-        mark = green("✓") if result.ok else red("✗")
+        # Three marks, not two: a refusal is the harness declining, a failure is the world
+        # saying no, and a person reading a transcript wants to tell those apart.
+        mark = green("✓") if result.ok else (yellow("⊘") if result.refused else red("✗"))
         first = result.content.strip().splitlines()
         summary = first[0][:100] if first else ""
         extra = f" {dim(f'(+{len(first) - 1} lines)')}" if len(first) > 1 else ""

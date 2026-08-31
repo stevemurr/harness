@@ -15,7 +15,7 @@ from typing import Any
 
 from harness.tools.base import ToolContext, ToolSpec, schema
 from harness.types import ToolResult
-from harness.workspace import WorkspaceError
+from harness.workspace import PathEscape, PathRefused, WorkspaceError
 
 #: Directories never worth walking. Not a security boundary -- containment is -- just the
 #: difference between a search that answers and one that reads a virtualenv.
@@ -53,6 +53,8 @@ class ReadFile:
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             text = ctx.paths.read(args["path"])
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
 
@@ -97,6 +99,8 @@ class WriteFile:
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             written = ctx.paths.write(args["path"], args["content"])
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
         return ToolResult(f"wrote {written} bytes to {args['path']}")
@@ -134,6 +138,8 @@ class EditFile:
             return ToolResult("old and new are identical; nothing to do", ok=False)
         try:
             text = ctx.paths.read(path)
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
 
@@ -155,6 +161,8 @@ class EditFile:
 
         try:
             ctx.paths.write(path, text.replace(old, new))
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
         return ToolResult(f"replaced {count} occurrence(s) in {path}")
@@ -171,6 +179,8 @@ class ListDir:
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             target = ctx.paths.resolve(args.get("path", "."))
+        except (PathEscape, PathRefused) as exc:
+            return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
         if not target.is_dir():

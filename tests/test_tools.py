@@ -437,3 +437,81 @@ def test_two_interleaved_streamed_calls_stay_separate() -> None:
     assert [c.name for c in calls] == ["read_file", "list_dir"]
     assert calls[0].arguments == {"path": "x"}
     assert calls[1].arguments == {"path": "y"}
+
+
+# --- refused vs failed -------------------------------------------------------------------
+
+
+async def test_an_unknown_tool_is_refused_not_failed(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """The harness declined to act. Nothing was attempted."""
+    result = await registry.run(ToolCall("1", "teleport", {}), ctx)
+
+    assert not result.ok
+    assert result.refused
+
+
+async def test_bad_arguments_are_refused_not_failed(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    result = await registry.run(ToolCall("1", "read_file", {}), ctx)
+
+    assert result.refused
+
+
+async def test_a_path_outside_the_folder_is_refused(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    result = await registry.run(
+        ToolCall("1", "write_file", {"path": "/etc/nope", "content": "x"}), ctx
+    )
+
+    assert result.refused
+
+
+async def test_a_missing_file_failed_but_was_not_refused(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """The harness tried. The world said no. That is ordinary work, not a boundary."""
+    result = await registry.run(ToolCall("1", "read_file", {"path": "absent.py"}), ctx)
+
+    assert not result.ok
+    assert not result.refused
+
+
+async def test_a_command_that_exits_nonzero_failed_but_was_not_refused(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """Five of six `run` failures in one eval round were pytest exiting 1 while the model
+    iterated on its own tests -- the loop working. A metric that cannot tell that from a
+    refusal reports normal work as breakage. (2026-08-31)"""
+    runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
+
+    result = await runner.run(ToolCall("1", "run", {"command": "exit 3"}))
+
+    assert not result.ok
+    assert not result.refused
+
+
+async def test_a_declined_approval_is_refused(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    runner = ToolRunner(registry, ctx, Approvals(ask=deny_all))
+
+    result = await runner.run(ToolCall("1", "run", {"command": "ls"}))
+
+    assert result.refused
+
+
+def test_a_result_cannot_be_both_ok_and_refused() -> None:
+    """Two booleans can encode a state that means nothing; this one cannot be built."""
+    with pytest.raises(ValueError, match="cannot also be ok"):
+        ToolResult("x", ok=True, refused=True)
+
+
+def test_truncation_keeps_the_refusal_flag() -> None:
+    """The loop truncates every result, and a flag lost there would be lost everywhere."""
+    long = ToolResult("x" * 100, ok=False, refused=True).truncated(10)
+
+    assert long.refused and not long.ok

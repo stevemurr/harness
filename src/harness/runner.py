@@ -44,7 +44,9 @@ class ToolRunner:
         tool = self.registry.get(call.name)
         if tool is None:
             known = ", ".join(sorted(self.registry.names())) or "none"
-            return ToolResult(f"no tool named {call.name!r}. Available: {known}", ok=False)
+            return ToolResult(
+                f"no tool named {call.name!r}. Available: {known}", ok=False, refused=True
+            )
 
         # The mode is checked here, not only where tools are offered. Withholding a tool
         # from the offer list is a hint; this is the boundary. A model can ask for a tool
@@ -57,6 +59,7 @@ class ToolRunner:
                     f"{tool.spec.name} is not available in {mode.name} mode. "
                     "Call exit_plan_mode with a plan to ask the user to unlock it.",
                     ok=False,
+                    refused=True,
                 )
 
         summary, grant_key = describe(tool, call.arguments)
@@ -73,6 +76,6 @@ class ToolRunner:
             # A refusal is information the model should act on -- propose something else,
             # explain why it needed to -- so it is an ordinary failed result, not an
             # exception and not a run-ending condition.
-            return ToolResult(refusal, ok=False)
+            return ToolResult(refusal, ok=False, refused=True)
 
         return await self.registry.run(call, self.context)

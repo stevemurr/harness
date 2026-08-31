@@ -125,7 +125,7 @@ class Registry:
         if tool is None:
             known = ", ".join(sorted(self._tools)) or "none"
             return ToolResult(
-                f"no tool named {call.name!r}. Available: {known}", ok=False
+                f"no tool named {call.name!r}. Available: {known}", ok=False, refused=True
             )
 
         try:
@@ -135,6 +135,8 @@ class Registry:
             # fix. `json_path` is the field, in the notation the model wrote.
             where = exc.json_path.removeprefix("$.")
             detail = f"{where}: {exc.message}" if where != "$" else exc.message
-            return ToolResult(f"invalid arguments for {call.name}: {detail}", ok=False)
+            return ToolResult(
+                f"invalid arguments for {call.name}: {detail}", ok=False, refused=True
+            )
 
         return await tool.run(call.arguments, ctx)

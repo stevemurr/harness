@@ -57,17 +57,38 @@ class ToolResult:
     `ok` is not redundant with content: a tool that fails still returns text the model must
     read, and the distinction is what lets the loop count consecutive failures without
     parsing prose.
+
+    `refused` splits the not-ok case in two, because they are unrelated facts wearing one
+    flag. **Refused** means the harness declined to act -- an unknown tool, arguments that
+    do not match the schema, a path outside the folder, a mode that withholds the tool, a
+    person saying no. **Failed** means it acted and the world said no -- a command exited
+    non-zero, a file was not there, an edit matched nothing.
+
+    Measured why this matters: an eval counted six `run` failures in one round and read them
+    as a harness problem. Five were `pytest` exiting 1 while the model iterated on its own
+    tests, which is the loop working exactly as intended. One was a real refusal. A metric
+    that cannot tell those apart reports normal work as breakage. (2026-08-31)
     """
 
     content: str
     ok: bool = True
+    #: Only meaningful when `ok` is False.
+    refused: bool = False
+
+    def __post_init__(self) -> None:
+        if self.ok and self.refused:
+            # Not a state anything should be able to construct: a refusal is a way of not
+            # succeeding, so the pair would be describing two different outcomes at once.
+            raise ValueError("a refused result cannot also be ok")
 
     def truncated(self, limit: int) -> ToolResult:
         if len(self.content) <= limit:
             return self
         head = self.content[:limit]
         dropped = len(self.content) - limit
-        return ToolResult(f"{head}\n\n[{dropped} more characters truncated]", self.ok)
+        return ToolResult(
+            f"{head}\n\n[{dropped} more characters truncated]", self.ok, self.refused
+        )
 
 
 @dataclass
