@@ -138,7 +138,7 @@ class StopReason:
     is how the predecessor reported 6/6 satisfied on 40%-correct work.
     """
 
-    kind: Literal["done", "max_turns", "budget", "tool_failures", "cancelled", "error"]
+    kind: Literal["done", "max_turns", "budget", "refused", "cancelled", "error"]
     detail: str = ""
 
     @property

@@ -55,13 +55,20 @@ class Limits:
     """Every way a run is allowed to end other than the model stopping.
 
     Each one is a real termination the caller can distinguish, not a safety net nobody
-    reads. `max_consecutive_tool_failures` is the one that earns its place least obviously:
-    a model that cannot get a tool to work will keep trying with the same broken argument
+    reads. `max_consecutive_refusals` is the one that earns its place least obviously: a
+    model that cannot get a tool to work will keep trying with the same broken argument
     until the turn limit, burning the whole budget on one mistake.
+
+    It counts REFUSALS, not failures, and the difference matters. A failing test is not a
+    stuck agent -- under TDD it is the expected first state, and a model that writes a test,
+    watches it fail, and then makes it pass has done the right thing twice. Counting that
+    towards a stall would end runs for working correctly. What signals a stall is the harness
+    saying no over and over: the same bad arguments, the same withheld tool, the same path
+    outside the folder. (2026-08-31)
     """
 
     max_turns: int = 100
-    max_consecutive_tool_failures: int = 10
+    max_consecutive_refusals: int = 10
 
 
 ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]
@@ -90,7 +97,7 @@ class AgentLoop:
 
     async def run(self, transcript: Transcript) -> Outcome:
         turns = 0
-        consecutive_failures = 0
+        consecutive_refusals = 0
 
         while True:
             if turns >= self.limits.max_turns:
@@ -134,19 +141,23 @@ class AgentLoop:
                     Message(Role.TOOL, result.content, call_id=call.call_id)
                 )
 
-            if all(not result.ok for _, result in results):
-                consecutive_failures += 1
+            # Every call refused, not merely unsuccessful. A turn spent watching tests fail
+            # is work; a turn where the harness declined everything is a model that cannot
+            # get anywhere.
+            if results and all(result.refused for _, result in results):
+                consecutive_refusals += 1
             else:
-                consecutive_failures = 0
+                consecutive_refusals = 0
 
             await self._observe(Turn(assistant, results))
 
-            if consecutive_failures >= self.limits.max_consecutive_tool_failures:
+            if consecutive_refusals >= self.limits.max_consecutive_refusals:
                 return Outcome(
                     transcript,
                     StopReason(
-                        "tool_failures",
-                        f"{consecutive_failures} consecutive turns where every tool failed",
+                        "refused",
+                        f"{consecutive_refusals} consecutive turns where every tool call "
+                        "was refused",
                     ),
                     turns,
                 )

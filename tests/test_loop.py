@@ -113,32 +113,53 @@ async def test_the_turn_limit_stops_a_model_that_never_stops_asking() -> None:
     assert outcome.turns == 3
 
 
-async def test_repeated_total_tool_failure_stops_the_run() -> None:
+async def test_repeated_refusal_stops_the_run() -> None:
     """A model that cannot work one tool will retry the same broken call until the budget
-    is gone. Counting consecutive all-failed turns is what notices."""
+    is gone. Counting consecutive all-refused turns is what notices."""
 
-    async def always_fails(call: ToolCall) -> ToolResult:
-        return ToolResult("bad arguments", ok=False)
+    async def always_refuses(call: ToolCall) -> ToolResult:
+        return ToolResult("bad arguments", ok=False, refused=True)
 
     loop = AgentLoop(
         complete=scripted(calls(("a", "read", {}))),
-        run_tool=always_fails,
-        limits=Limits(max_turns=100, max_consecutive_tool_failures=4),
+        run_tool=always_refuses,
+        limits=Limits(max_turns=100, max_consecutive_refusals=4),
     )
 
     outcome = await loop.run(Transcript([user("go")]))
 
-    assert outcome.stop.kind == "tool_failures"
+    assert outcome.stop.kind == "refused"
     assert outcome.turns == 4
 
 
-async def test_one_success_resets_the_failure_streak() -> None:
+async def test_failing_commands_never_stop_a_run() -> None:
+    """A failing test is not a stuck agent -- under TDD it is the expected first state, and
+    a run that ended for watching its own tests fail would be ending for working correctly.
+    (owner, 2026-08-31)"""
+
+    async def tests_fail(call: ToolCall) -> ToolResult:
+        return ToolResult("exit 1\nFAILED test_parser.py::test_commas", ok=False)
+
+    loop = AgentLoop(
+        complete=scripted(calls(("a", "run", {}))),
+        run_tool=tests_fail,
+        limits=Limits(max_turns=6, max_consecutive_refusals=2),
+    )
+
+    outcome = await loop.run(Transcript([user("go")]))
+
+    # Ran out of turns, which is the honest ending -- not stopped for "failures".
+    assert outcome.stop.kind == "max_turns"
+
+
+async def test_one_success_resets_the_refusal_streak() -> None:
     """Otherwise a run that is making progress dies for having had a bad patch."""
     attempts = {"n": 0}
 
     async def flaky(call: ToolCall) -> ToolResult:
         attempts["n"] += 1
-        return ToolResult("x", ok=attempts["n"] == 3)
+        ok = attempts["n"] == 3
+        return ToolResult("x", ok=ok, refused=not ok)
 
     loop = AgentLoop(
         complete=scripted(
@@ -149,7 +170,7 @@ async def test_one_success_resets_the_failure_streak() -> None:
             Message(Role.ASSISTANT, "done"),
         ),
         run_tool=flaky,
-        limits=Limits(max_consecutive_tool_failures=3),
+        limits=Limits(max_consecutive_refusals=3),
     )
 
     outcome = await loop.run(Transcript([user("go")]))

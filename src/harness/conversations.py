@@ -438,7 +438,7 @@ class Runtime:
 def _ending(stop: StopReason, messages: list[Message]) -> tuple[str, str]:
     """A `StopReason` as the one terminal event, honestly.
 
-    `max_turns` and `tool_failures` are not completions. A run that burned its turn budget
+    `max_turns` and `refused` are not completions. A run that burned its turn budget
     without answering has failed, and reporting it as done is how a person walks away from
     work that was never finished -- which is precisely the failure `StopReason` exists to
     make impossible, so it must not be thrown away one layer above it.
