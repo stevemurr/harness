@@ -9,6 +9,9 @@ cannot show them; the bounded `?ticks=` read is exercised here because it return
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -194,6 +197,48 @@ async def test_a_folder_that_is_not_there_is_an_answer(folder, tmp_path) -> None
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "no_such_folder"
+
+
+async def test_a_checkout_records_its_root_commit_set(folder, tmp_path) -> None:
+    """Not recorded, a client concludes the record may describe a different checkout than
+    the one on disk and asks for a replacement every boot, forever."""
+    if not shutil.which("git"):
+        pytest.skip("no git on this machine")
+    _make_checkout(folder)
+
+    async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
+        response = await client.post(
+            "/workspaces", json={"name": "w", "root_path": str(folder), "vcs": "git"}
+        )
+
+    assert len(response.json()["repo_identity"]) == 40
+
+
+async def test_a_folder_that_is_not_a_checkout_records_no_identity(folder, tmp_path) -> None:
+    """A folder with no repository, no `git`, or a repository with no commits are all
+    ordinary, and none of them should stop a run."""
+    async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
+        listed = await client.post(
+            "/workspaces", json={"name": "w", "root_path": str(folder), "vcs": "git"}
+        )
+
+    assert listed.json()["repo_identity"] == ""
+
+
+def _make_checkout(folder: Path) -> None:
+    # A built environment rather than an inherited one, so whoever runs the suite does not
+    # get their own git identity or hooks involved in it.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(folder),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+    }
+    author = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    for argv in (
+        ["git", "init", "-q"],
+        ["git", *author, "commit", "-q", "--allow-empty", "-m", "one"],
+    ):
+        subprocess.run(argv, cwd=folder, check=True, env=env, capture_output=True)
 
 
 # -- threads and runs -----------------------------------------------------------------------

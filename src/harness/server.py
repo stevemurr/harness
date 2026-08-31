@@ -294,8 +294,24 @@ def create_app(
         # The title is not stored. `JsonlStore` already derives one from the first user
         # message, which is exactly what the client sends as a title, and a second copy is a
         # second thing that can disagree with the transcript about what was asked.
-        runtime.conversation(thread_id, Path(record.root_path), record.workspace_id)
+        open_conversation(thread_id, record)
         return JSONResponse({"thread_id": thread_id}, status_code=201)
+
+    def open_conversation(thread_id: str, record: WorkspaceRecord, session_id: str = ""):
+        """Every conversation is opened here, so a folder that has gone is one answer.
+
+        `Workspace.at` refuses a root that is not a directory, and a registration outlives
+        the folder it names -- somebody moves it between one run and the next.
+        """
+        try:
+            return runtime.conversation(
+                thread_id,
+                Path(record.root_path),
+                record.workspace_id,
+                session_id=session_id or None,
+            )
+        except WorkspaceError as exc:
+            raise ApiError(400, "no_such_folder", str(exc)) from exc
 
     async def list_threads(request: Request) -> Response:
         wanted = request.query_params.get("workspace_id") or ""
@@ -303,7 +319,9 @@ def create_app(
         rows: list[dict[str, Any]] = []
 
         bound = {c.session_id for c in runtime.conversations.values() if c.session_id}
-        for conversation in runtime.conversations.values():
+        # Newest first, which is the order a picker wants and the order the store already
+        # returns its own rows in.
+        for conversation in reversed(list(runtime.conversations.values())):
             if wanted and conversation.workspace_id != wanted:
                 continue
             rows.append(thread_row(conversation.thread_id, conversation_title(conversation)))
@@ -363,18 +381,13 @@ def create_app(
         for info in await store.sessions(limit=500):
             if info.session_id == thread_id:
                 titles[thread_id] = info.title
-                record = folders.remember(info.workspace)
-                return runtime.conversation(
-                    thread_id,
-                    Path(record.root_path),
-                    record.workspace_id,
-                    session_id=thread_id,
+                return open_conversation(
+                    thread_id, folders.remember(info.workspace), session_id=thread_id
                 )
 
         if not workspace_id:
             raise ApiError(404, "no_such_thread", f"no conversation {thread_id}.")
-        record = require_workspace(workspace_id)
-        return runtime.conversation(thread_id, Path(record.root_path), record.workspace_id)
+        return open_conversation(thread_id, require_workspace(workspace_id))
 
     def require_workspace(workspace_id: str) -> WorkspaceRecord:
         if not workspace_id:
@@ -421,8 +434,6 @@ def create_app(
             )
         except CommandRefused as exc:
             raise ApiError(409, "run_in_flight", str(exc)) from exc
-        except WorkspaceError as exc:
-            raise ApiError(400, "no_such_folder", str(exc)) from exc
 
         answer = {"run_id": run.run_id, "thread_id": conversation.thread_id}
         if key:
