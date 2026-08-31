@@ -1,0 +1,8 @@
+PUSH 5
+JNZ there
+PUSH 1
+PRINT
+HALT
+there:
+PUSH 2
+PRINT

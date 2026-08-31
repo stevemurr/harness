@@ -1,0 +1,11 @@
+PUSH 3
+STORE n
+top:
+LOAD n
+PRINT
+LOAD n
+PUSH 1
+SUB
+STORE n
+LOAD n
+JNZ top

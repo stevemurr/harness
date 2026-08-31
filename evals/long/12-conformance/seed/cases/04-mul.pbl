@@ -1,0 +1,4 @@
+PUSH 6
+PUSH 7
+MUL
+PRINT

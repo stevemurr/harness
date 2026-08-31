@@ -32,6 +32,7 @@ from harness.approval import Approvals, Policy
 from harness.config import load
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
+from harness.store import JsonlStore
 from harness.store.codec import encode
 from harness.tools.base import Registry
 
@@ -248,8 +249,14 @@ async def attempt(
     rung: Path, work: Path, *, with_code: bool, max_turns: int, keep: Path | None = None
 ) -> dict:
     model = Recording(provider())
+    # A store, so the transcript exists while the run is happening rather than only after
+    # it. Two reasons, and the second is the one that matters for a ninety-minute rung: it
+    # can be watched with `tail -f`, and a run that is killed keeps everything up to the
+    # turn it died on. Without it a long run that is interrupted loses the lot.
+    threads = work.parent / "threads"
     agent = build(
         work, model,
+        store=JsonlStore(threads),
         approvals=Approvals(policy=Policy(approve_everything=True)),
         settings=Settings(limits=Limits(max_turns=max_turns)),
     )
@@ -288,8 +295,10 @@ async def attempt(
     agent.on_compaction = compacted
 
     started = time.monotonic()
+    thread = await agent.open_thread()
+    print(f"      watching: tail -f {threads / thread / 'transcript.jsonl'}", flush=True)
     try:
-        outcome = await agent.run((rung / "task.md").read_text())
+        outcome = await agent.run((rung / "task.md").read_text(), thread)
         stop, turns = outcome.stop.kind, outcome.turns
         detail = outcome.stop.detail
     except Exception as exc:  # a defect in the harness must not lose the other rungs

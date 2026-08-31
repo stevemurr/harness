@@ -1,0 +1,8 @@
+CALL sub
+PUSH 2
+PRINT
+HALT
+sub:
+PUSH 1
+PRINT
+RET

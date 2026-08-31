@@ -1,0 +1,8 @@
+PUSH 0
+JZ there
+PUSH 1
+PRINT
+HALT
+there:
+PUSH 2
+PRINT

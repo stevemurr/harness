@@ -29,9 +29,8 @@ class UpdatePlan:
         default=ToolSpec(
             name="update_plan",
             description=(
-                "Keep a short checklist of the work. Call it once near the start when the "
-                "task has more than a couple of steps, and again whenever the state changes "
-                "-- a plan for a one-step task is noise. Send the WHOLE list every time, "
+                "Keep a short checklist of the work. Call it once near the start and again "
+                "whenever the state changes. Send the WHOLE list every time, "
                 "including steps that have not changed: this replaces the plan rather than "
                 "patching it. Mark a step in_progress when you start it and completed when "
                 "it is genuinely done, not when you intend to do it, and keep one step in "

@@ -1,0 +1,3 @@
+PUSH 8
+NOT
+PRINT

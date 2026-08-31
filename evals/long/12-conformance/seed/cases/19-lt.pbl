@@ -1,0 +1,4 @@
+PUSH 3
+PUSH 9
+LT
+PRINT

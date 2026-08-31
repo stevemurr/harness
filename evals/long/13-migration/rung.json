@@ -1,0 +1,4 @@
+{
+  "tests": "A convention held consistently across twenty-two files, with the rule stated once -- the probe for whether a compaction boundary loses a decision made early.",
+  "long": true
+}

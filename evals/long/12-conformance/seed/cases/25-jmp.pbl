@@ -1,0 +1,6 @@
+JMP skip
+PUSH 1
+PRINT
+skip:
+PUSH 2
+PRINT

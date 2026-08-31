@@ -1,0 +1,11 @@
+CALL a
+HALT
+a:
+PUSH 1
+PRINT
+CALL b
+RET
+b:
+PUSH 2
+PRINT
+RET

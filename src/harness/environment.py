@@ -28,6 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from harness.prompts import prompt
+
 #: Read from the workspace root and appended to the prompt verbatim. The first name is the
 #: one this harness documents; the other two are read because a repository that already has
 #: one should not need a third.
@@ -42,22 +44,7 @@ CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md", ".harness.md")
 #: The file also belongs to the project rather than to the agent: it is committed, reviewed
 #: and read by other tools, and a harness that writes one unbidden is guessing at a
 #: project's conventions and then quoting itself as the source.
-STARTER_AGENTS = """\
-# Working in this project
-
-<!-- Read by the harness at the start of every run and appended to the system prompt
-     verbatim. Facts about the environment are detected automatically; what belongs here is
-     what a newcomer would have to be told. -->
-
-## Checking your work
-
-Run the tests with: <command>
-Do not answer until they pass.
-
-## Conventions
-
-- <what to do, or not do, that the code does not already say>
-"""
+STARTER_AGENTS = prompt("agents_starter")
 
 
 def write_conventions(root: Path) -> Path | None:
