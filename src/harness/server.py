@@ -285,7 +285,16 @@ def create_app(
                 "where the work happened.",
             )
 
-        message = str((body.get("message") or {}).get("content") or "").strip()
+        # Typed before it is read. `message` arriving as a bare string is the obvious
+        # mistake a client writing to the contract by hand makes, and reaching `.get` on it
+        # is an `AttributeError` -- which the catch-all turns into a 500 naming a Python
+        # type. This file's promise is that everything a client can send is answered.
+        offered = body.get("message")
+        if offered is not None and not isinstance(offered, dict):
+            raise ApiError(
+                400, "invalid_request", "message must be an object with a content field."
+            )
+        message = str((offered or {}).get("content") or "").strip()
         if not message:
             raise ApiError(400, "invalid_request", "message.content is required.")
 

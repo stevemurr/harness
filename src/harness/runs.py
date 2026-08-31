@@ -263,7 +263,10 @@ class Run:
         finally:
             self._pending.pop(approval_id, None)
 
-        self.status = previous
+        # Not an unconditional restore: a pause that arrived while the modal was on screen
+        # would otherwise be thrown away here, and a client polling `GET /runs` would be
+        # told `running` about a run that is gated and going nowhere.
+        self.status = previous if self._running.is_set() else RunStatus.PAUSED
         self.publish(
             "approval.resolved",
             {"approval_id": approval_id, "decision": decision.value},

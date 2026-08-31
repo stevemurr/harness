@@ -380,6 +380,26 @@ async def test_a_body_that_is_not_json_is_an_answer(folder, tmp_path) -> None:
     assert response.json()["detail"]["code"] == "invalid_json"
 
 
+async def test_a_message_that_is_not_an_object_is_an_answer(folder, tmp_path) -> None:
+    """A bare string is the mistake a client writing to the contract by hand makes.
+
+    Before this it reached `.get` on a `str` and came back as a 500 naming a Python type,
+    which is nothing the person who sent it can act on.
+    """
+    async with client_for(app_for(ScriptedModel(says("done")), tmp_path)) as client:
+        workspace_id = await register(client, folder)
+        thread = await client.post("/threads", json={"workspace_id": workspace_id})
+        thread_id = thread.json()["thread_id"]
+
+        for offered in ("just a string", ["content"], 7):
+            response = await client.post(
+                f"/threads/{thread_id}/runs",
+                json={"workspace_id": workspace_id, "message": offered},
+            )
+            assert response.status_code == 400, offered
+            assert response.json()["detail"]["code"] == "invalid_request"
+
+
 # -- events ---------------------------------------------------------------------------------
 
 
@@ -452,6 +472,35 @@ async def test_a_cursor_that_will_not_parse_starts_at_the_beginning(folder, tmp_
     assert parse(response.text)[0][2]["type"] == "run.created"
 
 
+async def test_a_stream_reports_a_run_that_ended_without_a_terminal_event() -> None:
+    """The third `stream.end` reason, and the only one that names a defect in this harness.
+
+    A follow that kept waiting would hang on it forever and one that returned quietly would
+    report unfinished work as finished, so the stream says which of the two happened. It is
+    reachable whenever a run's task ends by a route that publishes no ending -- a
+    `BaseException` past both `except` arms in `_execute`, say.
+    """
+    from harness.runs import Run
+    from harness.stream import frames
+
+    run = Run(run_id="run_x", thread_id="thr_x", message="go", mode="auto", policy="safe")
+    run.publish("run.created", {"message": "go"})
+    run.task = asyncio.create_task(asyncio.sleep(0))
+    await run.task
+
+    # Bounded, because the regression this pins is a stream that never ends: without the
+    # branch the generator heartbeats forever and an unbounded read hangs the suite instead
+    # of failing it.
+    async with asyncio.timeout(5):
+        written = "".join([chunk async for chunk in frames(
+            run, 0, developer=False, ticks=0, heartbeat=0.05
+        )])
+
+    assert "event: stream.end" in written
+    assert '{"reason": "terminal_without_event"}' in written
+    assert not run.events.closed
+
+
 async def test_events_for_a_run_that_does_not_exist(folder, tmp_path) -> None:
     async with client_for(app_for(ScriptedModel(says("done")), tmp_path)) as client:
         response = await client.get("/runs/run_nope/events", params={"ticks": 1})
@@ -511,6 +560,47 @@ async def test_resolving_the_same_command_twice_acts_once(folder, tmp_path) -> N
 
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json()
+
+
+async def test_a_pause_under_the_modal_survives_the_approval_being_answered(
+    folder, tmp_path
+) -> None:
+    """Answering the modal must not restore the status the pause replaced.
+
+    The runner asks before it dispatches, so a pause that arrives while a request is on
+    screen is answered first and the run parks at the next tool call. That is documented.
+    What must not happen is the status going back to `running`, because `GET /runs` is how
+    a reconnecting client decides whether a run is still going.
+    """
+    app = app_for(
+        ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
+    )
+    async with client_for(app) as client:
+        _, _, accepted = await start(client, folder)
+        run_id = accepted.json()["run_id"]
+        request = await _wait_for(client, run_id, "approval.requested")
+
+        await client.post(f"/runs/{run_id}/commands", json={"type": "pause"})
+        await client.post(
+            f"/runs/{run_id}/commands",
+            json={
+                "type": "resolve_approval",
+                "approval_id": request["approval_id"],
+                "decision": "approve",
+            },
+        )
+        await asyncio.sleep(0.05)
+        listed = await client.get("/runs")
+        paused = next(r for r in listed.json()["runs"] if r["run_id"] == run_id)
+
+        assert paused["status"] == "paused"
+
+        await client.post(f"/runs/{run_id}/commands", json={"type": "resume"})
+        await _settle(app)
+        listed = await client.get("/runs")
+        resumed = next(r for r in listed.json()["runs"] if r["run_id"] == run_id)
+
+    assert resumed["status"] == "completed"
 
 
 async def test_a_decision_this_backend_does_not_know_is_refused(folder, tmp_path) -> None:
