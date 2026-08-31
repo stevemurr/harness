@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,7 +43,7 @@ from harness.plan import Plan
 from harness.providers.base import Provider
 from harness.runner import describe
 from harness.runs import CommandRefused, Run, RunStatus, one_line, policy_for, progress_id
-from harness.store.base import SessionInfo, Store
+from harness.store.base import Store
 from harness.tools.base import Registry, Tool, ToolContext, ToolSpec
 from harness.types import Message, StopReason, ToolResult
 from harness.workspace import Workspace
@@ -198,34 +197,6 @@ def observer_for(live: Live) -> Observer:
 
 
 @dataclass
-class BoundStore:
-    """The store, with the session id `Agent` mints noted as it is minted.
-
-    `Agent.run` returns the session id only when the run ends, and a client is told the
-    conversation's identity when the run is accepted. This is the one place the id exists
-    earlier. It also means a first run cancelled before it returns still leaves the
-    conversation bound to the transcript it started, rather than opening a second one.
-    """
-
-    inner: Store
-    live: Live
-
-    async def create(self, workspace: Path) -> str:
-        session_id = await self.inner.create(workspace)
-        self.live.session_id = session_id
-        return session_id
-
-    async def append(self, session_id: str, messages: Sequence[Message]) -> None:
-        await self.inner.append(session_id, messages)
-
-    async def load(self, session_id: str):
-        return await self.inner.load(session_id)
-
-    async def sessions(self, limit: int = 50) -> list[SessionInfo]:
-        return await self.inner.sessions(limit)
-
-
-@dataclass
 class Conversation:
     """One thread: one agent, one transcript, and the runs that happened in it.
 
@@ -271,8 +242,14 @@ def open_conversation(
     """Build the agent for one conversation, with the front end's collaborators in place.
 
     This is what `agent.py` calls the composition root doing its job: the same `Agent`, with
-    a registry whose tools publish, an asker that suspends, an observer that publishes and a
-    store that reports the session it minted. Nothing below this line knows a server exists.
+    a registry whose tools publish, an asker that suspends, and an observer that publishes.
+    Nothing below this line knows a server exists.
+
+    The session is not opened here because opening it is `await`-able and this is not; the
+    caller opens it before the first run. A `BoundStore` wrapper used to sit in this list,
+    intercepting `store.create` to learn the id `Agent.run` would not report until the run
+    ended. `Agent.open_session` reports it before the run starts, so the wrapper went.
+    (2026-08-30)
     """
     live = Live(session_id=session_id)
     registry, plan, modes = default_registry(modes=ModeState())
@@ -284,7 +261,7 @@ def open_conversation(
         approvals=approvals,
         plan=plan,
         modes=modes,
-        store=BoundStore(store, live),
+        store=store,
         observers=[observer_for(live)],
     )
     return Conversation(
@@ -404,9 +381,12 @@ class Runtime:
         if run.status is RunStatus.QUEUED:
             run.status = RunStatus.RUNNING
         try:
-            session_id, outcome = await conversation.agent.run(
-                run.message, conversation.session_id
-            )
+            # Before any work, so a first run cancelled before it returns still leaves the
+            # conversation bound to the transcript it started rather than opening a second
+            # one on the next attempt. That property used to belong to a store wrapper.
+            if conversation.live.session_id is None:
+                conversation.live.session_id = await conversation.agent.open_session()
+            outcome = await conversation.agent.run(run.message, conversation.session_id)
         except asyncio.CancelledError:
             run.finish("run.cancelled", "Cancelled.")
             raise
@@ -417,7 +397,6 @@ class Runtime:
         finally:
             conversation.live.run = None
 
-        conversation.live.session_id = session_id
         run.publish(
             "harness.stop",
             {"kind": outcome.stop.kind, "detail": outcome.stop.detail, "turns": outcome.turns},
