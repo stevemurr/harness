@@ -1,9 +1,10 @@
 """Making a long run fit, without rewriting what happened.
 
 A coding agent fills a context window long before it runs out of turns: `TOOL_OUTPUT_LIMIT`
-caps one tool result at 30k characters, and a single `pytest` run reaches it. Nothing else
-here counted, so the first sign of trouble was a 400 from the endpoint arriving as
-`StopReason("error")` -- a predictable failure wearing the provider's words.
+caps one tool result at 30k characters and `TURN_OUTPUT_LIMIT` caps a whole turn, but a run
+accumulates turns without limit. Nothing counted the total, so the first sign of trouble was
+a 400 from the endpoint arriving as `StopReason("error")` -- a predictable failure wearing
+the provider's words.
 
 **Nothing is removed from the transcript.** Compaction appends one message and deletes
 none; the stored file stays complete and append-only, `cat` still shows every turn, and

@@ -29,10 +29,30 @@ from harness.types import Message, Role, StopReason, ToolCall, ToolResult, Trans
 
 log = logging.getLogger(__name__)
 
-#: How much of one tool's output the model sees. Beyond this the useful signal is almost
-#: always at the head (an error, the first failing test), and the tail is repetition that
-#: costs context the run needs later.
+#: How much of one tool's output the model sees. Beyond this the middle is repetition that
+#: costs context the run needs later; `ToolResult.truncated` keeps both ends, because the
+#: verdict of a test run is at the tail.
 TOOL_OUTPUT_LIMIT = 30_000
+
+#: How much output one *turn* may add, across every call in it. The per-result cap alone
+#: leaves a turn unbounded, because nothing caps how many calls a model asks for at once,
+#: and a tool call cannot simply be dropped -- every one must be answered or the provider
+#: rejects the transcript.
+#:
+#: Measured against a live gateway: one turn issued ~24 parallel `read_file` calls and took
+#: the context from 3% to 304% of the window in a single step. Compaction could not repair
+#: it either, because the newest turn is kept verbatim and that turn was 53k tokens on its
+#: own -- so compaction correctly declined, having nothing it could remove. A threshold
+#: cannot catch a jump that happens between two measurements; bounding the jump can.
+#:
+#: Four times the per-result cap, so a turn may carry several full-size results but not two
+#: dozen. At ~3.7 characters per token that is ~32k tokens, which fits inside the 20% of a
+#: window left above the compaction threshold. (2026-08-31)
+TURN_OUTPUT_LIMIT = 120_000
+
+#: No result is cut below this, even in a turn with too many calls to fund them all. A
+#: result truncated to nothing is not a smaller answer but a missing one.
+MIN_RESULT = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,8 +204,19 @@ class AgentLoop:
             except Exception as exc:
                 log.exception("tool %s raised", call.name)
                 result = ToolResult(f"{call.name} failed: {exc}", ok=False)
-            answered.append((call, result.truncated(TOOL_OUTPUT_LIMIT)))
-        return tuple(answered)
+            answered.append((call, result))
+
+        # Truncated after the whole turn rather than per call, because the budget is shared
+        # and how much each result may keep is not known until every length is.
+        budgets = share(
+            [len(result.content) for _, result in answered],
+            TURN_OUTPUT_LIMIT,
+            TOOL_OUTPUT_LIMIT,
+        )
+        return tuple(
+            (call, result.truncated(budget))
+            for (call, result), budget in zip(answered, budgets, strict=True)
+        )
 
     async def _observe(self, turn: Turn) -> None:
         for observer in self.observers:
@@ -200,6 +231,28 @@ class AgentLoop:
                 # must be loud, because a persistence observer that fails silently loses
                 # the record while the run reports success.
                 log.exception("observer failed")
+
+
+def share(lengths: list[int], total: int, cap: int) -> list[int]:
+    """Split one turn's output budget across its results, fairly.
+
+    Every result may keep at most `cap`, and the turn may keep at most `total`. An equal
+    split would spend the same budget on a result that is already short as on one that is
+    enormous, so the short ones are served first and what they do not use is offered to the
+    rest. A turn of twenty small reads and one huge one therefore keeps every small read
+    whole and spends nearly the whole budget on the huge one.
+
+    The floor matters more than it looks: a result cut to nothing is not a smaller answer,
+    it is a missing one, and the model cannot tell which tool it came from.
+    """
+    remaining, left = min(total, cap * len(lengths)), len(lengths)
+    budgets = [0] * len(lengths)
+    for index in sorted(range(len(lengths)), key=lambda i: lengths[i]):
+        allowance = max(min(cap, remaining // max(left, 1)), MIN_RESULT)
+        budgets[index] = min(lengths[index], allowance)
+        remaining -= budgets[index]
+        left -= 1
+    return budgets
 
 
 def user(text: str) -> Message:

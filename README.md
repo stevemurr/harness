@@ -444,6 +444,19 @@ checks first. It is only `run` that is unconfined, because no Python check can s
 
 ## Two properties worth knowing
 
+**Output is bounded per result and per turn.** One result is cut to 30k characters and one
+turn to 120k across every call in it, because nothing caps how many calls a model asks for
+at once and a call cannot simply be dropped -- every one must be answered or the provider
+rejects the transcript. Measured: a turn of ~24 parallel reads took the context from 3% to
+304% of the window in a single step, which no threshold can catch and which compaction
+could not repair, since the newest turn is the part kept verbatim.
+
+The turn's budget is shared rather than split evenly, so a turn of twenty small reads and
+one large file keeps every small read whole and spends what they did not use on the large
+one. **Both ends of a cut result are kept**, because the verdict of a test run is at the
+tail -- `pytest` puts "5 failed" there, `go test` puts `FAIL` there -- and a head-only cut
+removes the answer while keeping the noise.
+
 **Tool calls run sequentially, not concurrently.** A model routinely asks for an edit and
 then a command that depends on it in the same turn; running those in parallel makes the
 result depend on scheduling. Claude Code and Codex both serialise.

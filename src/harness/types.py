@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
+#: Below this, a truncation budget cannot make two fragments that are both worth reading,
+#: so the tail is dropped rather than reduced to a shred.
+SPLIT_FLOOR = 1_000
+
 
 class Role(StrEnum):
     SYSTEM = "system"
@@ -96,13 +100,35 @@ class ToolResult:
             raise ValueError("a refused result cannot also be ok")
 
     def truncated(self, limit: int) -> ToolResult:
+        """Cut to `limit` characters, keeping both ends.
+
+        Head-only was the first shape, and it drops exactly the line that matters most
+        often. `loop.py` justifies truncating by saying the signal is at the head -- an
+        error, the first failing test -- and that is true of a stack trace and false of a
+        test run. `pytest` puts "5 failed, 200 passed" at the *end*, `go test` puts `FAIL`
+        there, a compiler puts its error count there. Cutting the tail off a 30k-character
+        test run removes the verdict and leaves the model inferring it from the first half.
+
+        So the head keeps two thirds and the tail one third, with the gap marked. Codex
+        truncates the same way, and for the same reason.
+
+        Below `SPLIT_FLOOR` the budget is too small to make two useful fragments -- which is
+        reachable now that a turn shares one budget across many calls -- so it stays a head.
+        """
         if len(self.content) <= limit:
             return self
-        head = self.content[:limit]
         dropped = len(self.content) - limit
-        return ToolResult(
-            f"{head}\n\n[{dropped} more characters truncated]", self.ok, self.refused
-        )
+        if limit < SPLIT_FLOOR:
+            body = f"{self.content[:limit]}\n\n[{dropped} more characters truncated]"
+        else:
+            head = limit - limit // 3
+            tail = limit - head
+            body = (
+                f"{self.content[:head]}"
+                f"\n\n[{dropped} characters truncated]\n\n"
+                f"{self.content[-tail:]}"
+            )
+        return ToolResult(body, self.ok, self.refused)
 
 
 @dataclass
