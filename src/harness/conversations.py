@@ -44,6 +44,7 @@ from harness.providers.base import Provider
 from harness.runner import describe
 from harness.runs import CommandRefused, Run, RunStatus, one_line, policy_for, progress_id
 from harness.store.base import Store
+from harness.tools.ask import Questioner
 from harness.tools.base import Registry, Tool, ToolContext, ToolSpec
 from harness.types import Message, StopReason, ToolResult
 from harness.workspace import Workspace
@@ -230,6 +231,27 @@ TERMINAL_STATUSES = frozenset(
 )
 
 
+def _questioner(live: Live) -> Questioner:
+    """Put the agent's question to whoever is watching, and wait.
+
+    The same suspension the approver uses -- publish, park on a future, resolve on a command
+    -- with a different event name and a string instead of a `Decision`. That the two need
+    the same mechanism is the argument for generalising the pending-futures map inside this
+    server, and against merging the two callbacks in the contract: they share a mechanism,
+    they do not share a type. (2026-08-30)
+    """
+
+    async def ask(question: str, options: tuple[str, ...]) -> str:
+        run = live.run
+        if run is None:
+            # Nothing is watching this call, which the tool reports as "nobody to ask"
+            # rather than hanging on a future no command can ever resolve.
+            return ""
+        return await run.ask_question(question, options)
+
+    return ask
+
+
 def open_conversation(
     thread_id: str,
     root: Path,
@@ -252,7 +274,7 @@ def open_conversation(
     (2026-08-30)
     """
     live = Live(session_id=session_id)
-    registry, plan, modes = default_registry(modes=ModeState())
+    registry, plan, modes = default_registry(modes=ModeState(), ask=_questioner(live))
     approvals = Approvals()
     agent = Agent(
         workspace=Workspace.at(root, protected=_protected(root)),

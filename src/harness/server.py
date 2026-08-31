@@ -370,12 +370,13 @@ def create_app(
             return {"status": "cancelling"}
         if kind == "resolve_approval":
             return resolve(run, body)
-        if kind in {"steer", "answer"}:
+        if kind == "answer":
+            return answer(run, body)
+        if kind == "steer":
             # Refused rather than accepted quietly. `AgentLoop.run` owns the transcript for
             # the length of a run and takes no input channel, so there is nowhere to put a
-            # further instruction until the run ends -- and nothing in this harness asks the
-            # person a question, so there is never an answer outstanding. Accepting either
-            # would leave someone watching for a change that cannot come.
+            # further instruction until the run ends. Accepting it would leave someone
+            # watching for a change that cannot come.
             raise ApiError(
                 409,
                 "unsupported_command",
@@ -402,6 +403,20 @@ def create_app(
                 f"{approval_id or 'that approval'} is not waiting. Open: {open_now}.",
             )
         return {"status": decision.value}
+
+    def answer(run: Run, body: dict[str, Any]) -> dict[str, Any]:
+        question_id = str(body.get("question_id") or "")
+        content = str(body.get("content") or "")
+        if not run.resolve_question(question_id, content):
+            open_now = ", ".join(run.questions_open()) or "none"
+            raise ApiError(
+                409,
+                "no_such_question",
+                f"{question_id or 'that question'} is not waiting. Open: {open_now}.",
+            )
+        # An empty answer is accepted rather than refused: "I am not answering" is a real
+        # reply, and `ask_user` reports it to the model as one instead of asking again.
+        return {"status": "answered"}
 
     # -- wiring ----------------------------------------------------------------------------
 

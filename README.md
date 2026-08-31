@@ -91,6 +91,32 @@ harness --sessions                        # what has been run
 harness --resume <session> "now do X"     # continue where it left off
 ```
 
+## Views
+
+A view is a front end. Two exist and they share an unmodified core: the terminal CLI (216
+lines) and the HTTP server orca talks to (1,358). Nothing in `loop.py`, `types.py`,
+`runner.py`, `workspace.py`, `approval.py`, `mode.py`, `plan.py` or any tool imports either
+of them, and adding the server changed none of those files.
+
+**To build a view, supply four things.** They are ordinary callables and protocols, so a
+view is a composition, not a subclass:
+
+| | type | terminal | HTTP |
+|---|---|---|---|
+| approve an action | `Approver` | prompt, read a key | emit `approval.requested`, park on a future |
+| ask the person | `Questioner` | prompt, read a line | emit `question.requested`, park on a future |
+| show progress | `Observer` | render the turn | publish events to a log |
+| keep transcripts | `Store` | `JsonlStore` | the same one |
+
+That is the whole surface. There is deliberately no `View` protocol bundling them: the two
+that exist need the *same mechanism* for approve and ask -- publish, park, resolve -- but not
+the same *types*, since a decision is closed and an answer is text. Bundling the callables
+would not deduplicate the mechanism, which belongs inside whichever view needs it, and would
+add a concept to save one constructor argument.
+
+The count was two until an HTTP server was actually written against it. That kind of claim
+is only ever checked by someone building on it.
+
 ## The entry point is not an interface
 
 `Agent` is the composition root, and a composition root is the one thing that must be

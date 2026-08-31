@@ -71,6 +71,7 @@ class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_INPUT = "awaiting_input"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -129,6 +130,11 @@ class Run:
     #: Rows the tool wrapper already settled, so the observer does not restate them.
     _settled: set[str] = field(default_factory=set)
     _pending: dict[str, asyncio.Future[Decision]] = field(default_factory=dict)
+    #: Questions the agent has asked and nobody has answered yet. A second map rather than
+    #: one, because the payloads differ -- a decision is closed, an answer is text. The
+    #: mechanism is identical and is the thing worth generalising here; the *types* are not,
+    #: which is why the two callbacks stay separate in the contract. (2026-08-30)
+    _questions: dict[str, asyncio.Future[str]] = field(default_factory=dict)
     _running: asyncio.Event = field(default_factory=asyncio.Event)
     #: Command ids already acted on, and what was answered. A client retries a POST whose
     #: connection failed before the response arrived, so acting twice is the default
@@ -223,6 +229,45 @@ class Run:
 
     def approvals_open(self) -> tuple[str, ...]:
         return tuple(self._pending)
+
+    def resolve_question(self, question_id: str, answer: str) -> bool:
+        waiting = self._questions.get(question_id)
+        if waiting is None or waiting.done():
+            return False
+        waiting.set_result(answer)
+        return True
+
+    def questions_open(self) -> tuple[str, ...]:
+        return tuple(self._questions)
+
+    async def ask_question(self, question: str, options: tuple[str, ...]) -> str:
+        """The questioner. Publish the question, then suspend until a client answers.
+
+        The same shape as `ask` above and for the same reasons: unbounded, survives a
+        disconnect, and cleaned up in `finally` so a cancelled run leaves nothing
+        answerable. `options` rides along as a hint -- the client may offer them as choices,
+        and a person may still type something else, because they are the agent's guess at
+        the answers rather than a closed set.
+        """
+        question_id = f"qst_{uuid4().hex[:16]}"
+        waiting: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._questions[question_id] = waiting
+
+        previous, self.status = self.status, RunStatus.AWAITING_INPUT
+        self.publish(
+            "question.requested",
+            {"question_id": question_id, "prompt": question, "options": list(options)},
+        )
+        try:
+            answer = await waiting
+        finally:
+            self._questions.pop(question_id, None)
+
+        # Same conditional restore as an approval: a pause that arrived while the question
+        # was on screen must not be thrown away here.
+        self.status = previous if self._running.is_set() else RunStatus.PAUSED
+        self.publish("question.resolved", {"question_id": question_id})
+        return answer
 
     async def ask(self, request: Request) -> Decision:
         """The asker. Publish the request, then suspend until a client answers.

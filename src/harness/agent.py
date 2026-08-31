@@ -30,6 +30,7 @@ from harness.plan import Plan
 from harness.providers.base import Provider
 from harness.runner import ToolRunner
 from harness.store.base import Store
+from harness.tools.ask import Questioner
 from harness.tools.base import Registry, ToolContext, ToolSpec
 from harness.types import Message, Role, Transcript
 from harness.workspace import Workspace
@@ -191,7 +192,9 @@ class Agent:
 
 
 def default_registry(
-    plan: Plan | None = None, modes: ModeState | None = None
+    plan: Plan | None = None,
+    modes: ModeState | None = None,
+    ask: Questioner | None = None,
 ) -> tuple[Registry, Plan, ModeState]:
     """Every tool a coding agent gets by default, and the plan two of them share.
 
@@ -199,6 +202,7 @@ def default_registry(
     put on `ToolContext`, which stays the small set of things *every* tool may reach -- a
     context growing a field per stateful tool would hand every tool everything.
     """
+    from harness.tools.ask import ask_tools
     from harness.tools.files import file_tools
     from harness.tools.mode import mode_tools
     from harness.tools.plan import plan_tools
@@ -206,7 +210,9 @@ def default_registry(
 
     planning, plan = plan_tools(plan)
     modes = modes or ModeState()
-    registry = Registry([*file_tools(), *shell_tools(), *planning, *mode_tools(modes)])
+    registry = Registry(
+        [*file_tools(), *shell_tools(), *planning, *mode_tools(modes), *ask_tools(ask)]
+    )
     return registry, plan, modes
 
 
@@ -218,6 +224,7 @@ def build(
     approvals: Approvals | None = None,
     observers: list[Observer] | None = None,
     mode: Mode = NORMAL,
+    ask: Questioner | None = None,
 ) -> Agent:
     """An agent over a folder, with the defaults a coding agent wants.
 
@@ -230,7 +237,7 @@ def build(
     protected = (sessions,) if sessions.is_relative_to(root) else ()
 
     modes = ModeState(current=mode)
-    registry, plan, modes = default_registry(modes=modes)
+    registry, plan, modes = default_registry(modes=modes, ask=ask)
     return Agent(
         workspace=Workspace.at(root, protected=protected),
         provider=provider,

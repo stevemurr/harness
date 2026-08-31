@@ -59,7 +59,12 @@ class Request:
     grant_key: str
 
 
-Asker = Callable[[Request], Awaitable[Decision]]
+#: Puts one approval to a person and returns their decision.
+#:
+#: Named for what it decides, not for the act of asking: `Asker` sat beside a `Questioner`
+#: in `tools/ask.py`, and the two words are synonyms -- neither said which was which. This
+#: one returns a `Decision` about a `Request`; that one returns text. (2026-08-30)
+Approver = Callable[[Request], Awaitable[Decision]]
 
 
 @dataclass
@@ -87,7 +92,7 @@ class Approvals:
     """One session's approval state: the standing policy plus what was granted during it."""
 
     policy: Policy = field(default_factory=Policy)
-    ask: Asker | None = None
+    ask: Approver | None = None
     _granted: set[str] = field(default_factory=set)
 
     async def check(self, spec: ToolSpec, request: Request) -> tuple[bool, str]:
@@ -128,10 +133,10 @@ class Approvals:
 
 
 async def approve_all(_request: Request) -> Decision:
-    """An asker that says yes. For tests and for deliberately unattended runs."""
+    """An approver that says yes. For tests and for deliberately unattended runs."""
     return Decision.ALLOW
 
 
 async def deny_all(_request: Request) -> Decision:
-    """An asker that says no. For tests."""
+    """An approver that says no. For tests."""
     return Decision.DENY
