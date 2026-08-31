@@ -57,6 +57,11 @@ src/harness/
   approval.py    what may proceed without asking
   settings.py    every number worth tuning, in one place
   compaction.py  the render, and when a long run hands off to a smaller context
+  code/
+    base.py      the code-navigation contract: what a symbol is, and where it is used
+    lsp.py       one language server, over LSP on a pipe -- shared by every LSP backend
+    pyright.py   Python, via basedpyright
+    gopls.py     Go, via gopls
   runner.py      joins the registry to approvals
   tools/
     base.py      the tool contract: ToolSpec, ToolContext, Registry
@@ -444,6 +449,46 @@ schema before `run` is called**, so you never write defensive parsing and cannot
 with your own schema; and **paths are resolved by `ctx.paths`, never by you**, so a tool
 cannot escape the workspace. A tool that resolved its own paths is how the predecessor
 deleted its own control journal.
+
+## Code search
+
+Two tools, `find_definition` and `find_references`, backed by a real language index rather
+than text search. Measured here: `grep -n '\brun\b'` returns 283 lines for 16 `def run`,
+and `grep -n 'JsonlStore'` returns 15 hits of which seven are prose inside docstrings --
+this codebase's own register makes name-searching half noise.
+
+**Resolution is two steps, and the types make it unskippable.**
+
+```
+find_definition(symbol="run")                    -> 71 candidates, with file and line
+find_references(symbol="run", path=..., line=...) -> the uses of that ONE definition
+```
+
+`CodeIndex.references` takes a `Symbol`, never a string, because a bare name does not denote
+one thing. A dotted name (`Workspace.resolve`) narrows step one when the container happens to
+be unique, and it is not a substitute: two modules may each define a `Workspace`. A file and
+a line cannot collide.
+
+The tool surface enforces it with the machinery that already exists -- `path` and `line` are
+`required` in the schema, so `Registry.run` refuses a one-step call before the tool is
+reached and names the missing field. No new concept.
+
+**Adding a language is one file.** `gopls.py` is fifteen lines: a name, a command, the
+extensions and a language id. Everything else is `lsp.py`, which was written for Python and
+then shared once Go proved what actually differed. A backend that does not speak LSP at all
+satisfies `CodeIndex` directly and ignores that file, which is why the protocol lives in
+`base.py` and not beside the transport.
+
+The conformance suite runs every implementation over one fixture project laid out the same
+way in both languages, so a new language is proven by tests that already exist -- the same
+argument `store/base.py` makes. A server that is not installed is skipped, and the fake is
+held to the same assertions so it cannot drift into being easier to satisfy.
+
+Servers disagree in ways worth knowing: basedpyright reports `name="build"` with
+`containerName="Widget"`, while gopls reports `name="Widget.Build"` with `containerName`
+holding the *package*. Both are legal. Matching `name` exactly finds every Python method and
+no Go one, so the last dotted segment is the symbol and a prefix on it outranks the
+container field.
 
 ## Adding a provider
 

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.approval import Approvals
+from harness.code.base import Indexes
 from harness.compaction import (
     State,
     anchor_for,
@@ -366,6 +367,7 @@ def default_registry(
     plan: Plan | None = None,
     modes: ModeState | None = None,
     ask: Questioner | None = None,
+    indexes: Indexes | None = None,
 ) -> tuple[Registry, Plan, ModeState]:
     """Every tool a coding agent gets by default, and the plan two of them share.
 
@@ -374,15 +376,24 @@ def default_registry(
     context growing a field per stateful tool would hand every tool everything.
     """
     from harness.tools.ask import ask_tools
+    from harness.tools.code import code_tools
     from harness.tools.files import file_tools
     from harness.tools.mode import mode_tools
     from harness.tools.plan import plan_tools
     from harness.tools.shell import shell_tools
 
     planning, plan = plan_tools(plan)
+    searching, _ = code_tools(indexes)
     modes = modes or ModeState()
     registry = Registry(
-        [*file_tools(), *shell_tools(), *planning, *mode_tools(modes), *ask_tools(ask)]
+        [
+            *file_tools(),
+            *shell_tools(),
+            *planning,
+            *searching,
+            *mode_tools(modes),
+            *ask_tools(ask),
+        ]
     )
     return registry, plan, modes
 

@@ -106,6 +106,31 @@ class Shell:
 
 
 @dataclass(frozen=True, slots=True)
+class Code:
+    """The code-navigation backend. See `harness/code/`."""
+
+    enabled: bool = True
+    #: Replace a backend's argv by its name -- {"basedpyright": ("ty", "server")}. Empty
+    #: means each uses its own default. An override map rather than a field per language,
+    #: so adding a language stays one file and does not also edit this one.
+    commands: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Seconds to wait for the handshake, and for one request. Separate because they fail
+    #: for different reasons: a slow handshake is a cold index, a slow request is a wedged
+    #: server, and a run should not spend the former's budget discovering the latter.
+    startup_timeout: float = 30.0
+    request_timeout: float = 20.0
+    #: How long the FIRST query may keep re-asking while the index is still cold.
+    #:
+    #: There is no readiness signal to wait on: basedpyright reports its progress as
+    #: `window/logMessage` prose, and an empty `workspace/symbol` from a half-built index is
+    #: indistinguishable from one for a symbol that is not there. Measured on this
+    #: repository, 53 source files: symbols became answerable 0.65s after `initialized`.
+    #: So the first query retries until something answers, and once anything has, the index
+    #: is known warm and every later empty result is believed at once.
+    warmup: float = 8.0
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """What a run may do and how much it may say. One object, assembled once.
 
@@ -118,3 +143,4 @@ class Settings:
     limits: Limits = field(default_factory=Limits)
     compaction: Compaction = field(default_factory=Compaction)
     shell: Shell = field(default_factory=Shell)
+    code: Code = field(default_factory=Code)

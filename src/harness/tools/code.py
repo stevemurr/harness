@@ -1,0 +1,216 @@
+"""Two tools: what a name means, and where that one meaning is used.
+
+Two, not eleven. LSP offers definition, references, symbols, hover, diagnostics and call
+hierarchy, and most of them do not earn a tool for a coding agent. Diagnostics duplicate
+`run: ruff check`, which is what CI actually runs. Document symbols are what `grep` is for.
+Call hierarchy is references, composed. Hover is the plausible third, and it is not the
+first cut.
+
+**Why this beats grep, measured in this repository.** `grep -n '\\brun\\b'` returns 283
+lines for 16 `def run`. `grep -n 'JsonlStore'` returns 15 hits in `src`, seven of them prose
+inside docstrings -- this codebase's own register makes name-searching half noise.
+`find_references` on `AgentLoop` returns 16 places, all of them real.
+
+**Where grep stays better**, and the descriptions say so: literal text, non-code files,
+regular expressions, and the minutes after a large edit, when an index is confidently stale
+while grep is merely noisy.
+
+The two-step is enforced by the schema rather than by code. `path` and `line` are `required`
+on `find_references`, so a one-step call is refused by `Registry.run` before this module is
+reached, and the refusal names the missing field.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from harness.code.base import CodeIndexError, Indexes, Location, Symbol
+from harness.tools.base import ToolContext, ToolSpec, schema
+from harness.types import ToolResult
+
+#: Enough for a person to choose between, and few enough to read. `run` has 71 candidates
+#: in this repository, which is a list nobody scans -- and a model that needs the 60th is
+#: better served by narrowing than by scrolling.
+SHOWN = 25
+
+#: Definitions first, incidentals last. `workspace/symbol` matches local variables too, so
+#: a search for `run` returns `Watched.run.run` beside `AgentLoop.run`; the one that is
+#: almost always meant should not be buried under the ones that almost never are.
+RANK = {"class": 0, "function": 1, "method": 1, "interface": 2, "struct": 2, "enum": 2}
+
+
+def _rank(symbol: Symbol) -> tuple[int, str]:
+    return (RANK.get(symbol.kind, 9), str(symbol.location.path))
+
+
+@dataclass
+class FindDefinition:
+    """Where a name is defined -- every place it could mean."""
+
+    indexes: Indexes
+    spec: ToolSpec = field(
+        default=ToolSpec(
+            name="find_definition",
+            description=(
+                "Find where a symbol is defined, using a language index rather than text "
+                "search. Give the bare name ('Workspace') or a dotted one "
+                "('Workspace.resolve'). Returns every definition that name could refer to, "
+                "with the file and line of each. Use this before find_references, which "
+                "needs one specific definition. Prefer grep for literal text, for "
+                "non-code files, for regular expressions, and immediately after large "
+                "edits, when the index may be stale."
+            ),
+            parameters=schema(
+                {
+                    "symbol": {
+                        "type": "string",
+                        "description": "The name, bare or dotted. Not a regular expression.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: only look in this file.",
+                    },
+                },
+                required=["symbol"],
+            ),
+            # Reading, so never asked about -- and see `code/base.py`: withholding this in
+            # plan mode would take code search away from the mode that needs it most.
+            mutates=False,
+        )
+    )
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        near = ctx.paths.resolve(args["path"]) if args.get("path") else None
+        index = self.indexes.choose(near)
+        if index is None:
+            return _no_index(self.indexes, near)
+
+        try:
+            found = await index.definitions(args["symbol"], near=near)
+        except CodeIndexError as exc:
+            return _broken(exc)
+
+        if not found:
+            # Nothing found is an answer, exactly as `grep` finding nothing is. `ok`.
+            return ToolResult(
+                f"No definition of {args['symbol']!r} found by {index.name}. "
+                "It may be defined dynamically, come from a dependency, or not exist; "
+                "grep would say whether the text appears at all."
+            )
+
+        order = sorted(found, key=_rank)
+        lines = [f"{len(found)} definition(s) of {args['symbol']!r} ({index.name}):"]
+        for symbol in order[:SHOWN]:
+            where = ctx.paths.relative(symbol.location.path)
+            lines.append(
+                f"  {where}:{symbol.location.line}  {symbol.kind}  {symbol.qualified}"
+            )
+        if len(order) > SHOWN:
+            lines.append(f"  ... {len(order) - SHOWN} more; narrow with path=")
+        lines.append(
+            "\nFor find_references, pass the path and line of the one you mean."
+        )
+        return ToolResult("\n".join(lines))
+
+
+@dataclass
+class FindReferences:
+    """Every use of one specific definition."""
+
+    indexes: Indexes
+    spec: ToolSpec = field(
+        default=ToolSpec(
+            name="find_references",
+            description=(
+                "Find every use of one symbol, using a language index rather than text "
+                "search. Identify which symbol by the file and line where it is DEFINED -- "
+                "run find_definition first to get them, or use the line you already read. "
+                "A bare name is not enough: many different things share a name, and the "
+                "answer for one of them is the wrong answer for the others."
+            ),
+            parameters=schema(
+                {
+                    "symbol": {"type": "string", "description": "The name, bare."},
+                    "path": {
+                        "type": "string",
+                        "description": "File where the symbol is defined.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "1-based line where it is defined.",
+                    },
+                },
+                # The two-step, enforced where every other argument rule is enforced. A
+                # call without these is refused before this tool runs, naming the field.
+                required=["symbol", "path", "line"],
+            ),
+            mutates=False,
+        )
+    )
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        path = ctx.paths.resolve(args["path"])
+        index = self.indexes.choose(path)
+        if index is None:
+            return _no_index(self.indexes, path)
+
+        symbol = Symbol(
+            name=args["symbol"], location=Location(path, int(args["line"]))
+        )
+        try:
+            places = await index.references(symbol)
+        except CodeIndexError as exc:
+            return _broken(exc)
+
+        if not places:
+            return ToolResult(
+                f"No references to {symbol.name!r} defined at "
+                f"{ctx.paths.relative(path)}:{symbol.location.line}."
+            )
+
+        lines = [f"{len(places)} reference(s) to {symbol.name!r} ({index.name}):"]
+        for place in places[:SHOWN]:
+            lines.append(
+                f"  {ctx.paths.relative(place.path)}:{place.line}  {place.text.strip()[:110]}"
+            )
+        if len(places) > SHOWN:
+            lines.append(f"  ... {len(places) - SHOWN} more")
+        return ToolResult("\n".join(lines))
+
+
+def _broken(exc: CodeIndexError) -> ToolResult:
+    """A backend that could not answer.
+
+    `failed`, not `refused`. The harness did not decline -- it tried, and the world said no,
+    which is the same shape as a command exiting non-zero. That matters concretely: the
+    loop's stall counter counts refusals only, so calling this a refusal would let a missing
+    binary end a run that is otherwise working. The guard against a model retrying forever
+    is the message naming grep as the way through.
+    """
+    return ToolResult(str(exc), ok=False)
+
+
+def _no_index(indexes: Indexes, near: Path | None) -> ToolResult:
+    if not indexes.available:
+        return ToolResult(
+            "No code index is configured. Use grep and read_file.", ok=False
+        )
+    languages = ", ".join(sorted({e for i in indexes.available for e in i.extensions}))
+    subject = f"{near.suffix} files" if near is not None else "that"
+    return ToolResult(
+        f"No code index for {subject}. Indexed here: {languages}. Use grep instead.",
+        ok=False,
+    )
+
+
+def code_tools(indexes: Indexes | None = None) -> tuple[list[Any], Indexes]:
+    """The code tools and the indexes they share.
+
+    Returned rather than reached for, the same shape as `plan_tools`: the indexes are held
+    by the tools that use them, because `ToolContext` is `paths` and nothing else, and a
+    context that grew a field per stateful tool would hand every tool everything.
+    """
+    indexes = indexes or Indexes()
+    return [FindDefinition(indexes), FindReferences(indexes)], indexes
