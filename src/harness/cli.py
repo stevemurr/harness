@@ -25,7 +25,7 @@ from harness.mode import NORMAL, PLAN
 from harness.providers.openai import OpenAICompatible
 from harness.store import JsonlStore
 
-SESSIONS = Path("~/.harness/sessions").expanduser()
+THREADS = Path("~/.harness/threads").expanduser()
 
 _COLOUR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -148,7 +148,7 @@ async def main_async(args: argparse.Namespace) -> int:
     agent = build(
         args.folder,
         provider,
-        store=JsonlStore(SESSIONS),
+        store=JsonlStore(THREADS),
         approvals=approvals,
         observers=[render],
         mode=PLAN if args.plan else NORMAL,
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 async def _list_sessions() -> int:
-    for info in await JsonlStore(SESSIONS).sessions():
+    for info in await JsonlStore(THREADS).sessions():
         when = info.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
         print(f"{bold(info.session_id)}  {dim(when)}  {info.title or dim('(no prompt)')}")
     return 0

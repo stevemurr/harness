@@ -183,3 +183,38 @@ async def test_a_directory_of_sessions_survives_a_stray_file(tmp_path: Path) -> 
     (tmp_path / "notes.jsonl").write_text("not json at all\n")
 
     assert len(await store.sessions()) == 1
+
+
+async def test_a_thread_is_a_directory_with_room_to_grow(tmp_path: Path) -> None:
+    """A bare file per thread had nowhere to put anything but messages. orca's contract has
+    `plan.available` with an `artifact_id` and this harness could not serve one, having
+    nowhere to keep it. (owner, 2026-08-31)"""
+    store = JsonlStore(tmp_path)
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [Message(Role.USER, "hello")])
+
+    assert store.directory_for(session).is_dir()
+    assert store.path_for(session).name == "transcript.jsonl"
+    assert json.loads(store.path_for(session).read_text().splitlines()[1])["content"] == "hello"
+
+
+async def test_the_artifacts_directory_is_made_when_first_asked_for(tmp_path: Path) -> None:
+    """Created on demand: an empty directory per thread is litter, and most threads make
+    nothing."""
+    store = JsonlStore(tmp_path)
+    session = await store.create(Path("/tmp/project"))
+
+    assert not (store.directory_for(session) / "artifacts").exists()
+    made = store.artifacts_for(session)
+
+    assert made.is_dir()
+    assert made.parent == store.directory_for(session)
+
+
+def test_an_artifacts_path_cannot_walk_out_of_the_store(tmp_path: Path) -> None:
+    """Same input, same rule: a thread id reaching here is caller input."""
+    store = JsonlStore(tmp_path)
+
+    for hostile in ("../escape", "a/b", "", ".."):
+        with pytest.raises(StoreError):
+            store.artifacts_for(hostile)

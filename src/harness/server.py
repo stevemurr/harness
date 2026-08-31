@@ -46,7 +46,7 @@ PROTOCOL_VERSION = "1"
 
 #: Where the terminal front end keeps its sessions, and where this one keeps them too. One
 #: place, so `harness --sessions` lists what the server ran and `--resume` continues it.
-SESSIONS = Path("~/.harness/sessions").expanduser()
+THREADS = Path("~/.harness/threads").expanduser()
 
 
 def is_id(value: str) -> bool:
@@ -524,7 +524,7 @@ def build_app(args: argparse.Namespace) -> Starlette:
         provider=OpenAICompatible(
             base_url=args.base_url, model=args.model, api_key=args.api_key
         ),
-        store=JsonlStore(SESSIONS),
+        store=JsonlStore(THREADS),
         token=args.token,
     )
 
