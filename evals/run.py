@@ -45,9 +45,18 @@ def rungs(only: str = "") -> list[Path]:
     return chosen
 
 
+REPO = Path(__file__).resolve().parent.parent
+
+
 def stage(rung: Path, into: Path) -> Path:
     """A fresh copy of the seed. Never the rung itself: a run that edits its own fixture
-    makes every later run measure a different thing."""
+    makes every later run measure a different thing.
+
+    A rung may also seed from somewhere in this repository, via `seed_from` in `rung.json`.
+    That is how the code-search rungs get a codebase big enough to be worth searching --
+    5,000 lines where `grep resolve` returns 78 lines for 3 real call sites. It costs
+    hermeticity, so the runner records the commit each result was produced against.
+    """
     work = into / rung.name
     if work.exists():
         shutil.rmtree(work)
@@ -55,7 +64,30 @@ def stage(rung: Path, into: Path) -> Path:
     seed = rung / "seed"
     if seed.exists():
         shutil.copytree(seed, work, dirs_exist_ok=True)
+    for source, destination in _meta(rung).get("seed_from", {}).items():
+        # Never the caches: a `.pyc` is a binary that `grep -rn` matches, so a verify that
+        # counts occurrences counts them twice and the count depends on whether anything
+        # imported the package first. Measured that exact instability while writing this.
+        shutil.copytree(
+            REPO / source, work / destination, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
     return work
+
+
+def _meta(rung: Path) -> dict:
+    return json.loads((rung / "rung.json").read_text())
+
+
+def commit() -> str:
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO, capture_output=True, text=True, timeout=10,
+        )
+        return done.stdout.strip() or "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
 
 
 def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
@@ -134,7 +166,8 @@ async def attempt(rung: Path, work: Path, *, with_code: bool, max_turns: int) ->
     passed, why = verify(rung, work)
     return {
         "rung": rung.name,
-        "tests": json.loads((rung / "rung.json").read_text())["tests"],
+        "tests": _meta(rung)["tests"],
+        "commit": commit(),
         "arm": "code" if with_code else "base",
         "passed": passed,
         "why": "" if passed else why,

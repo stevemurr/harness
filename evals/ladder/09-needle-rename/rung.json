@@ -1,0 +1,6 @@
+{
+  "tests": "Renaming one symbol in a real codebase where its name is mostly decoys.",
+  "seed_from": {
+    "src/harness": "harness"
+  }
+}

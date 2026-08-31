@@ -1,0 +1,93 @@
+[
+  {
+    "rung": "09-needle-rename",
+    "tests": "Renaming one symbol in a real codebase where its name is mostly decoys.",
+    "commit": "a3e3080",
+    "arm": "code",
+    "passed": true,
+    "why": "",
+    "stop": "done",
+    "detail": "",
+    "turns": 25,
+    "seconds": 59.9,
+    "calls": 28,
+    "tools": {
+      "edit_file": 7,
+      "grep": 7,
+      "read_file": 8,
+      "update_plan": 6
+    },
+    "failed": {},
+    "refused": {},
+    "compactions": 0
+  },
+  {
+    "rung": "09-needle-rename",
+    "tests": "Renaming one symbol in a real codebase where its name is mostly decoys.",
+    "commit": "a3e3080",
+    "arm": "base",
+    "passed": true,
+    "why": "",
+    "stop": "done",
+    "detail": "",
+    "turns": 20,
+    "seconds": 62.6,
+    "calls": 22,
+    "tools": {
+      "edit_file": 6,
+      "glob": 1,
+      "grep": 6,
+      "read_file": 4,
+      "update_plan": 5
+    },
+    "failed": {},
+    "refused": {},
+    "compactions": 0
+  },
+  {
+    "rung": "10-callers",
+    "tests": "Finding every caller of one method, and no false positives.",
+    "commit": "a3e3080",
+    "arm": "code",
+    "passed": true,
+    "why": "regraded: the original verify counted 'paths.resolve(' and missed the two self.resolve( call sites",
+    "stop": "done",
+    "detail": "",
+    "turns": 14,
+    "seconds": 28.1,
+    "calls": 23,
+    "tools": {
+      "edit_file": 5,
+      "find_definition": 3,
+      "find_references": 1,
+      "read_file": 14
+    },
+    "failed": {},
+    "refused": {},
+    "compactions": 0
+  },
+  {
+    "rung": "10-callers",
+    "tests": "Finding every caller of one method, and no false positives.",
+    "commit": "a3e3080",
+    "arm": "base",
+    "passed": true,
+    "why": "regraded: the original verify counted 'paths.resolve(' and missed the two self.resolve( call sites",
+    "stop": "done",
+    "detail": "",
+    "turns": 23,
+    "seconds": 42.7,
+    "calls": 22,
+    "tools": {
+      "edit_file": 6,
+      "grep": 6,
+      "list_dir": 1,
+      "read_file": 9
+    },
+    "failed": {
+      "edit_file": 1
+    },
+    "refused": {},
+    "compactions": 0
+  }
+]
