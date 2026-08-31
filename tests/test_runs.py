@@ -138,6 +138,19 @@ async def test_narration_across_turns_accumulates_rather_than_replacing(
     assert {d["effect_id"] for d in deltas} == {run.run_id}
 
 
+async def test_a_silent_first_turn_does_not_open_the_answer_with_a_blank_line(
+    folder, tmp_path
+) -> None:
+    """The separator belongs between two things the model said, not before the first."""
+    runtime = runtime_for(
+        ScriptedModel(calls(("c1", "list_dir", {"path": "."})), says("done")), tmp_path
+    )
+
+    run = await drive(runtime, folder, "go")
+
+    assert [d["text"] for d in payloads(run, "answer.delta")] == ["done"]
+
+
 # -- StopReason, mapped honestly ------------------------------------------------------
 
 

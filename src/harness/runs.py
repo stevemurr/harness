@@ -159,6 +159,10 @@ class Run:
     #: Turns the observer has completed. Half of an activity row's identity; see
     #: `progress_id`.
     turns: int = 0
+    #: Whether any prose has been streamed yet. Not `turns > 0`: a first turn that only
+    #: called tools says nothing, and the next turn's prose would then open the answer with
+    #: a blank line the model did not write.
+    narrated: bool = False
     #: Rows the tool wrapper already settled, so the observer does not restate them.
     _settled: set[str] = field(default_factory=set)
     _pending: dict[str, asyncio.Future[Decision]] = field(default_factory=dict)
@@ -439,9 +443,10 @@ def observer_for(live: Live) -> Observer:
                 {
                     "effect_id": run.run_id,
                     "model_call_id": run.run_id,
-                    "text": prose if run.turns == 0 else f"\n\n{prose}",
+                    "text": f"\n\n{prose}" if run.narrated else prose,
                 },
             )
+            run.narrated = True
 
         for call, result in turn.results:
             update_id = progress_id(run.turns, call.name, call.arguments)

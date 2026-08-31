@@ -240,12 +240,12 @@ def create_app(
         if instance_id is None
         else instance_id
     )
-    #: Run identities already accepted, by the key the client sent. It retries a POST whose
-    #: connection failed before the response arrived, so without this the same message
-    #: starts two runs.
+    # Run identities already accepted, by the key the client sent. A client retries a POST
+    # whose connection failed before the response arrived, so without this the same message
+    # starts two runs.
     accepted: dict[str, dict[str, Any]] = {}
-    #: Titles read out of the store when a thread was opened from it. A cache of a fact the
-    #: transcript owns, never a second copy of it.
+    # Titles read out of the store when a thread was opened from it. A cache of a fact the
+    # transcript owns, never a second copy of it.
     titles: dict[str, str] = {}
 
     async def capabilities(_request: Request) -> Response:
