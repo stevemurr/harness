@@ -94,11 +94,40 @@ But `.eval-work` was deleted to recover disk, so those artifacts are gone and th
 be re-graded. **`09`'s numbers in `seeded.json` should not be trusted; `11`'s were mostly
 protected by its `ast` checks, which did gate.** The 1.9x figure needs re-measuring.
 
-## Not started
+## `12-conformance`: audited, fixed, not yet run
 
-`12-conformance` and `13-migration` are built and validated against reference solutions but
-have never been run. `13` has no reference solution written yet -- `12` does. Both are in the
-`long` suite: `uv run python evals/run.py --suite long --repeat 1`.
+An independent audit found five defects before a minute of compute was spent on it. All are
+fixed and each fix is verified:
 
-Watch either with `harness-serve` and `http://127.0.0.1:8080/watch/<thread-id>`; the runner
-prints the URL as each attempt starts.
+| defect | now |
+|---|---|
+| `evals/run.py` crashed on every invocation -- `args.threads` was read and never declared | declared; the launch command runs |
+| the anti-tamper check hashed the fixtures against themselves and caught nothing | digests are committed literals; deleting, editing, adding and faking the runner all fail |
+| `run_cases.py` passed the case path, and the expected output sits beside it -- two lines of `vm.py` scored 40/40 | the program is copied where the answer is not; that cheat now scores 0/40 |
+| four cases demanded error text `SPEC.md` never stated, so an honest implementation could not pass | the spec states all six messages, and they match the expected outputs exactly |
+| `! grep` is exempt from `set -e`, so inverted checks in five rungs gated nothing | all are `if ... then exit 1`; the fixed `09` catches a deliberately-left call site |
+
+The rung is validated in four directions: a reference VM scores 40/40 and passes; the
+unsolved seed scores 0/40; an implementation ignoring one preamble rule scores 36/40, which
+is the memory probe working; and every tamper fails.
+
+**To run it:**
+
+```sh
+harness-serve --port 8080 &
+uv run python evals/run.py --suite long --only 12-conformance \
+    --repeat 1 --max-turns 300 --out evals/long-12.json --keep evals/runs-long
+```
+
+`--max-turns 300` because the ladder's 45 is nowhere near enough: this rung has to
+accumulate 776k characters of context to compact even once, which is 60 to 150 turns of real
+work. One arm only -- the code tools are not what this rung tests, and running both would
+double an already long run for no signal.
+
+The runner prints `http://127.0.0.1:8080/watch/<thread-id>` as the attempt starts. Nine of
+the forty cases turn on rules stated once in the spec preamble, so if a compaction loses the
+preamble the score should fall to about 31.
+
+`13-migration` exists and is **not** ready: the audit found its convention check inert and
+its `run_checks.py` blind to `pkg/support.py`, and it has no reference solution. Do not run
+it without fixing those.

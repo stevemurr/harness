@@ -375,6 +375,11 @@ async def main() -> None:
     parser.add_argument("--repeat", type=int, default=1, help="Attempts per rung per arm.")
     parser.add_argument("--keep", default="evals/runs", help="Where to write transcripts.")
     parser.add_argument(
+        "--threads", default="",
+        help="Where transcripts go. The harness's own folder by default, so a run can be "
+             "watched live; point it elsewhere for a sweep that should not leave threads.",
+    )
+    parser.add_argument(
         "--suite", default="ladder", choices=["ladder", "long"],
         help="`ladder` is the fast suite. `long` is the 30-90 minute rungs -- kept apart so "
              "the fast one stays something you can run on a whim.",
