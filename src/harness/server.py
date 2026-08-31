@@ -17,6 +17,8 @@ import argparse
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -445,7 +447,24 @@ def create_app(
         Route(f"{API}/runs/{{run_id}}/commands", commands, methods=["POST"]),
     ]
 
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        """Where a shutdown signal arrives, and the only place it needs to.
+
+        `uvicorn` turns SIGINT and SIGTERM into the ASGI lifespan shutdown, so this is the
+        seam between the process being asked to stop and the runs still going. Without it a
+        stopped server dropped its in-flight runs silently: the tasks were garbage, their
+        event logs never got a terminal row, and a following client waited for an ending
+        that could not come.
+
+        Nothing happens on startup. A server that has to warm something up before it can
+        answer is a server that can be half-ready, and there is nothing here to warm.
+        """
+        yield
+        await runtime.aclose()
+
     app = Starlette(
+        lifespan=lifespan,
         routes=routes,
         # Both handlers are given at construction. `ApiError` is a failure with a name that
         # a person can act on; the catch-all is a defect in this harness, which still owes

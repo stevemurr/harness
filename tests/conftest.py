@@ -52,6 +52,9 @@ class ScriptedModel:
         self.seen: list[Transcript] = []
         self.tools_offered: list[tuple[str, ...]] = []
         self._prompt_tokens = prompt_tokens
+        #: Whether anything ever shut this down. A provider nobody closes is a connection
+        #: pool nobody releases, which only shows up as a warning at interpreter exit.
+        self.closed = False
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
@@ -62,7 +65,7 @@ class ScriptedModel:
         return Completion(reply, self._prompt_tokens, 1)
 
     async def aclose(self) -> None:
-        return None
+        self.closed = True
 
 
 class Broken:

@@ -195,6 +195,15 @@ The same `Agent` behind HTTP, which is what the `orca` terminal client drives. A
 background task with an append-only event log (`runs.py`, `events.py`); what a server passes
 `Agent` is in `conversations.py`; the rest is transport.
 
+**Stopping the server is not dropping the work.** `uvicorn` turns SIGINT and SIGTERM into
+the ASGI lifespan shutdown, which reaches `Runtime.aclose`: every run still going is
+cancelled so it publishes `run.cancelled`, and only then is the provider closed. Without
+that seam an interrupted server left its runs as garbage with no terminal event in their
+logs -- and a stream that ends without one is the single shape a following client cannot
+recover from, because it reads a defect as an ending. The wait is bounded, since a shutdown
+that can hang is a shutdown a supervisor escalates to `SIGKILL`, and then nothing gets a
+terminal event at all.
+
 A run is a background task and not a thing hanging off a connection, so **closing the
 terminal is not cancelling**. A run parked on an approval waits as long as the person takes,
 and a client that comes back reads from where it stopped.

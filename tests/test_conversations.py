@@ -15,6 +15,7 @@ import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
 from harness.approval import Decision
+from harness.conversations import TERMINAL_STATUSES as TERMINAL
 from harness.conversations import Runtime
 from harness.events import Visibility
 from harness.runs import RunStatus, progress_id
@@ -508,3 +509,83 @@ async def _until(predicate, timeout: float = 5.0) -> None:
     async with asyncio.timeout(timeout):
         while not predicate():
             await asyncio.sleep(0.005)
+
+
+# -- shutdown ---------------------------------------------------------------------------
+
+
+async def drive_lifespan(app) -> list[dict]:
+    """Start and stop an ASGI app the way a server does.
+
+    The real protocol rather than a call to the hook: what is being tested is that a
+    shutdown signal reaches the runtime, and asserting the hook exists would not show that.
+    """
+    incoming = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return incoming.pop(0)
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    await app({"type": "lifespan"}, receive, send)
+    return sent
+
+
+async def test_shutting_down_ends_a_run_in_flight_rather_than_dropping_it(
+    folder, tmp_path
+) -> None:
+    """A dropped run leaves a stream that ends with no terminal event, which `events.py`
+    calls the one shape a following client cannot recover from: it reads a defect as an
+    ending, and a person walks away from work that never finished."""
+    model = ScriptedModel(calls(("c1", "list_dir", {})))
+    runtime = runtime_for(model, tmp_path)
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+    run = runtime.start(conversation, "go", mode="auto", policy="full-access")
+    await _until(lambda: run.status is RunStatus.RUNNING)
+
+    await runtime.aclose()
+
+    assert types_of(run)[-1] in {"run.cancelled", "run.failed", "run.completed"}
+    assert run.status in TERMINAL
+
+
+async def test_shutting_down_closes_the_provider(folder, tmp_path) -> None:
+    """The connection pool is released by somebody, or by nobody."""
+    model = ScriptedModel(says("done"))
+    runtime = runtime_for(model, tmp_path)
+
+    await runtime.aclose()
+
+    assert model.closed
+
+
+async def test_shutting_down_twice_is_not_an_error(folder, tmp_path) -> None:
+    """A supervisor that sends SIGTERM and then SIGINT should not get a traceback."""
+    runtime = runtime_for(ScriptedModel(says("done")), tmp_path)
+
+    await runtime.aclose()
+    await runtime.aclose()
+
+
+async def test_the_server_propagates_shutdown_to_its_runs(folder, tmp_path) -> None:
+    """End to end through the ASGI lifespan, which is what uvicorn drives on SIGTERM."""
+    from harness.server import create_app
+    from harness.store import JsonlStore
+    from harness.workspaces import Workspaces
+
+    model = ScriptedModel(says("done"))
+    app = create_app(
+        provider=model,
+        store=JsonlStore(tmp_path / "sessions"),
+        workspaces=Workspaces(tmp_path / "ws.json"),
+    )
+
+    sent = await drive_lifespan(app)
+
+    assert [m["type"] for m in sent] == [
+        "lifespan.startup.complete",
+        "lifespan.shutdown.complete",
+    ]
+    assert model.closed, "the shutdown signal must reach the provider"

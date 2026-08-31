@@ -450,6 +450,32 @@ class Runtime:
         type, summary = _ending(outcome.stop, outcome.transcript.messages)
         run.finish(type, summary)
 
+    async def aclose(self, timeout: float = 5.0) -> None:
+        """Stop everything this process is holding, in an order a client can follow.
+
+        Runs first, provider last. A run that is simply dropped leaves a stream that ends
+        without a terminal event, and `events.py` is explicit that this is the one shape a
+        following client cannot recover from -- it reads a defect as an ending and the
+        person walks away from work that never finished. So each live run is cancelled,
+        which `_execute` turns into `run.cancelled`, and only then is the provider closed.
+
+        Awaited with a timeout rather than indefinitely: shutdown that can hang is shutdown
+        a supervisor turns into `SIGKILL`, and then nothing gets a terminal event at all.
+        `asyncio.wait` neither raises for a cancelled task nor re-raises its exception,
+        which is what is wanted here -- this is the last thing to run, and it owes its
+        caller an exit rather than a diagnosis.
+
+        Safe to call twice: a terminal run is skipped, and `aclose` on a provider is
+        documented as idempotent.
+        """
+        live = [run for run in self.runs.values() if run.status not in TERMINAL_STATUSES]
+        for run in live:
+            run.cancel()
+        tasks = [run.task for run in live if run.task is not None]
+        if tasks:
+            await asyncio.wait(tasks, timeout=timeout)
+        await self.provider.aclose()
+
     def for_thread(self, thread_id: str) -> list[Run]:
         """Runs in a thread, newest first -- which is the order a client asks for."""
         conversation = self.conversations.get(thread_id)
