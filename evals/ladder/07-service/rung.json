@@ -1,3 +1,3 @@
 {
-  "tests": "State shared across requests, where the obvious place for it is per-request."
+  "tests": "A running service, and a counting boundary stated exactly: requests served BEFORE this one. Ten runs all put the counter in a module global, so this is not a test of where shared state goes -- nobody reached for the per-request place. What it separates is reading 'before this one' correctly, and returning a 404 body that is actually JSON."
 }

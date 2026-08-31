@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shlex
 import shutil
 import subprocess
 import time
@@ -107,15 +108,50 @@ def commit() -> str:
 
 
 def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
+    """Run a rung's checks, and on failure say which check failed.
+
+    A bare `test "$x" = "3"` prints nothing when it fails, so a red result used to say
+    nothing at all -- two failures in this ladder had to be reproduced by hand to find out
+    what they were. An `ERR` trap fires at the moment the command fails and reports it,
+    which is before any `EXIT` cleanup runs. Tracing with `sh -x` and taking the last line
+    does not work: the last thing a traced script does is its own `trap ... EXIT`, so every
+    failure reported "kill 97784".
+
+    Falls back to plain `sh` where bash is absent, and then says only what the script
+    printed.
+    """
+    script = str((rung / "verify.sh").resolve())
+    if shutil.which("bash"):
+        command = [
+            "bash",
+            "-c",
+            f"trap 'echo \"__FAILED__ $BASH_COMMAND\" >&2' ERR; . {shlex.quote(script)}",
+        ]
+    else:
+        command = ["sh", script]
+
     try:
         done = subprocess.run(
-            ["sh", str((rung / "verify.sh").resolve())],
-            cwd=work, capture_output=True, text=True, timeout=timeout,
+            command, cwd=work, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
         return False, "verify timed out"
-    tail = (done.stdout + done.stderr).strip().splitlines()[-1:]
-    return done.returncode == 0, (tail[0][:200] if tail else "")
+    if done.returncode == 0:
+        return True, ""
+
+    failed = [
+        line.removeprefix("__FAILED__").strip()
+        for line in done.stderr.splitlines()
+        if line.startswith("__FAILED__")
+    ]
+    spoke = [
+        line.strip()
+        for line in (done.stdout + done.stderr).splitlines()
+        if line.strip() and not line.startswith("__FAILED__")
+    ]
+    where = failed[0] if failed else ""
+    said = spoke[-1] if spoke else ""
+    return False, (f"{where}  ||  {said}" if where and said else where or said)[:240]
 
 
 class Recording:
@@ -325,12 +361,12 @@ def report(results: list[dict]) -> None:
     attempts, because one rung in this ladder passed in one arm and failed in the other on
     consecutive days -- a single sample there is a coin, not a measurement.
     """
-    print("\n" + "=" * 100)
+    print("\n" + "=" * 118)
     print(
-        f"{'rung':<22} {'arm':<5} {'pass':>6} {'turns':>6} {'calls':>6} "
-        f"{'secs':>7} {'peak ctx':>9}  code tools"
+        f"{'rung':<22} {'arm':<5} {'pass':>6} {'turns':>6} {'turn range':>11} "
+        f"{'secs':>7} {'sec range':>13} {'peak ctx':>9} {'find':>5}"
     )
-    print("-" * 100)
+    print("-" * 118)
     seen: list[tuple[str, str]] = []
     for row in results:
         key = (row["rung"], row["arm"])
@@ -340,14 +376,29 @@ def report(results: list[dict]) -> None:
         group = [r for r in results if (r["rung"], r["arm"]) == key]
         passed = sum(1 for r in group if r["passed"])
         found = sum(v for r in group for k, v in r["tools"].items() if k.startswith("find_"))
+        turns = [r["turns"] for r in group]
+        secs = [r["seconds"] for r in group]
+        # The range, because a rung that takes 9 turns once and 45 the next is telling you
+        # something the median hides -- and a rung whose spread is wide is a candidate for
+        # whatever makes a task unstable, which is worth finding across rungs.
         print(
             f"{row['rung']:<22} {row['arm']:<5} {passed:>3}/{len(group):<2} "
-            f"{median([r['turns'] for r in group]):>6.1f} "
-            f"{median([r['calls'] for r in group]):>6.1f} "
-            f"{median([r['seconds'] for r in group]):>7.1f} "
-            f"{median([r['context_peak_chars'] for r in group]):>9,.0f}  {found}"
+            f"{median(turns):>6.1f} {f'{min(turns)}-{max(turns)}':>11} "
+            f"{median(secs):>7.1f} {f'{min(secs):.0f}-{max(secs):.0f}':>13} "
+            f"{median([r['context_peak_chars'] for r in group]):>9,.0f} {found:>5}"
         )
     print("-" * 100)
+    print("-" * 118)
+    # Rungs worth looking at twice: the ones where two attempts at the same task went very
+    # differently. Whatever produces that is not visible in a pass rate.
+    unstable = []
+    for rung, arm in seen:
+        group = [r for r in results if (r["rung"], r["arm"]) == (rung, arm)]
+        turns = [r["turns"] for r in group]
+        if len(turns) > 1 and min(turns) and max(turns) / min(turns) >= 3:
+            unstable.append(f"{rung}/{arm} ({min(turns)}-{max(turns)} turns)")
+    if unstable:
+        print("  widest spread: " + ", ".join(unstable))
     for arm in ("code", "base"):
         rows = [r for r in results if r["arm"] == arm]
         if rows:
