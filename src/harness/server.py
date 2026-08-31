@@ -1,41 +1,21 @@
-"""The HTTP front end.
+"""The HTTP front end: routes, and the one error shape.
 
 The third front end over the same `Agent`, and the one the terminal client in `orca` drives.
-`runs.py` holds everything about what a run *is*; this file is transport only -- routes, the
-error envelope, and the event stream.
+Everything else it needs is next door -- `conversations.py` for what a server passes `Agent`,
+`runs.py` for what a run is, `stream.py` for the event stream and the three things about it
+that hang a client, `workspaces.py` for how a folder is identified.
 
-**Three things silently hang a following client, and all three are here.** Each was found by
-a hang rather than by reading, so they are written out rather than left to a helper:
-
-  1. `stream.end` must be framed with an SSE `event:` line. A frame carrying
-     `{"type": "stream.end"}` in `data` and no `event:` line is read as an ordinary event of
-     an unknown kind, so the follow never learns the run is over -- the client reconnects
-     from its cursor, receives the same unrecognised frame, and loops forever in silence.
-  2. **The response must end immediately after it.** A following client reads the response
-     to its natural end rather than breaking out of the stream, because abandoning an async
-     generator suspended inside a streaming context manager needs an `await` that generator
-     finalization is not allowed to perform. So `stream.end` says what happened and EOF is
-     what returns control, and a server that holds the socket open on keep-alive hangs the
-     client for as long as it holds it. There is no read timeout to rescue it: a run is
-     allowed to think for an hour, so an idle stream is never treated as a failure.
-  3. An idle connection dies silently without traffic, so a `:` comment goes out every
-     `HEARTBEAT` seconds.
-
-Everything a client can send is answered rather than raised: a bad cursor, an unknown run, a
-command this backend cannot honour, a body that is not JSON. A traceback reaches a person as
-a 500 with no name on it.
+**Everything a client can send is answered rather than raised**: a cursor that will not
+parse, an unknown run, a command this backend cannot honour, a body that is not JSON, a
+folder that has been moved since it was registered. A traceback reaches a person as a 500
+with no name on it, which tells them nothing they can act on.
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
-import json
 import logging
 import os
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -43,27 +23,31 @@ from uuid import uuid4
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from harness.events import Visibility
+from harness.conversations import Runtime
 from harness.providers.base import Provider
-from harness.runs import DECISIONS, CommandRefused, Run, Runtime
+from harness.runs import DECISIONS, CommandRefused, Run
 from harness.store.base import Store
+from harness.stream import HEARTBEAT, event_stream
 from harness.workspace import WorkspaceError
+from harness.workspaces import (
+    WorkspaceRecord,
+    Workspaces,
+    WorkspaceTaken,
+    workspace_id_for,
+)
 
 log = logging.getLogger(__name__)
 
 API = "/api/v1"
 PROTOCOL_VERSION = "1"
 
-#: How long an event stream may be silent. A comment goes out at this interval; below it,
-#: intermediaries and some clients close a connection they believe is dead.
-HEARTBEAT = 15.0
-
 #: Where the terminal front end keeps its sessions, and where this one keeps them too. One
 #: place, so `harness --sessions` lists what the server ran and `--resume` continues it.
 SESSIONS = Path("~/.harness/sessions").expanduser()
+
 
 def is_id(value: str) -> bool:
     """Whether a client-supplied id may be used as a store session id.
@@ -90,129 +74,6 @@ def error_response(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         {"detail": {"code": code, "message": message}}, status_code=status
     )
-
-
-# -- workspaces ----------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceRecord:
-    workspace_id: str
-    name: str
-    root_path: str
-    vcs: str
-    repo_identity: str = ""
-
-    def wire(self) -> dict[str, Any]:
-        return {
-            "workspace_id": self.workspace_id,
-            "name": self.name,
-            "root_path": self.root_path,
-            "vcs": self.vcs,
-            "repo_identity": self.repo_identity,
-        }
-
-
-def workspace_id_for(root: Path) -> str:
-    """A workspace id derived from its path rather than minted and stored.
-
-    The id then survives a restart with no table behind it, and two clients registering the
-    same folder get the same id by construction rather than by a uniqueness constraint. It
-    also means a thread's workspace can be recovered from the only durable fact about it --
-    the folder recorded in its session header.
-    """
-    return f"ws_{blake2s(str(root).encode(), digest_size=8).hexdigest()}"
-
-
-@dataclass
-class Workspaces:
-    """The folders this process has been asked to work in.
-
-    In memory. A client re-registers the folder it is standing in at boot and gets the same
-    derived id back, so there is nothing here a restart loses that the next boot does not
-    immediately restore.
-    """
-
-    known: dict[str, WorkspaceRecord] = field(default_factory=dict)
-
-    def list(self) -> list[WorkspaceRecord]:
-        return list(self.known.values())
-
-    def get(self, workspace_id: str) -> WorkspaceRecord | None:
-        return self.known.get(workspace_id)
-
-    def for_root(self, root: Path) -> WorkspaceRecord | None:
-        return self.known.get(workspace_id_for(root))
-
-    async def register(
-        self, name: str, root: Path, vcs: str, *, replace_existing: bool
-    ) -> WorkspaceRecord:
-        workspace_id = workspace_id_for(root)
-        if workspace_id in self.known and not replace_existing:
-            raise ApiError(
-                409,
-                "workspace_exists",
-                f"{root} is already registered. Re-read the list and use it.",
-            )
-        record = WorkspaceRecord(
-            workspace_id=workspace_id,
-            name=name or root.name or str(root),
-            root_path=str(root),
-            vcs="git" if vcs == "git" else "none",
-            repo_identity=await repo_identity(root) if vcs == "git" else "",
-        )
-        self.known[workspace_id] = record
-        return record
-
-    def remember(self, root: Path) -> WorkspaceRecord:
-        """Record a folder nobody registered explicitly.
-
-        A thread loaded from the store names a folder that this process may never have been
-        told about -- the registration lived in the previous process's memory. Recovering it
-        from the session header is better than refusing to open a conversation whose
-        transcript is right there.
-        """
-        record = self.known.get(workspace_id_for(root))
-        if record is None:
-            record = WorkspaceRecord(
-                workspace_id=workspace_id_for(root),
-                name=root.name or str(root),
-                root_path=str(root),
-                vcs="none",
-            )
-            self.known[record.workspace_id] = record
-        return record
-
-
-async def repo_identity(root: Path) -> str:
-    """The checkout's root-commit set, or empty when it cannot be read.
-
-    Recorded because a client that finds no identity here concludes the record may describe
-    a different checkout than the one on disk and asks for a replacement -- every boot,
-    forever. Computing it once is what lets that handshake settle. Any failure is empty
-    rather than an error: a folder that is not a checkout, a machine with no `git`, and a
-    repository with no commits are all ordinary, and none of them should stop a run.
-    """
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "rev-list",
-            "--max-parents=0",
-            "HEAD",
-            cwd=root,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except (OSError, ValueError):
-        return ""
-    try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-    except TimeoutError:
-        process.kill()
-        return ""
-    if process.returncode != 0:
-        return ""
-    return ",".join(sorted(line.strip() for line in stdout.decode().split() if line.strip()))
 
 
 # -- the application -------------------------------------------------------------------------
@@ -275,14 +136,17 @@ def create_app(
         if not root.is_dir():
             raise ApiError(400, "no_such_folder", f"{root} is not a directory.")
 
-        record = await folders.register(
-            str(body.get("name") or ""),
-            root,
-            # Declared by the client from what it found on disk, never detected here. The
-            # client is the side standing in the folder.
-            str(body.get("vcs") or "none"),
-            replace_existing=bool(body.get("replace_existing")),
-        )
+        try:
+            record = await folders.register(
+                str(body.get("name") or ""),
+                root,
+                # Declared by the client from what it found on disk, never detected here.
+                # The client is the side standing in the folder.
+                str(body.get("vcs") or "none"),
+                replace_existing=bool(body.get("replace_existing")),
+            )
+        except WorkspaceTaken as exc:
+            raise ApiError(409, "workspace_exists", str(exc)) from exc
         return JSONResponse(record.wire(), status_code=201)
 
     # -- threads ---------------------------------------------------------------------------
@@ -460,20 +324,12 @@ def create_app(
         run = require_run(request)
         after_seq = read_int(request, "after_seq", 0)
         ticks = read_int(request, "ticks", 0)
-        developer = request.query_params.get("visibility") == "all"
-        return StreamingResponse(
-            frames(run, after_seq, developer=developer, ticks=ticks, heartbeat=heartbeat),
-            media_type="text/event-stream",
-            headers={
-                "cache-control": "no-store",
-                # The response must end after `stream.end`, and a following client reads to
-                # EOF rather than breaking out. `connection: close` is that stated on the
-                # wire: the body is delimited by the close, so there is no keep-alive socket
-                # left holding the client after the last frame.
-                "connection": "close",
-                # Proxies that buffer a response defeat every heartbeat above.
-                "x-accel-buffering": "no",
-            },
+        return event_stream(
+            run,
+            after_seq,
+            developer=request.query_params.get("visibility") == "all",
+            ticks=ticks,
+            heartbeat=heartbeat,
         )
 
     # -- commands --------------------------------------------------------------------------
@@ -601,68 +457,6 @@ class BearerToken:
             await response(scope, receive, send)
             return
         await self.app(scope, receive, send)
-
-
-# -- the event stream --------------------------------------------------------------------
-
-
-async def frames(
-    run: Run,
-    after_seq: int,
-    *,
-    developer: bool,
-    ticks: int,
-    heartbeat: float,
-) -> AsyncIterator[str]:
-    """One run's log from a cursor, as SSE.
-
-    The cursor advances over every row examined, including the developer rows a `user`
-    stream does not deliver. That keeps `?after_seq` exact under either visibility: the
-    client resumes from the last id it was given, and this re-examines the filtered rows and
-    delivers nothing twice.
-    """
-    cursor = max(after_seq, 0)
-    passes = 0
-    while True:
-        for event in run.events.since(cursor):
-            cursor = event.seq
-            if event.visibility is Visibility.DEVELOPER and not developer:
-                continue
-            yield f"id: {event.seq}\ndata: {json.dumps(event.wire())}\n\n"
-
-        if run.events.closed:
-            yield end("terminal")
-            return
-        if run.task is not None and run.task.done():
-            # The run is over and wrote no ending. A defect in this harness -- but reported,
-            # because a follow that kept waiting would hang on it forever and a follow that
-            # returned quietly would report unfinished work as finished.
-            log.error("run %s ended without a terminal event", run.run_id)
-            yield end("terminal_without_event")
-            return
-
-        passes += 1
-        if ticks and passes >= ticks:
-            # A bounded read: it returns for a live run rather than following it, which is
-            # how a client replays a thread's history without opening a second live cursor.
-            yield end("tick_limit")
-            return
-
-        before = run.events.last_seq
-        await run.events.wait(cursor, heartbeat)
-        if run.events.last_seq == before:
-            yield ": keep-alive\n\n"
-
-
-def end(reason: str) -> str:
-    """The only frame identified by its SSE `event:` name rather than by a type inside
-    `data`, because it is transport and not a row of the log.
-
-    `reason` sits at the top level of `data`. A client treats an unrecognised reason as
-    *still going* and reconnects from its cursor, which is the safe direction: a follow that
-    stopped on every reason returned silently while the run it was watching carried on.
-    """
-    return f"event: stream.end\ndata: {json.dumps({'reason': reason})}\n\n"
 
 
 # -- request reading ---------------------------------------------------------------------

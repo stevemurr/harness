@@ -14,8 +14,9 @@ from pathlib import Path
 import pytest
 
 from harness.approval import Decision
+from harness.conversations import Runtime
 from harness.events import Visibility
-from harness.runs import RunStatus, Runtime, progress_id
+from harness.runs import RunStatus, progress_id
 from harness.tools.base import ToolSpec
 from harness.types import Message, Role, ToolCall, Transcript
 

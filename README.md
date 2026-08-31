@@ -71,8 +71,11 @@ src/harness/
   agent.py       the composition root
   cli.py         the terminal front end
   events.py      one run's event log, and the cursor guarantee
-  runs.py        a run, and the collaborators a server passes
-  server.py      the HTTP front end
+  runs.py        one run, and what a client can do to it in flight
+  conversations.py  what a server front end passes `Agent`, and why it is four things
+  workspaces.py  a registered folder, and how one is identified
+  stream.py      the event stream, and the three things that hang a client
+  server.py      the HTTP front end: routes, and the one error shape
 ```
 
 ## Running it
@@ -126,9 +129,9 @@ is the part of the claim that mattered. `src/harness/runs.py` says it at length.
 harness-serve --port 8080          # HARNESS_TOKEN=... to require a bearer token
 ```
 
-The same `Agent` behind HTTP, which is what the `orca` terminal client drives. Two files:
-`runs.py` is what a run *is* -- a background task with an append-only event log -- and
-`server.py` is transport, being routes, an error envelope and the event stream.
+The same `Agent` behind HTTP, which is what the `orca` terminal client drives. A run is a
+background task with an append-only event log (`runs.py`, `events.py`); what a server passes
+`Agent` is in `conversations.py`; the rest is transport.
 
 A run is a background task and not a thing hanging off a connection, so **closing the
 terminal is not cancelling**. A run parked on an approval waits as long as the person takes,
