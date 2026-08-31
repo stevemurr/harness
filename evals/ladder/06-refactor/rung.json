@@ -1,0 +1,3 @@
+{
+  "tests": "A rename that must reach every call site across a package."
+}
