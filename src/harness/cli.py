@@ -41,7 +41,7 @@ green = lambda t: paint(t, "32")  # noqa: E731
 yellow = lambda t: paint(t, "33")  # noqa: E731
 
 
-PLAN_TOOLS = {"write_plan", "update_plan"}
+PLAN_TOOLS = {"update_plan"}
 
 
 def render(turn: Turn) -> None:

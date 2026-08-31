@@ -56,7 +56,7 @@ log = logging.getLogger(__name__)
 #: same reason: a one-line summary of a checklist is not a checklist. The set is written out
 #: in both front ends rather than shared, because what to render specially is a front end's
 #: decision and sharing it would make one front end's taste the other's.
-PLAN_TOOLS = frozenset({"write_plan", "update_plan"})
+PLAN_TOOLS = frozenset({"update_plan"})
 
 
 @dataclass
@@ -136,7 +136,9 @@ def publish_plan(run: Run, plan: Plan) -> None:
     run.publish(
         "plan.progress",
         {
-            "explanation": "",
+            # Identity, not translation. The tool takes Codex's schema and the contract
+            # specifies Codex's schema, so there is nothing left in between to get wrong.
+            "explanation": plan.explanation,
             "plan": [{"step": step.text, "status": step.status.value} for step in plan.steps],
         },
     )

@@ -1,9 +1,8 @@
-"""The plan, and the two tools that write it.
+"""The plan tool.
 
-The property that matters most is the negative one: the plan is not control state. A run
-must finish identically whether the model wrote ten plans or never called the tool, because
-the moment the runtime believes the plan, the plan becomes a thing the model can mislead the
-runtime with.
+One tool, the whole list, no ids -- Codex's `update_plan` schema, which is what models have
+been trained against. The property that matters most is still the negative one: the plan is
+not control state, and a run finishes identically whether it was written or not.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import pytest
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals, Policy
-from harness.plan import Plan, Status, UnknownStep
+from harness.plan import Plan, Status, Step
 from harness.tools.base import Registry, ToolContext, ToolSpec
 from harness.tools.plan import plan_tools
 from harness.types import Message, Role, ToolCall, Transcript
@@ -33,168 +32,95 @@ def kit(ctx: ToolContext):
     return Registry(tools), plan, ctx
 
 
-async def call(registry: Registry, ctx: ToolContext, name: str, **args):
-    return await registry.run(ToolCall("c", name, args), ctx)
+async def call(registry: Registry, ctx: ToolContext, **args):
+    return await registry.run(ToolCall("c", "update_plan", args), ctx)
 
 
-# --- writing -----------------------------------------------------------------------------
+def steps(*pairs: tuple[str, str]) -> list[dict]:
+    return [{"step": text, "status": status} for text, status in pairs]
 
 
-async def test_writing_a_plan_returns_it_with_ids(kit) -> None:
-    """The model needs the ids back, or it cannot address a step next turn."""
+# --- the shape ---------------------------------------------------------------------------
+
+
+async def test_the_whole_list_is_returned_with_its_state(kit) -> None:
     registry, plan, ctx = kit
 
     result = await call(
-        registry, ctx, "write_plan",
-        steps=[{"text": "read the parser"}, {"text": "add the test"}],
+        registry,
+        ctx,
+        plan=steps(("read the parser", "completed"), ("add the test", "in_progress")),
     )
 
     assert result.ok
-    assert "[1] read the parser" in result.content
-    assert "[2] add the test" in result.content
-    assert [s.status for s in plan.steps] == [Status.PENDING, Status.PENDING]
+    assert "● 1. read the parser" in result.content
+    assert "◐ 2. add the test" in result.content
+    assert [s.status for s in plan.steps] == [Status.COMPLETED, Status.IN_PROGRESS]
 
 
-async def test_writing_again_replaces_the_whole_plan(kit) -> None:
+async def test_a_second_call_replaces_the_plan_wholesale(kit) -> None:
+    """No patching. The model sends everything every time, which is the one rule."""
     registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "old"}])
+    await call(registry, ctx, plan=steps(("a", "pending"), ("b", "pending")))
 
-    await call(registry, ctx, "write_plan", steps=[{"text": "new"}])
+    await call(registry, ctx, plan=steps(("c", "pending")))
 
-    assert [s.text for s in plan.steps] == ["new"]
+    assert [s.text for s in plan.steps] == ["c"]
+
+
+async def test_the_explanation_is_shown_above_the_list(kit) -> None:
+    registry, _, ctx = kit
+
+    result = await call(
+        registry,
+        ctx,
+        explanation="the parser already handled it",
+        plan=steps(("write the changelog", "pending")),
+    )
+
+    assert result.content.startswith("the parser already handled it")
+    assert "○ 1. write the changelog" in result.content
 
 
 async def test_an_empty_plan_is_refused_by_the_schema(kit) -> None:
     registry, _, ctx = kit
 
-    result = await call(registry, ctx, "write_plan", steps=[])
+    result = await call(registry, ctx, plan=[])
 
     assert not result.ok
     assert "invalid arguments" in result.content
 
 
-# --- updating ----------------------------------------------------------------------------
-
-
-async def test_updating_a_status_leaves_every_other_step_alone(kit) -> None:
-    """The reason update exists: re-sending the list from memory silently drops steps."""
-    registry, plan, ctx = kit
-    await call(
-        registry, ctx, "write_plan",
-        steps=[{"text": "a"}, {"text": "b"}, {"text": "c"}],
-    )
-
-    result = await call(
-        registry, ctx, "update_plan", changes=[{"id": "2", "status": "completed"}]
-    )
-
-    assert result.ok
-    assert [s.text for s in plan.steps] == ["a", "b", "c"]
-    assert [s.status for s in plan.steps] == [
-        Status.PENDING,
-        Status.COMPLETED,
-        Status.PENDING,
-    ]
-
-
-async def test_a_step_can_be_reworded_in_place(kit) -> None:
-    registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "vague"}])
-
-    await call(registry, ctx, "update_plan", changes=[{"id": "1", "text": "specific"}])
-
-    assert plan.steps[0].text == "specific"
-
-
-async def test_steps_can_be_added_and_removed(kit) -> None:
-    registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}, {"text": "b"}])
-
-    await call(registry, ctx, "update_plan", remove=["1"], add=[{"text": "c"}])
-
-    assert [s.text for s in plan.steps] == ["b", "c"]
-
-
-async def test_added_steps_get_fresh_ids_that_never_collide(kit) -> None:
-    """Ids must not be reused after a removal, or an update aimed at the old step lands on
-    the new one -- a silent wrong edit."""
-    registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
-    await call(registry, ctx, "update_plan", remove=["1"])
-
-    await call(registry, ctx, "update_plan", add=[{"text": "b"}])
-
-    assert [s.id for s in plan.steps] == ["2"]
-
-
-async def test_an_unknown_id_is_a_readable_failure_naming_what_exists(kit) -> None:
-    registry, _, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
-
-    result = await call(
-        registry, ctx, "update_plan", changes=[{"id": "9", "status": "completed"}]
-    )
-
-    assert not result.ok
-    assert "no step '9'" in result.content
-    assert "1" in result.content
-
-
-async def test_one_bad_id_applies_none_of_the_changes(kit) -> None:
-    """A partly applied change is worse than a refused one: the model is told it failed
-    while the plan it can no longer see has already moved."""
-    registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}, {"text": "b"}])
-
-    result = await call(
-        registry, ctx, "update_plan",
-        changes=[{"id": "1", "status": "completed"}, {"id": "9", "status": "completed"}],
-    )
-
-    assert not result.ok
-    assert [s.status for s in plan.steps] == [Status.PENDING, Status.PENDING]
-
-
-async def test_a_removal_that_names_a_missing_step_changes_nothing(kit) -> None:
-    registry, plan, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
-
-    result = await call(registry, ctx, "update_plan", remove=["9"])
-
-    assert not result.ok
-    assert len(plan.steps) == 1
-
-
-async def test_an_update_that_asks_for_nothing_says_so(kit) -> None:
+async def test_a_step_without_a_status_is_refused(kit) -> None:
+    """Codex requires both fields, and a status the model did not state is one we would be
+    inventing on its behalf."""
     registry, _, ctx = kit
 
-    result = await call(registry, ctx, "update_plan", note="hmm")
+    result = await call(registry, ctx, plan=[{"step": "do it"}])
 
     assert not result.ok
-    assert "at least one of" in result.content
+    assert "status" in result.content
 
 
-async def test_a_note_explains_a_change_of_shape(kit) -> None:
+async def test_an_id_is_refused_rather_than_silently_dropped(kit) -> None:
+    """There are no ids. Accepting one would teach the model a field that does nothing, and
+    the point of taking Codex's shape is to not invent dialect."""
     registry, _, ctx = kit
-    await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
 
     result = await call(
-        registry, ctx, "update_plan",
-        remove=["1"], add=[{"text": "b"}], note="the parser already handled it",
+        registry, ctx, plan=[{"id": "1", "step": "do it", "status": "pending"}]
     )
 
-    assert "the parser already handled it" in result.content
+    assert not result.ok
+    assert "invalid arguments" in result.content
 
 
 # --- what the plan is not -----------------------------------------------------------------
 
 
-async def test_neither_plan_tool_is_ever_asked_about(kit) -> None:
-    """A checklist is not a change to the user's machine, and a prompt on every tick is the
-    approval fatigue that makes people stop reading the ones that matter."""
+async def test_the_plan_tool_is_never_asked_about(kit) -> None:
     registry, _, _ = kit
 
-    assert not registry.get("write_plan").spec.mutates
     assert not registry.get("update_plan").spec.mutates
 
 
@@ -202,14 +128,13 @@ def test_the_plan_holds_no_opinion_about_how_many_steps_are_in_progress() -> Non
     """A model keeping two steps in progress is writing a worse plan, not committing an
     error. Failing its tool call would spend a turn teaching it nothing."""
     plan = Plan()
-    plan.replace([("a", Status.IN_PROGRESS), ("b", Status.IN_PROGRESS)])
+    plan.replace([Step("a", Status.IN_PROGRESS), Step("b", Status.IN_PROGRESS)])
 
     assert len(plan.steps) == 2
 
 
-def test_finding_a_step_in_an_empty_plan_says_the_plan_is_empty() -> None:
-    with pytest.raises(UnknownStep, match="the plan is empty"):
-        Plan().find("1")
+def test_an_empty_plan_renders_as_one() -> None:
+    assert Plan().render() == "(the plan is empty)"
 
 
 class ScriptedModel:
@@ -218,31 +143,37 @@ class ScriptedModel:
     def __init__(self, *replies: Message) -> None:
         self._replies = list(replies)
 
-    async def complete(self, transcript: Transcript, tools: Sequence[ToolSpec] = ()) -> Message:
+    async def complete(
+        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+    ) -> Message:
         return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
 
     async def aclose(self) -> None:
         return None
 
 
-async def test_a_run_ends_identically_whether_a_plan_was_written_or_not(tmp_path: Path) -> None:
-    """THE property. Nothing in the loop reads the plan, so it cannot change an outcome.
-    The moment the runtime believes the plan, the plan becomes something the model can
-    mislead the runtime with."""
+async def test_a_run_ends_identically_whether_a_plan_was_written_or_not(
+    tmp_path: Path,
+) -> None:
+    """THE property. Nothing in the loop reads the plan, so it cannot change an outcome."""
 
     def agent_for(*replies: Message) -> Agent:
+        registry, plan, modes = default_registry()
         return Agent(
             workspace=Workspace.at(tmp_path),
             provider=ScriptedModel(*replies),
-            registry=default_registry()[0],
+            registry=registry,
             approvals=Approvals(policy=Policy(approve_everything=True)),
+            plan=plan,
+            modes=modes,
         )
 
     without = await agent_for(Message(Role.ASSISTANT, "done")).run("do it")
     with_plan = await agent_for(
         Message(
-            Role.ASSISTANT, "",
-            (ToolCall("c1", "write_plan", {"steps": [{"text": "a"}, {"text": "b"}]}),),
+            Role.ASSISTANT,
+            "",
+            (ToolCall("c1", "update_plan", {"plan": [{"step": "a", "status": "pending"}]}),),
         ),
         Message(Role.ASSISTANT, "done"),
     ).run("do it")

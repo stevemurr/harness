@@ -283,8 +283,11 @@ async def test_a_plan_tool_publishes_the_whole_checklist_and_no_activity_row(
             calls(
                 (
                     "c1",
-                    "write_plan",
-                    {"steps": [{"text": "read it"}, {"text": "fix it"}]},
+                    "update_plan",
+                    {"plan": [
+                        {"step": "read it", "status": "in_progress"},
+                        {"step": "fix it", "status": "pending"},
+                    ]},
                 )
             ),
             says("done"),
@@ -296,7 +299,7 @@ async def test_a_plan_tool_publishes_the_whole_checklist_and_no_activity_row(
 
     assert payloads(run, "run.progress") == []
     assert payloads(run, "plan.progress")[0]["plan"] == [
-        {"step": "read it", "status": "pending"},
+        {"step": "read it", "status": "in_progress"},
         {"step": "fix it", "status": "pending"},
     ]
 
@@ -306,8 +309,22 @@ async def test_each_plan_event_carries_the_whole_list(folder, tmp_path) -> None:
     step."""
     runtime = runtime_for(
         ScriptedModel(
-            calls(("c1", "write_plan", {"steps": [{"text": "a"}, {"text": "b"}]})),
-            calls(("c2", "update_plan", {"changes": [{"id": "1", "status": "completed"}]})),
+            calls((
+                "c1",
+                "update_plan",
+                {"plan": [
+                    {"step": "a", "status": "pending"},
+                    {"step": "b", "status": "pending"},
+                ]},
+            )),
+            calls((
+                "c2",
+                "update_plan",
+                {"plan": [
+                    {"step": "a", "status": "completed"},
+                    {"step": "b", "status": "in_progress"},
+                ]},
+            )),
             says("done"),
         ),
         tmp_path,
@@ -317,7 +334,7 @@ async def test_each_plan_event_carries_the_whole_list(folder, tmp_path) -> None:
 
     plans = payloads(run, "plan.progress")
     assert [len(p["plan"]) for p in plans] == [2, 2]
-    assert [s["status"] for s in plans[-1]["plan"]] == ["completed", "pending"]
+    assert [s["status"] for s in plans[-1]["plan"]] == ["completed", "in_progress"]
 
 
 # -- approvals ---------------------------------------------------------------------------

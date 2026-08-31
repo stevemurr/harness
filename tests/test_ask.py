@@ -160,6 +160,5 @@ def test_the_plan_tools_are_on_by_default() -> None:
 
     registry, _plan, _modes = default_registry(Plan(), ModeState())
 
-    assert "write_plan" in registry.names()
     assert "update_plan" in registry.names()
     assert "ask_user" in registry.names()

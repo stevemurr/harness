@@ -135,14 +135,17 @@ async def test_the_checklist_is_available_in_plan_mode(folder: Path) -> None:
     works under a read-only sandbox.
     """
     model = ScriptedModel(
-        calls(("c1", "write_plan", {"steps": [{"text": "read the parser"}]})),
+        calls((
+            "c1",
+            "update_plan",
+            {"plan": [{"step": "read the parser", "status": "pending"}]},
+        )),
         Message(Role.ASSISTANT, "still looking"),
     )
     agent = agent_over(folder, model, mode=PLAN)
 
     outcome = await agent.run("how would you fix this?")
 
-    assert "write_plan" in model.tools_offered[0]
     assert "update_plan" in model.tools_offered[0]
     assert [s.text for s in agent.plan.steps] == ["read the parser"]
     assert agent.modes.planning

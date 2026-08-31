@@ -233,31 +233,36 @@ existed, a scripted model asked for `write_file` in plan mode and the file was w
 
 ## The plan
 
-One checklist, two tools. `write_plan` replaces it; `update_plan` changes steps by id and
-can add, remove and reword them.
+One tool, `update_plan`, taking the whole checklist every time. That is Codex's schema --
+`explanation` plus `plan[]` of `{step, status}` -- and the same idea as Claude Code's
+`TodoWrite`. Matching them is the point: models have been trained against those tools, and a
+plan tool with a private dialect asks a model to learn one at runtime, which it will not do.
 
-Both exist because full replacement -- what Codex's `update_plan` does -- costs two things
-when the model only wants to tick a box: the tokens, and, the one that actually bites, a
-model re-emitting a list from memory silently drops steps it has forgotten. An update
-naming `s3` cannot lose `s5`. Ids are assigned by the tool and never reused, because
-positional references shift the moment a step is inserted and a model updating "step 3"
-after something moved is a silent wrong edit.
+There were two tools and stable step ids here until 2026-08-31, so an update could name one
+step and could not silently drop the others. A live model priced that design: across four
+scenarios the plan tools were **half of all tool failures**, and the arguments showed why --
+`write_plan.steps` items had no id while `update_plan.changes` items required one, so a model
+holding two shapes for one concept sent the union to both. It also once sent `steps` to
+`update_plan` with `update_plan`'s item shape inside, which is a model that had merged the
+two into the single tool it expected.
 
-**It is not control state.** Nothing in the loop reads the plan, nothing gates on it, and a
-run finishes identically whether the model wrote ten plans or never called the tool -- there
-is a test that says exactly that. The moment the runtime believes the plan, the plan becomes
-a thing the model can mislead the runtime with. So the only rules enforced are shape rules;
-conventions about *good* plans (one step in progress, don't plan a one-step task) live in
-the tool descriptions, which is the only kind of rule a plan is allowed to have.
+What the ids bought was protecting something that does not matter. The plan is not
+authoritative, so a dropped step costs a line of display and the model re-sends the whole
+list next turn anyway.
 
-Neither tool is ever asked about. A checklist is not a change to your machine, and a prompt
-on every tick is the approval fatigue that makes people stop reading the ones that matter.
+**It is not control state.** Nothing in the loop reads it, and a run finishes identically
+whether the model wrote ten plans or never called the tool -- there is a test that says
+exactly that. The moment the runtime believes the plan, the plan becomes something the model
+can mislead the runtime with. Only shape rules are enforced; conventions about *good* plans
+live in the tool description, which is the only kind of rule a plan is allowed to have.
+
+It is never asked about. A checklist is not a change to your machine.
 
 ```
 plan
-  ● [s1] read the parser
-  ◐ [s2] add trailing-comma support
-  ○ [s4] update the changelog
+  ● 1. read the parser
+  ◐ 2. add trailing-comma support
+  ○ 3. update the changelog
 ```
 
 ## Adding a tool
