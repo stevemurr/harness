@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -102,11 +103,18 @@ async def main_async(args: argparse.Namespace) -> int:
         )
         return 2
 
+    try:
+        extra = json.loads(args.extra_body) if args.extra_body else {}
+    except json.JSONDecodeError as exc:
+        print(red(f"--extra-body is not JSON: {exc}"), file=sys.stderr)
+        return 2
+
     provider = OpenAICompatible(
         base_url=args.base_url,
         model=args.model,
         api_key=args.api_key,
         max_tokens=args.max_tokens,
+        extra_body=extra,
     )
     approvals = Approvals(
         policy=Policy(approve_everything=args.yes),
@@ -172,6 +180,14 @@ def main(argv: list[str] | None = None) -> int:
         "--api-key", default=os.environ.get("HARNESS_API_KEY", ""), help="env: HARNESS_API_KEY"
     )
     parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument(
+        "--extra-body",
+        default=os.environ.get("HARNESS_EXTRA_BODY", ""),
+        help="JSON merged into every request body, for deployment dialect the OpenAI schema "
+        "does not cover \u2014 e.g. "
+        "'{\"chat_template_kwargs\": {\"enable_thinking\": false}}' for Qwen3, which "
+        "otherwise answers with an empty string. (env: HARNESS_EXTRA_BODY)",
+    )
     parser.add_argument(
         "--resume", metavar="SESSION", help="Continue a session instead of starting one."
     )

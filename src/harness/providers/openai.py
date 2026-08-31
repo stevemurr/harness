@@ -38,6 +38,17 @@ class OpenAICompatible:
     max_tokens: int | None = None
     timeout: float = 300.0
     max_retries: int = 3
+    #: Fields merged into every request body, for deployment dialect the OpenAI schema does
+    #: not cover. Needed in practice, not in theory: a Qwen3 behind LiteLLM spends its whole
+    #: token budget in `reasoning_content` and returns `content: ""` unless the body carries
+    #: `{"chat_template_kwargs": {"enable_thinking": false}}` -- 7.2s and an empty answer
+    #: becomes 0.75s and a correct one. `reasoning_effort: none`, the documented spelling,
+    #: does nothing there. Measured against a live gateway on 2026-08-30.
+    #:
+    #: Merged under the fields this class sets, so it can add dialect but cannot quietly
+    #: rewrite `messages`, `tools` or `model` and leave the harness describing a request it
+    #: did not send.
+    extra_body: dict[str, Any] = field(default_factory=dict)
     _client: httpx.AsyncClient | None = field(default=None, repr=False)
 
     @property
@@ -63,6 +74,7 @@ class OpenAICompatible:
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
     ) -> Message:
         body: dict[str, Any] = {
+            **self.extra_body,
             "model": self.model,
             "messages": [encode_message(m) for m in transcript.messages],
             "temperature": self.temperature,
