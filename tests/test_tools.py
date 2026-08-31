@@ -361,14 +361,16 @@ async def test_a_command_runs_in_the_workspace(registry: Registry, ctx: ToolCont
     assert "notes.md" in result.content
 
 
-async def test_a_failing_command_reports_its_exit_code(
+async def test_a_failing_command_reports_its_exit_code_as_an_answer(
     registry: Registry, ctx: ToolContext
 ) -> None:
+    """A non-zero exit is what the command said, not a tool that could not work. `grep`
+    with no matches is `ok` for the same reason."""
     runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
 
     result = await runner.run(ToolCall("1", "run", {"command": "exit 3"}))
 
-    assert not result.ok
+    assert result.ok
     assert "exit 3" in result.content
 
 
@@ -480,18 +482,20 @@ async def test_a_missing_file_failed_but_was_not_refused(
     assert not result.refused
 
 
-async def test_a_command_that_exits_nonzero_failed_but_was_not_refused(
+async def test_a_timeout_is_a_real_tool_failure(
     registry: Registry, ctx: ToolContext
 ) -> None:
-    """Five of six `run` failures in one eval round were pytest exiting 1 while the model
-    iterated on its own tests -- the loop working. A metric that cannot tell that from a
-    refusal reports normal work as breakage. (2026-08-31)"""
+    """The line: a command that ran and said no is an answer; a command that never finished
+    is the tool not doing its job."""
     runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
 
-    result = await runner.run(ToolCall("1", "run", {"command": "exit 3"}))
+    result = await runner.run(
+        ToolCall("1", "run", {"command": "sleep 30", "timeout": 1})
+    )
 
     assert not result.ok
     assert not result.refused
+    assert "timed out" in result.content
 
 
 async def test_a_declined_approval_is_refused(

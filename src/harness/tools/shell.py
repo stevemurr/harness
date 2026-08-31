@@ -107,7 +107,18 @@ class Shell:
         body = text.rstrip() or "(no output)"
         if code == 0:
             return ToolResult(body)
-        return ToolResult(f"exit {code}\n{body}", ok=False)
+        # A non-zero exit is an ANSWER, not a tool failure. This tool's job is to run the
+        # command and report faithfully, and it did both -- the same way `grep` returning no
+        # matches is `ok`, because the tool worked and the answer was negative.
+        #
+        # A failing test is the clearest case: under TDD it is the expected first state, and
+        # a harness that calls it a failure is disagreeing with the method. It also used to
+        # count towards the loop's stall cap, so a model doing the right thing accumulated
+        # towards having its run ended. (owner, 2026-08-31)
+        #
+        # What is `ok=False` here is the tool genuinely not doing its job: a timeout, or a
+        # command that could not be started at all.
+        return ToolResult(f"exit {code}\n{body}")
 
 
 def _program(command: str) -> str:

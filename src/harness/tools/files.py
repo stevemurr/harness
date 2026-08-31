@@ -157,6 +157,10 @@ class EditFile:
                 f"that text appears {count} times in {path}. Include surrounding lines to "
                 "make it unique, or pass replace_all.",
                 ok=False,
+                # The harness declining to guess, which is policy rather than the world
+                # saying no -- so it counts towards a stall the way a schema mismatch does.
+                # A model that cannot land an edit is stuck; one watching a test fail is not.
+                refused=True,
             )
 
         try:
@@ -240,7 +244,7 @@ class Grep:
             expression = re.compile(args["pattern"])
         except re.error as exc:
             # The model wrote the regex, so a bad one is its failure to fix, not a crash.
-            return ToolResult(f"bad regular expression: {exc}", ok=False)
+            return ToolResult(f"bad regular expression: {exc}", ok=False, refused=True)
 
         restrict = args.get("glob")
         rows: list[str] = []

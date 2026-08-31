@@ -265,6 +265,25 @@ plan
   ○ 3. update the changelog
 ```
 
+## What counts as a failure
+
+Three outcomes, not two, because "not ok" was hiding two unrelated facts.
+
+| | means | example |
+|---|---|---|
+| **ok** | the tool did its job | a command ran; `grep` found nothing |
+| **failed** | it could not do its job | a timeout; a file that is not there |
+| **refused** | the harness declined to act | a path outside the folder; a mode withholding the tool; you said no |
+
+**A non-zero exit is `ok`.** `run`'s job is to run the command and report faithfully, and it
+did both -- the answer was just negative, exactly like `grep` with no matches. A failing test
+is the clearest case: under TDD it is the expected first state, and a harness that calls it a
+failure is disagreeing with the method.
+
+That is not cosmetic. The loop's stall cap counts consecutive turns where every call was
+**refused**, so a model watching its own tests fail is working, while a model the harness
+keeps saying no to is stuck. Before this split, a run could be ended for doing TDD correctly.
+
 ## Adding a tool
 
 One class, one registration. Nothing else in the harness changes.
