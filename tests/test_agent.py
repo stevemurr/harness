@@ -260,3 +260,29 @@ def test_build_protects_nothing_when_sessions_live_elsewhere(
     agent = build(project, ScriptedModel(Message(Role.ASSISTANT, "x")))
 
     assert agent.workspace.protected == ()
+
+
+def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
+    """Measured, not hypothetical. When two plan tools collapsed into one, the prompt kept
+    telling the model to "call write_plan once near the start" and to use ids that no longer
+    existed. Three of four live scenarios obeyed it and were refused -- one wasted turn each,
+    caused entirely by the prompt describing a harness that had moved on. (2026-08-31)
+
+    The same shape has now appeared three times in a day: the machinery and the words about
+    the machinery drifting apart. This is the cheapest place to catch it.
+    """
+    import re
+
+    from harness.agent import SYSTEM_PROMPT, default_registry
+
+    registry, _plan, _modes = default_registry()
+    registered = set(registry.names())
+    # Tool-shaped words: the naming convention every tool here follows.
+    named = {
+        word
+        for word in re.findall(r"\b[a-z]+_[a-z_]+\b", SYSTEM_PROMPT)
+        if word.endswith(("_plan", "_file", "_user", "_mode", "_dir"))
+    }
+
+    assert named, "the prompt should name the tools it tells the model to use"
+    assert named <= registered, f"prompt names tools that do not exist: {named - registered}"

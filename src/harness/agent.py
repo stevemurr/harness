@@ -41,11 +41,10 @@ SYSTEM_PROMPT = """You are a coding agent working in a single folder.
 Work by using the tools, not by describing what should be done. When the task is finished,
 reply with a short summary and no tool calls -- that is what ends the turn.
 
-For work with more than a couple of steps, call write_plan once near the start, then keep it
-current with update_plan -- mark a step in_progress when you start it and completed when it
-is actually done, one in progress at a time. Do not plan a one-step task, and do not rewrite
-the whole plan to tick a box: update_plan changes steps by id and cannot drop the ones you
-did not mention.
+For work with more than a couple of steps, call update_plan once near the start and again
+whenever the state changes. Send the whole list every time -- it replaces the plan rather
+than patching it. Mark a step in_progress when you start it and completed when it is
+actually done, one in progress at a time. Do not plan a one-step task.
 
 Before editing a file, read it. Copy the exact text you intend to replace, including its
 indentation; edit_file refuses an ambiguous match rather than guessing which one you meant.
