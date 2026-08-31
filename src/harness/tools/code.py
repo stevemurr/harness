@@ -115,8 +115,11 @@ class FindDefinition:
             )
         if len(order) > SHOWN:
             lines.append(f"  ... {len(order) - SHOWN} more; narrow with path=")
+        first = order[0]
         lines.append(
-            "\nFor find_references, pass the path and line of the one you mean."
+            f"\nFor find_references, name one of these by its file and line -- e.g. "
+            f'symbol="{first.name}", path="{ctx.paths.relative(first.location.path)}", '
+            f"line={first.location.line}."
         )
         return ToolResult("\n".join(lines))
 
@@ -144,7 +147,10 @@ class FindReferences:
                     "symbol": {"type": "string", "description": "The name, bare."},
                     "path": {
                         "type": "string",
-                        "description": "File where the symbol is defined.",
+                        "description": (
+                            "File where the symbol is defined, as find_definition reported "
+                            "it."
+                        ),
                     },
                     "line": {
                         "type": "integer",
@@ -173,7 +179,14 @@ class FindReferences:
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
 
-        symbol = Symbol(name=args["symbol"], location=Location(path, int(args["line"])))
+        # The bare last segment. `find_definition` displays a qualified name -- it prints
+        # `Registry.run`, because that is what distinguishes it from four other `run`
+        # methods -- so a model passes back what it was shown. Requiring the bare name here
+        # meant the tool refused its own output. Measured: a run asked for exactly the
+        # symbol it had just been given, was told the file must have changed, abandoned the
+        # index and ground through forty-four greps before failing. (2026-08-31)
+        bare = args["symbol"].rpartition(".")[2]
+        symbol = Symbol(name=bare, location=Location(path, int(args["line"])))
         try:
             places = await self.indexes.references(symbol)
         except CodeIndexError as exc:

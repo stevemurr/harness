@@ -438,3 +438,50 @@ async def test_a_path_outside_the_workspace_is_refused_not_failed(project: Path)
 
         assert result.refused, f"{call.name} should refuse a path outside the folder"
         assert not result.ok
+
+
+async def test_find_references_accepts_the_name_find_definition_showed(kit) -> None:
+    """The tool must not refuse its own output.
+
+    `find_definition` prints a qualified name -- `Widget.build`, because that is what
+    distinguishes it from the other `build` -- so a model passes back what it was shown.
+    Requiring the bare name meant a run asked for exactly the symbol it had just been
+    given, was told the file must have changed, abandoned the index and ground through
+    forty-four greps before failing. Read out of a transcript. (2026-08-31)
+    """
+    registry, ctx, _ = kit
+
+    shown = await registry.run(
+        ToolCall("c", "find_definition", {"symbol": "Widget"}), ctx
+    )
+    assert "Widget" in shown.content
+
+    qualified = await registry.run(
+        ToolCall("c", "find_references",
+                 {"symbol": "Widget.build", "path": "shop.py", "line": 4}),
+        ctx,
+    )
+    bare = await registry.run(
+        ToolCall("c", "find_references", {"symbol": "Widget", "path": "shop.py", "line": 4}),
+        ctx,
+    )
+
+    assert qualified.ok, qualified.content
+    assert bare.ok, bare.content
+
+
+async def test_a_wrong_line_says_what_is_there_rather_than_guessing(project: Path) -> None:
+    """The old message asserted the file had changed, which was a guess and was false --
+    and it sent the run off re-reading files it had just read.
+
+    Answered without starting a server: a wrong line is decidable from the file, and the
+    command here does not exist, so this also proves nothing was launched."""
+    index = Pyright(project, Code(commands={"basedpyright": ("no-such-server",)}))
+
+    with pytest.raises(CodeIndexError) as caught:
+        await index.references(
+            Symbol("Widget", Location(project / "shop.py", 1))
+        )
+
+    assert "does not appear" in str(caught.value)
+    assert "class Widget" not in str(caught.value)

@@ -377,14 +377,19 @@ class LspIndex:
 
     async def references(self, symbol: Symbol) -> tuple[Location, ...]:
         path = symbol.location.path
-        await self._ensure()
-        self._open(path)
+        # Before starting anything. A wrong line is answerable from the file alone, and
+        # spinning up a language server -- 272MB of Node, several seconds cold -- to
+        # discover it is work nobody needed.
         column = _column_of(path, symbol.location.line, symbol.name)
         if column is None:
             raise CodeIndexError(
-                f"{symbol.name} is not on {path.name}:{symbol.location.line}. "
-                "Call find_definition again -- the file may have changed since."
+                f"{symbol.name!r} does not appear on {path.name}:{symbol.location.line}, "
+                f"which reads: {_line_text(path, symbol.location.line).strip()[:80]!r}. "
+                "Check the line, or call find_definition again if the file has changed."
             )
+
+        await self._ensure()
+        self._open(path)
         found = await self._ask(
             "textDocument/references",
             {
