@@ -289,6 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         "--threads", action="store_true", help="List recent threads and exit."
     )
     parser.add_argument(
+        "--init-agents",
+        action="store_true",
+        help="Write a starter AGENTS.md in the folder, if it has none. The harness reads "
+        "that file at the start of every run; it is never written without this flag.",
+    )
+    parser.add_argument(
         "--install-servers",
         action="store_true",
         help="Set up the language servers code search uses, under ~/.harness/servers/bin. "
@@ -315,10 +321,25 @@ def main(argv: list[str] | None = None) -> int:
         "your filesystem -- there is no sandbox.",
     )
     args = parser.parse_args(argv)
-    if not args.prompt and not (args.init or args.threads or args.install_servers):
+    if not args.prompt and not (
+        args.init or args.threads or args.install_servers or args.init_agents
+    ):
         parser.error(
-            "a prompt is required unless --init, --threads or --install-servers is given"
+            "a prompt is required unless --init, --init-agents, --threads or "
+            "--install-servers is given"
         )
+
+    if args.init_agents:
+        from harness.environment import write_conventions
+
+        folder = Path(args.folder).expanduser().resolve()
+        written = write_conventions(folder)
+        if written is None:
+            print(dim(f"{folder} already has a conventions file; leaving it alone"))
+        else:
+            print(f"wrote {written}")
+            print(dim("say how to run the tests, and what a newcomer would have to be told"))
+        return 0
 
     if args.install_servers:
         return asyncio.run(_install_servers())

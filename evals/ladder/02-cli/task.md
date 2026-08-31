@@ -9,3 +9,5 @@ Create `wc.py` in this folder, at the top level. It counts a text file:
 - Characters means bytes of the file as read, newlines included.
 
 Print nothing else.
+
+Before you answer, run the tool on a file you create and check every flag.

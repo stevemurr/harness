@@ -12,3 +12,5 @@ the two you renamed.
 
 Be careful: `run` appears over three hundred times in this codebase, and one of the two uses
 you must update does not look like a call at all -- the method is passed as a value.
+
+Before you answer, check that every file still parses.

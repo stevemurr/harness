@@ -11,3 +11,4 @@ build/
 
 # Eval scratch, but the baseline is the point of running it.
 .eval-work/
+evals/runs/

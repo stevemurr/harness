@@ -53,13 +53,16 @@ class FindDefinition:
         default=ToolSpec(
             name="find_definition",
             description=(
-                "Find where a symbol is defined, using a language index rather than text "
-                "search. Give the bare name ('Workspace') or a dotted one "
-                "('Workspace.resolve'). Returns every definition that name could refer to, "
-                "with the file and line of each. Use this before find_references, which "
-                "needs one specific definition. Prefer grep for literal text, for "
-                "non-code files, for regular expressions, and immediately after large "
-                "edits, when the index may be stale."
+                "Find where a symbol is defined, by asking a language index rather than "
+                "searching text. Give the bare name ('Workspace') or a dotted one "
+                "('Workspace.resolve'); you get every definition that name could refer to, "
+                "with the file and line of each. Reach for this first whenever you want a "
+                "definition or need to know what a name refers to: it distinguishes symbols "
+                "that share a name, which grep cannot -- in a codebase of any size `run` is "
+                "dozens of unrelated methods and grep returns hundreds of lines for them. "
+                "Use it before find_references, which needs one specific definition. grep "
+                "remains the right tool for literal text, non-code files and regular "
+                "expressions."
             ),
             parameters=schema(
                 {
@@ -120,11 +123,14 @@ class FindReferences:
         default=ToolSpec(
             name="find_references",
             description=(
-                "Find every use of one symbol, using a language index rather than text "
-                "search. Identify which symbol by the file and line where it is DEFINED -- "
-                "run find_definition first to get them, or use the line you already read. "
-                "A bare name is not enough: many different things share a name, and the "
-                "answer for one of them is the wrong answer for the others."
+                "Find every use of one symbol, by asking a language index rather than "
+                "searching text. Use this before renaming anything, before deleting "
+                "anything, and whenever you need to know what would break -- it finds uses "
+                "grep cannot see, including a method passed as a value rather than called. "
+                "Identify which symbol by the file and line where it is DEFINED: run "
+                "find_definition first, or use the line you already read. A bare name is "
+                "not enough, because many different things share a name and the answer for "
+                "one of them is the wrong answer for the others."
             ),
             parameters=schema(
                 {

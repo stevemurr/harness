@@ -33,6 +33,46 @@ from pathlib import Path
 #: one should not need a third.
 CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md", ".harness.md")
 
+#: What `harness --init-agents` writes when a folder has none.
+#:
+#: Written by a command and never on connect. A harness that created a file in someone's
+#: repository the first time it was pointed at it would be mutating a folder before being
+#: asked to do anything -- in a system whose first commitment is that anything which changes
+#: something asks first, and where "with no approver configured, mutating tools refuse".
+#: The file also belongs to the project rather than to the agent: it is committed, reviewed
+#: and read by other tools, and a harness that writes one unbidden is guessing at a
+#: project's conventions and then quoting itself as the source.
+STARTER_AGENTS = """\
+# Working in this project
+
+<!-- Read by the harness at the start of every run and appended to the system prompt
+     verbatim. Facts about the environment are detected automatically; what belongs here is
+     what a newcomer would have to be told. -->
+
+## Checking your work
+
+Run the tests with: <command>
+Do not answer until they pass.
+
+## Conventions
+
+- <what to do, or not do, that the code does not already say>
+"""
+
+
+def write_conventions(root: Path) -> Path | None:
+    """Write a starter AGENTS.md, or return None if the folder already has one.
+
+    Refuses to overwrite for the same reason `write_example` does: replacing a file someone
+    wrote is not a thing a `--init` flag should ever do by accident.
+    """
+    for name in CONVENTION_FILES:
+        if (root / name).exists():
+            return None
+    target = root / CONVENTION_FILES[0]
+    target.write_text(STARTER_AGENTS, encoding="utf-8")
+    return target
+
 #: Files whose presence says what the project is built with, so the model does not guess.
 #: Facts, not instructions -- `uv.lock` present is a fact; "use uv" is a preference, and
 #: belongs in AGENTS.md.

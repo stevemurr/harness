@@ -8,3 +8,5 @@ Create `server.py` in this folder, at the top level: an HTTP server using only t
 - Anything else -> 404 with a JSON body `{"error": "not found"}`.
 
 Every request counts towards `/count`, whatever its path or method. No third-party packages.
+
+Before you answer, start the server and check each route with curl.

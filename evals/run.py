@@ -31,11 +31,13 @@ from harness.approval import Approvals, Policy
 from harness.config import load
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
+from harness.store.codec import encode
 from harness.tools.base import Registry
 
 LADDER = Path(__file__).parent / "ladder"
 CODE_TOOLS = {"find_definition", "find_references"}
 MUTATING = {"write_file", "edit_file"}
+
 
 
 def _verified_last(sequence: list[str]) -> bool:
@@ -116,6 +118,37 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
     return done.returncode == 0, (tail[0][:200] if tail else "")
 
 
+class Recording:
+    """A provider that remembers what each call cost.
+
+    Wrapping rather than instrumenting: `Provider` is an interface and `Completion` already
+    carries `prompt_tokens` and `sent_chars`, so the size of every request is available
+    without the eval reaching inside the harness. Added because the first real result --
+    one arm five times slower than the other on a quarter more calls -- could not be
+    explained from what was being recorded.
+    """
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.context_window = getattr(inner, "context_window", 0)
+        self.calls: list[dict] = []
+
+    async def complete(self, transcript, tools=()):
+        started = time.monotonic()
+        completion = await self.inner.complete(transcript, tools)
+        self.calls.append({
+            "prompt_tokens": completion.prompt_tokens,
+            "sent_chars": completion.sent_chars,
+            "seconds": round(time.monotonic() - started, 2),
+            "tools_offered": len(tools),
+        })
+        return completion
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
 def provider():
     settings = load()
     return OpenAICompatible(
@@ -128,8 +161,10 @@ def provider():
     )
 
 
-async def attempt(rung: Path, work: Path, *, with_code: bool, max_turns: int) -> dict:
-    model = provider()
+async def attempt(
+    rung: Path, work: Path, *, with_code: bool, max_turns: int, keep: Path | None = None
+) -> dict:
+    model = Recording(provider())
     agent = build(
         work, model,
         approvals=Approvals(policy=Policy(approve_everything=True)),
@@ -180,8 +215,30 @@ async def attempt(rung: Path, work: Path, *, with_code: bool, max_turns: int) ->
     await model.aclose()
     await agent.indexes.aclose()
 
+    if keep is not None:
+        messages = [] if stop == "harness-error" else outcome.transcript.messages
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_text(
+            json.dumps(
+                {
+                    "task": (rung / "task.md").read_text(),
+                    "calls": model.calls,
+                    "transcript": [encode(m) for m in messages],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+    sizes = [c["sent_chars"] for c in model.calls]
+    tokens = [c["prompt_tokens"] for c in model.calls if c["prompt_tokens"]]
     passed, why = verify(rung, work)
     return {
+        "context_peak_chars": max(sizes) if sizes else 0,
+        "context_peak_tokens": max(tokens) if tokens else 0,
+        "context_total_chars": sum(sizes),
+        "model_seconds": round(sum(c["seconds"] for c in model.calls), 1),
+        "model_calls": len(model.calls),
         # Did it check its own work? The rung that failed on `Truncate.__init__() missing
         # a required argument` had made a design change across three files and run one
         # command in fourteen turns. Catching that once is a rung; counting it is a
@@ -215,6 +272,8 @@ async def main() -> None:
     parser.add_argument("--work", default="", help="Where to build. A temp dir by default.")
     parser.add_argument("--no-code", action="store_true", help="Withhold the code tools.")
     parser.add_argument("--both", action="store_true", help="Run each rung with and without.")
+    parser.add_argument("--repeat", type=int, default=1, help="Attempts per rung per arm.")
+    parser.add_argument("--keep", default="evals/runs", help="Where to write transcripts.")
     args = parser.parse_args()
 
     work_root = Path(args.work) if args.work else Path(".eval-work").resolve()
@@ -224,44 +283,80 @@ async def main() -> None:
     results: list[dict] = []
     for rung in rungs(args.only):
         for with_code in arms:
-            work = stage(rung, work_root / ("code" if with_code else "base"))
-            print(f"[{rung.name}/{'code' if with_code else 'base'}] ...", flush=True)
-            row = await attempt(rung, work, with_code=with_code, max_turns=args.max_turns)
-            results.append(row)
-            mark = "PASS" if row["passed"] else "FAIL"
-            print(
-                f"[{rung.name}/{row['arm']}] {mark}  {row['stop']}  turns={row['turns']} "
-                f"calls={row['calls']}  {row['seconds']}s  {row['tools']}"
-                + (f"  <- {row['why']}" if not row["passed"] else ""),
-                flush=True,
-            )
-            Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
+            arm = "code" if with_code else "base"
+            for attempt_number in range(1, args.repeat + 1):
+                work = stage(rung, work_root / arm / str(attempt_number))
+                keep = Path(args.keep) / f"{rung.name}.{arm}.{attempt_number}.json"
+                print(f"[{rung.name}/{arm} {attempt_number}/{args.repeat}] ...", flush=True)
+                row = await attempt(
+                    rung, work, with_code=with_code, max_turns=args.max_turns, keep=keep
+                )
+                row["attempt"] = attempt_number
+                results.append(row)
+                mark = "PASS" if row["passed"] else "FAIL"
+                print(
+                    f"[{rung.name}/{arm} {attempt_number}] {mark}  {row['stop']}  "
+                    f"turns={row['turns']} calls={row['calls']}  {row['seconds']}s  "
+                    f"peak={row['context_peak_chars']:,}c"
+                    + (f"  <- {row['why'][:70]}" if not row["passed"] else ""),
+                    flush=True,
+                )
+                Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
 
     report(results)
     print(f"\nwrote {args.out}")
 
 
+def median(values: list[float]) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
 def report(results: list[dict]) -> None:
-    print("\n" + "=" * 92)
-    print(f"{'rung':<14} {'arm':<5} {'':<4} {'turns':>5} {'calls':>5} {'secs':>6}  tools")
-    print("-" * 92)
+    """Per rung and arm, across attempts.
+
+    Medians rather than means: a single run that stalls until the turn limit would drag a
+    mean somewhere no attempt actually went. And the pass column is a count out of the
+    attempts, because one rung in this ladder passed in one arm and failed in the other on
+    consecutive days -- a single sample there is a coin, not a measurement.
+    """
+    print("\n" + "=" * 100)
+    print(
+        f"{'rung':<22} {'arm':<5} {'pass':>6} {'turns':>6} {'calls':>6} "
+        f"{'secs':>7} {'peak ctx':>9}  code tools"
+    )
+    print("-" * 100)
+    seen: list[tuple[str, str]] = []
     for row in results:
-        tools = " ".join(f"{k}:{v}" for k, v in row["tools"].items())
+        key = (row["rung"], row["arm"])
+        if key in seen:
+            continue
+        seen.append(key)
+        group = [r for r in results if (r["rung"], r["arm"]) == key]
+        passed = sum(1 for r in group if r["passed"])
+        found = sum(v for r in group for k, v in r["tools"].items() if k.startswith("find_"))
         print(
-            f"{row['rung']:<14} {row['arm']:<5} {'PASS' if row['passed'] else 'FAIL':<4} "
-            f"{row['turns']:>5} {row['calls']:>5} {row['seconds']:>6}  {tools[:44]}"
+            f"{row['rung']:<22} {row['arm']:<5} {passed:>3}/{len(group):<2} "
+            f"{median([r['turns'] for r in group]):>6.1f} "
+            f"{median([r['calls'] for r in group]):>6.1f} "
+            f"{median([r['seconds'] for r in group]):>7.1f} "
+            f"{median([r['context_peak_chars'] for r in group]):>9,.0f}  {found}"
         )
-    passed = sum(1 for r in results if r["passed"])
-    print("-" * 92)
-    print(f"{passed}/{len(results)} passed")
+    print("-" * 100)
     for arm in ("code", "base"):
         rows = [r for r in results if r["arm"] == arm]
         if rows:
             print(
                 f"  {arm}: {sum(1 for r in rows if r['passed'])}/{len(rows)} passed, "
-                f"{sum(r['turns'] for r in rows)} turns, "
-                f"{sum(r['calls'] for r in rows)} calls, "
-                f"{round(sum(r['seconds'] for r in rows))}s"
+                f"median {median([r['turns'] for r in rows]):.0f} turns, "
+                f"median {median([r['seconds'] for r in rows]):.0f}s, "
+                f"peak context {median([r['context_peak_chars'] for r in rows]):,.0f} chars, "
+                f"verified-last {sum(1 for r in rows if r['verified_last'])}/{len(rows)}"
             )
 
 

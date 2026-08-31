@@ -6,3 +6,5 @@ Be careful: the word `resolve` appears all over this codebase and almost none of
 method you are renaming. `Path.resolve()` from the standard library, `resolve_approval`,
 `resolve_question`, `resolve_for_write` and a module-level `resolve()` in `harness/server.py`
 are all different things and must be left exactly as they are.
+
+Before you answer, check that `python3 -c "import harness.workspace"` still works.

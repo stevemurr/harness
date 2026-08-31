@@ -7,3 +7,5 @@ Create `greet.py` in this folder, at the top level:
 - A name may contain spaces or non-ASCII characters and must be passed through unchanged.
 
 Create no other files.
+
+Before you answer, run `python3 greet.py World` and check the output.
