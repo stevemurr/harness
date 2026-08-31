@@ -21,19 +21,26 @@ import asyncio
 import contextlib
 import os
 import shlex
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from harness.settings import Shell as ShellSettings
 from harness.tools.base import ToolContext, ToolSpec, schema
 from harness.types import ToolResult
-
-DEFAULT_TIMEOUT = 120
-OUTPUT_LIMIT = 30_000
 
 
 @dataclass(frozen=True, slots=True)
 class Shell:
-    spec: ToolSpec = ToolSpec(
+    """Run a command. Its one tunable comes from `settings`, like every other.
+
+    The default appears in the schema description the model reads, so the spec is built per
+    instance rather than shared on the class: a harness configured with a different timeout
+    should tell the model the timeout it actually has.
+    """
+
+    settings: ShellSettings = field(default_factory=ShellSettings)
+    spec: ToolSpec = field(default=ToolSpec(
         name="run",
         description=(
             "Run a shell command in the workspace directory. Requires the user's approval "
@@ -46,13 +53,22 @@ class Shell:
                 "command": {"type": "string", "description": "The command line to run."},
                 "timeout": {
                     "type": "integer",
-                    "description": f"Seconds before it is killed (default {DEFAULT_TIMEOUT}).",
+                    "description": "Seconds before it is killed.",
                 },
             },
             required=["command"],
         ),
         mutates=True,
-    )
+    ))
+
+    def __post_init__(self) -> None:
+        # Frozen, so the spec is replaced rather than edited -- and only to tell the model
+        # the real default, which is the one number here a caller can change.
+        parameters = deepcopy(self.spec.parameters)
+        parameters["properties"]["timeout"]["description"] = (
+            f"Seconds before it is killed (default {self.settings.timeout})."
+        )
+        object.__setattr__(self, "spec", replace(self.spec, parameters=parameters))
 
     def preview(self, args: dict[str, Any]) -> tuple[str, str]:
         command = args.get("command", "")
@@ -60,7 +76,7 @@ class Shell:
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = args["command"]
-        timeout = int(args.get("timeout", DEFAULT_TIMEOUT))
+        timeout = int(args.get("timeout", self.settings.timeout))
 
         process = await asyncio.create_subprocess_shell(
             command,
@@ -98,10 +114,12 @@ class Shell:
                 f"command timed out after {timeout}s and was killed: {command}", ok=False
             )
 
+        # Not truncated here. The loop cuts every tool result to the turn's budget and
+        # keeps both ends while doing it, and a head-only cut applied first would win --
+        # which is exactly what happened: `go test`'s FAIL and `pytest`'s "5 failed" sit at
+        # the tail, and this method was removing them before the loop could save them. The
+        # output is already wholly in memory by now, so cutting here saved nothing anyway.
         text = stdout.decode("utf-8", errors="replace")
-        if len(text) > OUTPUT_LIMIT:
-            dropped = len(text) - OUTPUT_LIMIT
-            text = f"{text[:OUTPUT_LIMIT]}\n\n[{dropped} more characters truncated]"
 
         code = process.returncode or 0
         body = text.rstrip() or "(no output)"
@@ -145,5 +163,5 @@ def _terminate(process: asyncio.subprocess.Process) -> None:
         process.kill()
 
 
-def shell_tools() -> list[Any]:
-    return [Shell()]
+def shell_tools(settings: ShellSettings | None = None) -> list[Any]:
+    return [Shell(settings or ShellSettings())]

@@ -7,19 +7,11 @@ which is where the predecessor found most of its.
 
 from __future__ import annotations
 
-from harness.loop import (
-    MIN_RESULT,
-    TOOL_OUTPUT_LIMIT,
-    TURN_OUTPUT_LIMIT,
-    AgentLoop,
-    Limits,
-    Turn,
-    parse_arguments,
-    share,
-    system,
-    user,
-)
+from harness.loop import AgentLoop, Turn, parse_arguments, share, system, user
+from harness.settings import Limits, Output
 from harness.types import Message, Role, ToolCall, ToolResult, Transcript
+
+OUT = Output()
 
 
 def scripted(*replies: Message):
@@ -257,7 +249,7 @@ def test_truncation_keeps_the_verdict_at_the_end() -> None:
     "5 failed" at the end, `go test` puts `FAIL` there. Head-only cut off the answer."""
     output = "RUN pytest\n" + ("noise\n" * 20_000) + "5 failed, 200 passed in 12.3s"
 
-    cut = ToolResult(output).truncated(3_000).content
+    cut = ToolResult(output).truncated(3_000, OUT.split_floor).content
 
     assert cut.startswith("RUN pytest")
     assert cut.endswith("5 failed, 200 passed in 12.3s")
@@ -267,13 +259,13 @@ def test_truncation_keeps_the_verdict_at_the_end() -> None:
 def test_truncation_leaves_a_short_result_alone() -> None:
     result = ToolResult("small")
 
-    assert result.truncated(TOOL_OUTPUT_LIMIT) is result
+    assert result.truncated(OUT.per_result, OUT.split_floor) is result
 
 
 def test_a_budget_too_small_to_split_keeps_the_head() -> None:
     """Two fragments of a few hundred characters are both too small to carry a verdict, so
     below the floor it stays one readable piece."""
-    cut = ToolResult("a" * 5_000 + "END").truncated(300).content
+    cut = ToolResult("a" * 5_000 + "END").truncated(300, OUT.split_floor).content
 
     assert not cut.endswith("END")
     assert "more characters truncated" in cut
@@ -281,7 +273,7 @@ def test_a_budget_too_small_to_split_keeps_the_head() -> None:
 
 def test_one_call_still_gets_the_whole_per_result_limit() -> None:
     """The turn budget must not quietly shrink the ordinary case."""
-    assert share([10**9], TURN_OUTPUT_LIMIT, TOOL_OUTPUT_LIMIT) == [TOOL_OUTPUT_LIMIT]
+    assert share([10**9], OUT.per_turn, OUT.per_result, OUT.floor) == [OUT.per_result]
 
 
 def test_a_turn_is_bounded_however_many_calls_it_makes() -> None:
@@ -289,10 +281,10 @@ def test_a_turn_is_bounded_however_many_calls_it_makes() -> None:
     window in one turn, and compaction could not repair it because that turn was the part
     kept verbatim."""
     for count in (2, 5, 24, 100):
-        budgets = share([10**6] * count, TURN_OUTPUT_LIMIT, TOOL_OUTPUT_LIMIT)
+        budgets = share([10**6] * count, OUT.per_turn, OUT.per_result, OUT.floor)
 
-        assert sum(budgets) <= TURN_OUTPUT_LIMIT
-        assert all(b >= MIN_RESULT for b in budgets)
+        assert sum(budgets) <= OUT.per_turn
+        assert all(b >= OUT.floor for b in budgets)
 
 
 def test_short_results_keep_everything_and_fund_the_long_ones() -> None:
@@ -300,17 +292,17 @@ def test_short_results_keep_everything_and_fund_the_long_ones() -> None:
     is enormous. Twenty small reads and one huge one is the common shape of a wide turn."""
     lengths = [50] * 20 + [10**6]
 
-    budgets = share(lengths, TURN_OUTPUT_LIMIT, TOOL_OUTPUT_LIMIT)
+    budgets = share(lengths, OUT.per_turn, OUT.per_result, OUT.floor)
 
     assert budgets[:20] == [50] * 20
-    assert budgets[20] == TOOL_OUTPUT_LIMIT
+    assert budgets[20] == OUT.per_result
 
 
 def test_no_result_is_cut_to_nothing() -> None:
     """A result truncated to zero is not a smaller answer, it is a missing one."""
-    budgets = share([10_000] * 2_000, TURN_OUTPUT_LIMIT, TOOL_OUTPUT_LIMIT)
+    budgets = share([10_000] * 2_000, OUT.per_turn, OUT.per_result, OUT.floor)
 
-    assert all(b >= MIN_RESULT for b in budgets)
+    assert all(b >= OUT.floor for b in budgets)
 
 
 async def test_the_loop_applies_the_turn_budget_across_a_wide_turn() -> None:
@@ -333,4 +325,4 @@ async def test_the_loop_applies_the_turn_budget_across_a_wide_turn() -> None:
     tools = [m for m in transcript.messages if m.role is Role.TOOL]
     assert len(tools) == 24, "every call must still be answered"
     # Allowing for the truncation marker on each result.
-    assert sum(len(m.content) for m in tools) < TURN_OUTPUT_LIMIT + 24 * 200
+    assert sum(len(m.content) for m in tools) < OUT.per_turn + 24 * 200

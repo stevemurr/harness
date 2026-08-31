@@ -10,6 +10,7 @@ import pytest
 from harness.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
 from harness.providers.openai import decode_message, merge_tool_call_deltas
 from harness.runner import ToolRunner, describe
+from harness.settings import Output
 from harness.tools.base import Registry, ToolContext, ToolSpec
 from harness.tools.files import file_tools
 from harness.tools.shell import Shell, _program
@@ -516,6 +517,27 @@ def test_a_result_cannot_be_both_ok_and_refused() -> None:
 
 def test_truncation_keeps_the_refusal_flag() -> None:
     """The loop truncates every result, and a flag lost there would be lost everywhere."""
-    long = ToolResult("x" * 100, ok=False, refused=True).truncated(10)
+    long = ToolResult("x" * 100, ok=False, refused=True).truncated(10, Output().split_floor)
 
     assert long.refused and not long.ok
+
+
+async def test_a_command_verdict_at_the_tail_survives_the_loop(ctx) -> None:
+    """`run` must not truncate: the loop does, and it keeps both ends.
+
+    This regressed once and silently. The shell had its own head-only cut at the same 30k
+    as the loop's, so it ran first and won -- and every test runner puts its answer at the
+    tail. `pytest` says "5 failed, 200 passed" there, `go test` says `FAIL`. The both-ends
+    cut could not save what the shell had already thrown away. One number in two places was
+    two rules. (2026-08-31)
+    """
+    out = Output()
+    command = (
+        "python3 -c \"print('noise\\n' * 20000); print('FAIL: 5 of 200 tests failed')\""
+    )
+
+    result = await Shell().run({"command": command}, ctx)
+    final = result.truncated(out.per_result, out.split_floor)
+
+    assert len(result.content) > out.per_result, "run must hand the loop the whole output"
+    assert "FAIL: 5 of 200 tests failed" in final.content

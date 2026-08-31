@@ -8,6 +8,7 @@ what the harness does onto what a client shows is testable without a socket.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from harness.approval import Decision
 from harness.conversations import Runtime
 from harness.events import Visibility
 from harness.runs import RunStatus, progress_id
+from harness.settings import Limits
 from harness.types import Message, Role, ToolCall
 
 
@@ -134,7 +136,9 @@ async def test_a_run_that_hit_the_turn_limit_did_not_complete(folder, tmp_path) 
     failure `StopReason` exists to prevent."""
     runtime = runtime_for(ScriptedModel(calls(("c1", "list_dir", {}))), tmp_path)
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    conversation.agent.limits.max_turns = 2
+    conversation.agent.settings = replace(
+        conversation.agent.settings, limits=Limits(max_turns=2)
+    )
 
     run = runtime.start(conversation, "go", mode="auto", policy="full-access")
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)

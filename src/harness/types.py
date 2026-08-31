@@ -17,10 +17,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
-#: Below this, a truncation budget cannot make two fragments that are both worth reading,
-#: so the tail is dropped rather than reduced to a shred.
-SPLIT_FLOOR = 1_000
-
 
 class Role(StrEnum):
     SYSTEM = "system"
@@ -99,7 +95,7 @@ class ToolResult:
             # succeeding, so the pair would be describing two different outcomes at once.
             raise ValueError("a refused result cannot also be ok")
 
-    def truncated(self, limit: int) -> ToolResult:
+    def truncated(self, limit: int, split_floor: int) -> ToolResult:
         """Cut to `limit` characters, keeping both ends.
 
         Head-only was the first shape, and it drops exactly the line that matters most
@@ -112,13 +108,15 @@ class ToolResult:
         So the head keeps two thirds and the tail one third, with the gap marked. Codex
         truncates the same way, and for the same reason.
 
-        Below `SPLIT_FLOOR` the budget is too small to make two useful fragments -- which is
+        Below `split_floor` the budget is too small to make two useful fragments -- which is
         reachable now that a turn shares one budget across many calls -- so it stays a head.
+        Passed in rather than read from `settings`, because this module is what everything
+        else is built on and must not import back down the stack.
         """
         if len(self.content) <= limit:
             return self
         dropped = len(self.content) - limit
-        if limit < SPLIT_FLOOR:
+        if limit < split_floor:
             body = f"{self.content[:limit]}\n\n[{dropped} more characters truncated]"
         else:
             head = limit - limit // 3

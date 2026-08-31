@@ -27,7 +27,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from harness.compaction import Compaction
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_HOST,
@@ -42,6 +41,7 @@ from harness.config import Server as ServerSettings
 from harness.conversations import Runtime
 from harness.providers.base import Provider
 from harness.runs import DECISIONS, CommandRefused, Run
+from harness.settings import Settings
 from harness.store.base import Store
 from harness.stream import HEARTBEAT, event_stream
 from harness.workspace import WorkspaceError
@@ -100,7 +100,7 @@ def create_app(
     token: str = "",
     instance_id: str | None = None,
     heartbeat: float = HEARTBEAT,
-    compaction: Compaction | None = None,
+    settings: Settings | None = None,
 ) -> Starlette:
     """The server, with its collaborators handed in.
 
@@ -108,9 +108,7 @@ def create_app(
     scripted model -- which is the practical argument for the interface, separate from the
     design one.
     """
-    runtime = Runtime(
-        provider=provider, store=store, compaction=compaction or Compaction()
-    )
+    runtime = Runtime(provider=provider, store=store, settings=settings or Settings())
     folders = workspaces or Workspaces()
     identity = (
         os.environ.get("ORCA_MANAGED_INSTANCE_ID", "")
@@ -544,11 +542,7 @@ def build_app(args: argparse.Namespace) -> Starlette:
         ),
         store=JsonlStore(THREADS),
         token=settings.server.token,
-        compaction=Compaction(
-            enabled=settings.compaction.enabled,
-            at=settings.compaction.at,
-            keep_turns=settings.compaction.keep_turns,
-        ),
+        settings=settings.settings,
     )
 
 

@@ -55,6 +55,7 @@ src/harness/
   loop.py        the agent loop
   workspace.py   path resolution and containment; tools never resolve their own
   approval.py    what may proceed without asking
+  settings.py    every number worth tuning, in one place
   compaction.py  the render, and when a long run hands off to a smaller context
   runner.py      joins the registry to approvals
   tools/
@@ -380,6 +381,34 @@ failure is disagreeing with the method.
 That is not cosmetic. The loop's stall cap counts consecutive turns where every call was
 **refused**, so a model watching its own tests fail is working, while a model the harness
 keeps saying no to is stuck. Before this split, a run could be ended for doing TDD correctly.
+
+## Tuning it
+
+Every number worth changing lives in `settings.py`, in four groups that match the seams that
+already existed: `Output` (how much a tool may say), `Limits` (how a run may end other than
+the model stopping), `Compaction`, and `Shell`. They compose into one `Settings`, which
+`Agent` holds and hands down in pieces -- the loop gets `limits` and `output`, the shell tool
+gets `shell`. Only the composition root holds all of it, for the same reason `ToolContext` is
+one field: a settings bag every component carries is a component that can reach any knob.
+
+```toml
+[output]
+per_result = 30000     # one tool's answer
+per_turn = 120000      # everything one turn returns, shared across its calls
+
+[limits]
+max_turns = 100
+max_consecutive_refusals = 10
+```
+
+They were module constants until there were enough of them to disagree, and both ways they
+can went wrong first. `shell.py` grew its own `OUTPUT_LIMIT = 30_000` beside the loop's
+`TOOL_OUTPUT_LIMIT = 30_000`, and they were not the same rule: the shell cut head-only
+before the loop saw the output, so when the loop learned to keep both ends -- so `pytest`'s
+"5 failed" at the tail survives -- shell output was the one case it could not fix. And
+`cli.py` and `server.py` each rebuilt the compaction settings field by field out of a
+config-local twin, in two places kept in step by hand, which is the bug `config.py` opens by
+describing. One type now, read from the file and handed over whole.
 
 ## Adding a tool
 

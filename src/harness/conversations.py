@@ -36,7 +36,6 @@ from uuid import uuid4
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals
-from harness.compaction import Compaction
 from harness.events import Visibility
 from harness.loop import Observer, Turn
 from harness.mode import NORMAL, PLAN, ModeState
@@ -44,6 +43,7 @@ from harness.plan import Plan
 from harness.providers.base import Provider
 from harness.runner import describe
 from harness.runs import CommandRefused, Run, RunStatus, one_line, policy_for, progress_id
+from harness.settings import Settings
 from harness.store.base import Store
 from harness.tools.ask import Questioner
 from harness.tools.base import Registry, Tool, ToolContext, ToolSpec
@@ -278,7 +278,7 @@ def open_conversation(
     workspace_id: str,
     provider: Provider,
     store: Store,
-    compaction: Compaction | None = None,
+    settings: Settings | None = None,
 ) -> Conversation:
     """Build the agent for one conversation, with the front end's collaborators in place.
 
@@ -304,7 +304,7 @@ def open_conversation(
         modes=modes,
         store=store,
         observers=[observer_for(live)],
-        compaction=compaction or Compaction(),
+        settings=settings or Settings(),
         on_compaction=compaction_reporter(live),
     )
     return Conversation(
@@ -347,7 +347,7 @@ class Runtime:
     #: Threaded rather than defaulted, because `[compaction] enabled = false` has to mean the
     #: same thing through `harness-serve` as through `harness`. A setting one front end reads
     #: and the other does not is the bug `config.py` was written about.
-    compaction: Compaction = field(default_factory=Compaction)
+    settings: Settings = field(default_factory=Settings)
     conversations: dict[str, Conversation] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
 
@@ -366,7 +366,7 @@ class Runtime:
             workspace_id,
             self.provider,
             self.store,
-            self.compaction,
+            self.settings,
         )
         self.conversations[thread_id] = opened
         return opened

@@ -29,7 +29,6 @@ from pathlib import Path
 
 from harness.approval import Approvals
 from harness.compaction import (
-    Compaction,
     State,
     anchor_for,
     chars,
@@ -38,11 +37,12 @@ from harness.compaction import (
     view,
 )
 from harness.environment import describe
-from harness.loop import AgentLoop, Limits, Observer, Outcome, Turn, system, user
+from harness.loop import AgentLoop, Observer, Outcome, Turn, system, user
 from harness.mode import NORMAL, Mode, ModeState
 from harness.plan import Plan
 from harness.providers.base import Provider
 from harness.runner import ToolRunner
+from harness.settings import Settings
 from harness.store.base import Store
 from harness.tools.ask import Questioner
 from harness.tools.base import Registry, ToolContext, ToolSpec
@@ -84,7 +84,10 @@ class Agent:
     approvals: Approvals
     store: Store | None = None
     observers: list[Observer] = field(default_factory=list)
-    limits: Limits = field(default_factory=Limits)
+    #: Every number this run may be tuned by, in one object. Handed down in pieces -- the
+    #: loop gets `limits` and `output`, the shell tool gets `shell` -- so only this
+    #: composition root ever holds all of it.
+    settings: Settings = field(default_factory=Settings)
     system_prompt: str = SYSTEM_PROMPT
     #: The checklist the plan tools write, exposed so a front end can render it. Nothing in
     #: the loop reads it and no outcome depends on it -- see `tests/test_plan.py`. It is here
@@ -93,9 +96,6 @@ class Agent:
     #: What the agent may do. A person sets this, never the model -- the model can only ask
     #: to leave plan mode, and a person answers.
     modes: ModeState = field(default_factory=ModeState)
-    #: When to compact. A person sets this too, and for the same reason: compaction decides
-    #: what the model is allowed to forget, which is not a decision to hand the model.
-    compaction: Compaction = field(default_factory=Compaction)
     #: Told when a compaction happened, with the summary and what it saved. Optional and
     #: ordinary, like every other collaborator: the CLI prints a line, a server publishes an
     #: event, a script passes nothing.
@@ -151,14 +151,15 @@ class Agent:
         loop = AgentLoop(
             # Tools are chosen per call rather than once, because the mode can change
             # mid-run: approving a plan unlocks the writing tools from the next turn on.
-            complete=self._completer(thread_id, State()),
+            complete=self._completer(thread_id, State(self.settings.compaction)),
             run_tool=ToolRunner(
                 self.registry,
                 ToolContext(paths=self.workspace),
                 self.approvals,
                 modes=self.modes,
             ).run,
-            limits=self.limits,
+            limits=self.settings.limits,
+            output=self.settings.output,
             observers=[*self.observers, self._recorder(thread_id)],
         )
         return await loop.run(transcript)
@@ -181,7 +182,7 @@ class Agent:
             rendered = view(transcript)
 
             if state.should_compact(
-                rendered, self.compaction, window
+                rendered, self.settings.compaction, window
             ) and await self._compact(transcript, thread_id, state, window):
                 rendered = view(transcript)
 
@@ -222,8 +223,8 @@ class Agent:
         # Never below one turn. The newest messages are tool results the model has not read
         # yet, and a tail that still does not fit is a reason to compact everything in front
         # of it, not a reason to give up.
-        budget = self.compaction.threshold(window) / 2
-        keep = max(self.compaction.keep_turns, 1)
+        budget = self.settings.compaction.threshold(window) / 2
+        keep = max(self.settings.compaction.keep_turns, 1)
         while True:
             anchor, start = anchor_for(messages, keep)
             if keep <= 1 or state.meter.estimate(Transcript(messages[start:])) <= budget:

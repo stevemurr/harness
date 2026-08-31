@@ -20,7 +20,6 @@ from pathlib import Path
 
 from harness.agent import build
 from harness.approval import Approvals, Decision, Policy, Request
-from harness.compaction import SEED_CHARS_PER_TOKEN, Compaction
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
@@ -33,6 +32,7 @@ from harness.config import (
 from harness.loop import Turn
 from harness.mode import NORMAL, PLAN
 from harness.providers.openai import OpenAICompatible
+from harness.settings import Compaction
 from harness.store import JsonlStore
 from harness.store.base import StoreError
 
@@ -94,7 +94,7 @@ def report_compaction(summary: str, before: int, after: int) -> None:
     Nothing is lost from the transcript -- the file still holds every turn -- and this line
     is what tells someone that, if they wonder.
     """
-    tokens = lambda n: int(n / SEED_CHARS_PER_TOKEN)  # noqa: E731
+    tokens = lambda n: int(n / Compaction().seed_chars_per_token)  # noqa: E731
     print(
         dim(
             f"\ncompacted context · ~{tokens(before):,} → ~{tokens(after):,} tokens · "
@@ -205,11 +205,7 @@ async def main_async(args: argparse.Namespace) -> int:
         # is a better answer than a hang.
         ask=ask_user if sys.stdin.isatty() else None,
     )
-    agent.compaction = Compaction(
-        enabled=stored.compaction.enabled,
-        at=stored.compaction.at,
-        keep_turns=stored.compaction.keep_turns,
-    )
+    agent.settings = stored.settings
     agent.on_compaction = report_compaction
 
     print(dim(f"harness · {provider.name} · {agent.workspace.root}"))

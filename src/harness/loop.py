@@ -25,35 +25,17 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from harness.types import Message, Role, StopReason, ToolCall, ToolResult, Transcript
+from harness.settings import Limits, Output
+from harness.types import (
+    Message,
+    Role,
+    StopReason,
+    ToolCall,
+    ToolResult,
+    Transcript,
+)
 
 log = logging.getLogger(__name__)
-
-#: How much of one tool's output the model sees. Beyond this the middle is repetition that
-#: costs context the run needs later; `ToolResult.truncated` keeps both ends, because the
-#: verdict of a test run is at the tail.
-TOOL_OUTPUT_LIMIT = 30_000
-
-#: How much output one *turn* may add, across every call in it. The per-result cap alone
-#: leaves a turn unbounded, because nothing caps how many calls a model asks for at once,
-#: and a tool call cannot simply be dropped -- every one must be answered or the provider
-#: rejects the transcript.
-#:
-#: Measured against a live gateway: one turn issued ~24 parallel `read_file` calls and took
-#: the context from 3% to 304% of the window in a single step. Compaction could not repair
-#: it either, because the newest turn is kept verbatim and that turn was 53k tokens on its
-#: own -- so compaction correctly declined, having nothing it could remove. A threshold
-#: cannot catch a jump that happens between two measurements; bounding the jump can.
-#:
-#: Four times the per-result cap, so a turn may carry several full-size results but not two
-#: dozen. At ~3.7 characters per token that is ~32k tokens, which fits inside the 20% of a
-#: window left above the compaction threshold. (2026-08-31)
-TURN_OUTPUT_LIMIT = 120_000
-
-#: No result is cut below this, even in a turn with too many calls to fund them all. A
-#: result truncated to nothing is not a smaller answer but a missing one.
-MIN_RESULT = 200
-
 
 @dataclass(frozen=True, slots=True)
 class Turn:
@@ -68,27 +50,6 @@ class Outcome:
     transcript: Transcript
     stop: StopReason
     turns: int
-
-
-@dataclass
-class Limits:
-    """Every way a run is allowed to end other than the model stopping.
-
-    Each one is a real termination the caller can distinguish, not a safety net nobody
-    reads. `max_consecutive_refusals` is the one that earns its place least obviously: a
-    model that cannot get a tool to work will keep trying with the same broken argument
-    until the turn limit, burning the whole budget on one mistake.
-
-    It counts REFUSALS, not failures, and the difference matters. A failing test is not a
-    stuck agent -- under TDD it is the expected first state, and a model that writes a test,
-    watches it fail, and then makes it pass has done the right thing twice. Counting that
-    towards a stall would end runs for working correctly. What signals a stall is the harness
-    saying no over and over: the same bad arguments, the same withheld tool, the same path
-    outside the folder. (2026-08-31)
-    """
-
-    max_turns: int = 100
-    max_consecutive_refusals: int = 10
 
 
 ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]
@@ -113,6 +74,9 @@ class AgentLoop:
     complete: Callable[[Transcript], Awaitable[Message]]
     run_tool: ToolRunner
     limits: Limits = field(default_factory=Limits)
+    #: How much the turn's tools may say, in total and each. Injected for the same reason
+    #: `limits` is: it is a number someone tunes, not a fact about the loop.
+    output: Output = field(default_factory=Output)
     observers: list[Observer] = field(default_factory=list)
 
     async def run(self, transcript: Transcript) -> Outcome:
@@ -210,11 +174,12 @@ class AgentLoop:
         # and how much each result may keep is not known until every length is.
         budgets = share(
             [len(result.content) for _, result in answered],
-            TURN_OUTPUT_LIMIT,
-            TOOL_OUTPUT_LIMIT,
+            self.output.per_turn,
+            self.output.per_result,
+            self.output.floor,
         )
         return tuple(
-            (call, result.truncated(budget))
+            (call, result.truncated(budget, self.output.split_floor))
             for (call, result), budget in zip(answered, budgets, strict=True)
         )
 
@@ -233,7 +198,7 @@ class AgentLoop:
                 log.exception("observer failed")
 
 
-def share(lengths: list[int], total: int, cap: int) -> list[int]:
+def share(lengths: list[int], total: int, cap: int, floor: int) -> list[int]:
     """Split one turn's output budget across its results, fairly.
 
     Every result may keep at most `cap`, and the turn may keep at most `total`. An equal
@@ -248,7 +213,7 @@ def share(lengths: list[int], total: int, cap: int) -> list[int]:
     remaining, left = min(total, cap * len(lengths)), len(lengths)
     budgets = [0] * len(lengths)
     for index in sorted(range(len(lengths)), key=lambda i: lengths[i]):
-        allowance = max(min(cap, remaining // max(left, 1)), MIN_RESULT)
+        allowance = max(min(cap, remaining // max(left, 1)), floor)
         budgets[index] = min(lengths[index], allowance)
         remaining -= budgets[index]
         left -= 1

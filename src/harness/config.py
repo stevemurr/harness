@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from harness.settings import Compaction, Limits, Output, Settings
+
 DEFAULT_PATH = Path("~/.harness/config.toml")
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o"
@@ -50,7 +52,9 @@ DEFAULT_CONTEXT_WINDOW = 262_144
 _PROVIDER_KEYS = frozenset({"base_url", "model", "api_key", "extra_body", "context_window"})
 _SERVER_KEYS = frozenset({"host", "port", "token"})
 _COMPACTION_KEYS = frozenset({"enabled", "at", "keep_turns"})
-_TABLES = frozenset({"provider", "server", "compaction"})
+_OUTPUT_KEYS = frozenset({"per_result", "per_turn"})
+_LIMITS_KEYS = frozenset({"max_turns", "max_consecutive_refusals"})
+_TABLES = frozenset({"provider", "server", "compaction", "output", "limits"})
 
 
 class ConfigError(Exception):
@@ -78,19 +82,14 @@ class Server:
 
 
 @dataclass(frozen=True, slots=True)
-class CompactionSettings:
-    """When to hand off to a smaller context. See `harness/compaction.py`."""
-
-    enabled: bool = True
-    at: float = 0.8
-    keep_turns: int = 2
-
-
-@dataclass(frozen=True, slots=True)
 class Config:
     provider: Provider = field(default_factory=Provider)
     server: Server = field(default_factory=Server)
-    compaction: CompactionSettings = field(default_factory=CompactionSettings)
+    #: The runtime's own settings type, not a copy of it. There was a copy: `cli.py` and
+    #: `server.py` each rebuilt `Compaction` field by field out of a config-local twin, in
+    #: two places that had to be kept in step by hand -- which is the bug this module opens
+    #: by describing. One type, read here, handed to `Agent` whole.
+    settings: Settings = field(default_factory=Settings)
     #: Where this came from, or None. Front ends print it so a surprising setting is
     #: traceable to a file rather than guessed at.
     path: Path | None = None
@@ -121,6 +120,8 @@ def load(path: Path | None = None) -> Config:
     provider_table = _table(raw, "provider", _PROVIDER_KEYS, resolved)
     server_table = _table(raw, "server", _SERVER_KEYS, resolved)
     compaction_table = _table(raw, "compaction", _COMPACTION_KEYS, resolved)
+    output_table = _table(raw, "output", _OUTPUT_KEYS, resolved)
+    limits_table = _table(raw, "limits", _LIMITS_KEYS, resolved)
 
     extra = provider_table.get("extra_body", {})
     if not isinstance(extra, dict):
@@ -147,16 +148,33 @@ def load(path: Path | None = None) -> Config:
             port=int(server_table.get("port") or DEFAULT_PORT),
             token=str(server_table.get("token") or ""),
         ),
-        compaction=CompactionSettings(
-            # `is None` rather than `or`: `enabled = false` is the whole point of the key,
-            # and `or` would read it as absent and turn compaction back on.
-            enabled=(
-                True
-                if compaction_table.get("enabled") is None
-                else bool(compaction_table["enabled"])
+        settings=Settings(
+            compaction=Compaction(
+                # `is None` rather than `or`: `enabled = false` is the whole point of the
+                # key, and `or` would read it as absent and turn compaction back on.
+                enabled=(
+                    True
+                    if compaction_table.get("enabled") is None
+                    else bool(compaction_table["enabled"])
+                ),
+                at=float(compaction_table.get("at") or Compaction().at),
+                keep_turns=int(
+                    compaction_table.get("keep_turns") or Compaction().keep_turns
+                ),
             ),
-            at=float(compaction_table.get("at") or 0.8),
-            keep_turns=int(compaction_table.get("keep_turns") or 2),
+            output=Output(
+                per_result=int(
+                    output_table.get("per_result") or Output().per_result
+                ),
+                per_turn=int(output_table.get("per_turn") or Output().per_turn),
+            ),
+            limits=Limits(
+                max_turns=int(limits_table.get("max_turns") or Limits().max_turns),
+                max_consecutive_refusals=int(
+                    limits_table.get("max_consecutive_refusals")
+                    or Limits().max_consecutive_refusals
+                ),
+            ),
         ),
         path=resolved,
     )
@@ -231,7 +249,17 @@ def write_example(path: Path | None = None) -> Path:
         "# [compaction]\n"
         "# enabled = true\n"
         "# at = 0.8\n"
-        "# keep_turns = 2\n",
+        "# keep_turns = 2\n"
+        "\n"
+        "# How much a tool may say: one result, and one whole turn across all its calls.\n"
+        "# [output]\n"
+        "# per_result = 30000\n"
+        "# per_turn = 120000\n"
+        "\n"
+        "# How a run may end other than the model stopping.\n"
+        "# [limits]\n"
+        "# max_turns = 100\n"
+        "# max_consecutive_refusals = 10\n",
         encoding="utf-8",
     )
     os.chmod(resolved, 0o600)

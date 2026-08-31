@@ -19,18 +19,11 @@ import pytest
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals, Policy
-from harness.compaction import (
-    MODE_NOTES,
-    Compaction,
-    Meter,
-    State,
-    anchor_for,
-    digest,
-    view,
-)
+from harness.compaction import MODE_NOTES, Meter, State, anchor_for, digest, view
 from harness.conversations import _ending
 from harness.loop import system, user
 from harness.providers.base import Completion, ProviderError
+from harness.settings import Compaction, Settings
 from harness.store import JsonlStore, MemoryStore
 from harness.types import Message, Role, StopReason, ToolCall, Transcript
 from harness.workspace import Workspace
@@ -351,7 +344,9 @@ async def test_nothing_changes_when_compaction_is_switched_off(folder: Path) -> 
     model = Model(*[reads()] * 4,
                   Message(Role.ASSISTANT, "done"), context_window=20_000)
 
-    await agent_over(folder, model, compaction=Compaction(enabled=False)).run("go")
+    off = Settings(compaction=Compaction(enabled=False))
+
+    await agent_over(folder, model, settings=off).run("go")
 
     assert model.summarised == []
 

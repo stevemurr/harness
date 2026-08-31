@@ -32,6 +32,7 @@ import json
 from dataclasses import dataclass, field
 from hashlib import sha256
 
+from harness.settings import Compaction
 from harness.store.codec import encode
 from harness.types import Message, Role, Transcript
 
@@ -109,39 +110,6 @@ MODE_NOTES = {
 
 def handoff_prompt(planning: bool) -> str:
     return HANDOFF_PROMPT.format(mode=MODE_NOTES[planning])
-
-#: Characters per token before any real measurement, and the number every *resume* starts
-#: from -- the first call after a resume sends the largest transcript the thread will ever
-#: send. Deliberately conservative: code, JSON tool arguments and `grep` output tokenise
-#: nearer 2.5-3.0 than the 4.0 that gets quoted for prose, and over-reading compacts early
-#: while under-reading does not compact at all.
-SEED_CHARS_PER_TOKEN = 2.5
-
-#: A measured ratio outside this band is not believed. Not hypothetical: LM Studio and some
-#: llama.cpp builds report `prompt_tokens: 0`, and LiteLLM can report it net of a cached
-#: prefix. Taken at face value, a near-zero ratio makes every estimate ~0 and silently turns
-#: compaction off for the life of the process -- the worst failure this file can have,
-#: because it looks exactly like nothing being wrong.
-MIN_RATIO, MAX_RATIO = 1 / 6, 1 / 1.5
-
-
-@dataclass(frozen=True, slots=True)
-class Compaction:
-    """When to compact, and how much to keep verbatim."""
-
-    enabled: bool = True
-    #: Fraction of the window at which to compact. The headroom above it has to absorb one
-    #: whole turn, because the estimate is necessarily taken before the turn that grows the
-    #: transcript.
-    at: float = 0.8
-    #: How many trailing turns survive verbatim. Not zero: compaction fires at the top of a
-    #: turn, so the last thing in the transcript is a set of tool results the model has not
-    #: read yet, and summarising those is where lossiness is guaranteed to hurt.
-    keep_turns: int = 2
-
-    def threshold(self, context_window: int) -> float:
-        return self.at * context_window
-
 
 def digest(message: Message) -> str:
     """A message's identity, for a boundary to point at.
@@ -247,7 +215,12 @@ class Meter:
     biases towards compacting early, which is the safe direction.
     """
 
-    ratio: float = 1 / SEED_CHARS_PER_TOKEN
+    settings: Compaction = field(default_factory=Compaction)
+    ratio: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.ratio <= 0:
+            self.ratio = 1 / self.settings.seed_chars_per_token
 
     def estimate(self, transcript: Transcript) -> float:
         return self.ratio * chars(transcript)
@@ -263,7 +236,7 @@ class Meter:
         if not prompt_tokens or sent_chars <= 0:
             return
         candidate = prompt_tokens / sent_chars
-        if MIN_RATIO <= candidate <= MAX_RATIO:
+        if self.settings.min_ratio <= candidate <= self.settings.max_ratio:
             self.ratio = candidate
 
 
@@ -286,12 +259,16 @@ class State:
     which declares itself inert.
     """
 
-    meter: Meter = field(default_factory=Meter)
+    settings: Compaction = field(default_factory=Compaction)
+    meter: Meter = field(init=False)
     #: Set after a compaction that did not get under the threshold, and cleared as soon as
     #: an estimate comes in under it. Without it a run that cannot be compacted small enough
     #: pays for a full-context summary every few turns for the rest of its life -- dozens of
     #: the most expensive request the system makes, none of which reduce anything.
     exhausted: bool = False
+
+    def __post_init__(self) -> None:
+        self.meter = Meter(self.settings)
 
     def should_compact(self, rendered: Transcript, settings: Compaction, window: int) -> bool:
         if not settings.enabled or window <= 0:
