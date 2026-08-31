@@ -41,6 +41,30 @@ MUTATING = {"write_file", "edit_file"}
 
 
 
+def _recoveries(sequence: list[tuple[str, bool, bool]]) -> tuple[int, int]:
+    """Calls that did not succeed, split by whether the run made them good.
+
+    A refusal the model recovers from is a behaviour worth counting and not a mark against
+    the run: the harness already treats it that way -- `consecutive_refusals` resets the
+    moment anything in a turn succeeds -- and the eval should agree. Measured on a real
+    transcript: a model mistyped an absolute path, was refused, retried it correctly and
+    carried on. Counting that beside an unrecovered failure made a working run look worse
+    than it was, and made a retry look like extra effort.
+
+    Recovered means a later call to the same tool succeeded. Not the same arguments,
+    deliberately: the point of a retry is that the arguments change.
+    """
+    recovered = unrecovered = 0
+    for index, (name, ok, _) in enumerate(sequence):
+        if ok:
+            continue
+        if any(later == name and fine for later, fine, _ in sequence[index + 1 :]):
+            recovered += 1
+        else:
+            unrecovered += 1
+    return recovered, unrecovered
+
+
 def _verified_last(sequence: list[str]) -> bool:
     """Whether anything was run after the last edit.
 
@@ -222,13 +246,14 @@ async def attempt(
     failed: Counter[str] = Counter()
     refused: Counter[str] = Counter()
     compactions = 0
-    #: Every tool call in order, so the run can be asked whether it checked its own work.
-    sequence: list[str] = []
+    #: Every tool call in order with how it went, so the run can be asked whether it
+    #: checked its own work and whether it recovered from what went wrong.
+    sequence: list[tuple[str, bool, bool]] = []
 
     def watch(turn) -> None:
         for call, result in turn.results:
             used[call.name] += 1
-            sequence.append(call.name)
+            sequence.append((call.name, result.ok, result.refused))
             if result.refused:
                 refused[call.name] += 1
             elif not result.ok:
@@ -283,8 +308,10 @@ async def attempt(
         # command in fourteen turns. Catching that once is a rung; counting it is a
         # measurement, and the system prompt already tells the model to do it -- "treat
         # completion as unproven and check it against the actual state of the folder".
-        "verified_last": _verified_last(sequence),
-        "mutations": sum(sequence.count(t) for t in MUTATING),
+        "verified_last": _verified_last([name for name, _, _ in sequence]),
+        "mutations": sum(1 for name, _, _ in sequence if name in MUTATING),
+        "recovered": _recoveries(sequence)[0],
+        "unrecovered": _recoveries(sequence)[1],
         "rung": rung.name,
         "tests": _meta(rung)["tests"],
         "commit": commit(),
@@ -410,7 +437,9 @@ def report(results: list[dict]) -> None:
                 f"median {median([r['turns'] for r in rows]):.0f} turns, "
                 f"median {median([r['seconds'] for r in rows]):.0f}s, "
                 f"peak context {median([r['context_peak_chars'] for r in rows]):,.0f} chars, "
-                f"verified-last {sum(1 for r in rows if r['verified_last'])}/{len(rows)}"
+                f"verified-last {sum(1 for r in rows if r['verified_last'])}/{len(rows)}, "
+                f"recovered {sum(r.get('recovered', 0) for r in rows)} / "
+                f"unrecovered {sum(r.get('unrecovered', 0) for r in rows)}"
             )
 
 
