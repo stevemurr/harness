@@ -1,39 +1,42 @@
 #!/bin/sh
 set -eu
-# Five call sites, not three. `Workspace.resolve` is called through `ctx.paths` from the
-# tools AND through `self` from inside the class -- and the second kind is exactly what a
-# textual search for "paths.resolve(" misses. This grader got that wrong first time round,
-# which is the mistake the rung exists to punish, so the count is now the one the language
-# gives: workspace.py x2, tools/code.py x2, tools/files.py x1.
-marks=$(grep -rn --include='*.py' "# resolves a caller path" harness/ | wc -l | tr -d ' ')
-test "$marks" = "5"
+# The expected set is derived from the source rather than written down. This rung reads
+# `src/harness` live, so "there are five call sites" is true until someone adds a sixth --
+# and a rung that hardcodes it starts grading the last commit instead of the model.
 
 python3 - <<'EOF'
 import pathlib, re, sys
 
-CALL = re.compile(r"(self|ctx\.paths|self\.paths|paths)\.resolve\(")
-marked = []
+# A call to `resolve` with an argument is the Workspace method. A bare `.resolve()` is
+# pathlib, and `strict=` is pathlib's own keyword -- the one argument that is not ours.
+CALL = re.compile(r"\.resolve\([^)]")
+MARK = "# resolves a caller path"
+
+expected, marked = set(), {}
 for path in sorted(pathlib.Path("harness").rglob("*.py")):
     lines = path.read_text().splitlines()
     for i, line in enumerate(lines):
-        if "# resolves a caller path" in line:
-            following = lines[i + 1] if i + 1 < len(lines) else ""
-            marked.append((str(path), i + 2, following.strip()))
+        if CALL.search(line) and "strict=" not in line:
+            expected.add((str(path), i + 1))
+        if MARK in line:
+            marked[(str(path), i + 2)] = (lines[i + 1] if i + 1 < len(lines) else "")
 
-wrong = [m for m in marked if not CALL.search(m[2])]
-if wrong:
-    sys.exit(f"marked a line that is not a Workspace.resolve call: {wrong}")
-if len(marked) != 5:
-    sys.exit(f"expected 5 marks, found {len(marked)}: {marked}")
-files = {m[0] for m in marked}
-if not {"harness/workspace.py", "harness/tools/code.py", "harness/tools/files.py"} <= files:
-    sys.exit(f"missed a file that calls it: {sorted(files)}")
+if not expected:
+    sys.exit("no call sites found at all -- the source or the pattern is wrong")
+
+missed = expected - set(marked)
+spurious = set(marked) - expected
+if missed:
+    sys.exit(f"call sites not marked: {sorted(missed)}")
+if spurious:
+    sys.exit(f"marked something that is not a call site: {sorted(spurious)}")
 EOF
 
 # Nothing else changed: the module still imports and behaves, decoys intact.
 python3 - <<'EOF'
-import tempfile, pathlib
+import pathlib, tempfile
 from harness.workspace import Workspace
+
 root = pathlib.Path(tempfile.mkdtemp())
 (root / "a.txt").write_text("hi")
 w = Workspace.at(root)

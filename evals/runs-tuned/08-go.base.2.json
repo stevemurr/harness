@@ -1,0 +1,149 @@
+{
+  "task": "This is a Go module. Add `Wrap(text string, width int) []string` to the `text` package,\nwrapping text into lines of at most `width` characters, breaking only at spaces:\n\n- Never split a word. A word longer than `width` goes on a line of its own, whole.\n- Runs of whitespace collapse; no line begins or ends with a space.\n- Empty or whitespace-only input returns an empty slice, not a slice holding one empty\n  string.\n- A width of zero or less returns nil.\n\nWrite a table-driven test covering those cases, in the same package. Run `go test ./...`\nuntil it passes.\n",
+  "calls": [
+    {
+      "prompt_tokens": 2241,
+      "sent_chars": 8599,
+      "seconds": 1.25,
+      "tools_offered": 9
+    },
+    {
+      "prompt_tokens": 2534,
+      "sent_chars": 9939,
+      "seconds": 3.09,
+      "tools_offered": 9
+    },
+    {
+      "prompt_tokens": 2847,
+      "sent_chars": 11280,
+      "seconds": 8.72,
+      "tools_offered": 9
+    },
+    {
+      "prompt_tokens": 3752,
+      "sent_chars": 14741,
+      "seconds": 0.94,
+      "tools_offered": 9
+    },
+    {
+      "prompt_tokens": 3819,
+      "sent_chars": 15073,
+      "seconds": 2.18,
+      "tools_offered": 9
+    }
+  ],
+  "transcript": [
+    {
+      "role": "system",
+      "content": "You are a coding agent working in a single folder.\n\nWork by using the tools, not by describing what should be done. When the task is finished,\nreply with a short summary and no tool calls -- that is what ends the turn.\n\nFor work with more than a couple of steps, call update_plan once near the start and again\nwhenever the state changes. Send the whole list every time -- it replaces the plan rather\nthan patching it. Mark a step in_progress when you start it and completed when it is\nactually done, one in progress at a time. Do not plan a one-step task.\n\nBefore editing a file, read it. Copy the exact text you intend to replace, including its\nindentation; edit_file refuses an ambiguous match rather than guessing which one you meant.\n\nTreat completion as unproven, and prove it by running something rather than by re-reading\nwhat you wrote. If the project has tests, run them, and do not answer until they pass -- an\nedit you have not executed is a guess. If it has no tests, run the thing you changed. Do\nthis after your LAST edit, not before it: work checked and then changed again is unchecked.\nMatch the scope of your check to the scope of your claim, and if you cannot make it pass,\nsay so plainly and say what is failing.\n\n`run` executes shell commands with the user's own authority and is not sandboxed. The user\napproves each one, so make the command say plainly what it does, and do not run anything\ndestructive or anything outside the folder without explaining why first.\n\n\n# Environment\n\nWorking folder: /Users/murr/Code/github.com/stevemurr/harness/.eval-work/base/2/08-go\n\n**Use relative paths.** `src/main.py`, not the absolute path above. Every file tool resolves relative paths against that folder, and `run` already executes there -- you never need to `cd` into it. The absolute path is given so you can recognise it in output, not so you can retype it: one wrong character in a long path creates a second folder you cannot see, and the work ends up split between them.\n\nIt is not a sandbox -- `run` executes with the user's own authority -- so if you do need to leave the folder, say why first.\n\nPlatform: darwin 27.0.0\nPython (this harness): 3.13.9\n`python` on PATH is 3.13.9.\nGit: not a repository\nProject files present: go.mod\nContents: AGENTS.md, go.mod, text.go, text_test.go\n\n# AGENTS.md\n\n# Working in this project\n\nRun the tests with `go test ./...` from this folder. Do not answer until they pass.\n\nTable-driven tests are the convention here.\n"
+    },
+    {
+      "role": "user",
+      "content": "This is a Go module. Add `Wrap(text string, width int) []string` to the `text` package,\nwrapping text into lines of at most `width` characters, breaking only at spaces:\n\n- Never split a word. A word longer than `width` goes on a line of its own, whole.\n- Runs of whitespace collapse; no line begins or ends with a space.\n- Empty or whitespace-only input returns an empty slice, not a slice holding one empty\n  string.\n- A width of zero or less returns nil.\n\nWrite a table-driven test covering those cases, in the same package. Run `go test ./...`\nuntil it passes.\n"
+    },
+    {
+      "role": "assistant",
+      "content": "Let me start by reading the existing files to understand the current state of the code.",
+      "tool_calls": [
+        {
+          "call_id": "chatcmpl-tool-beee6996e5ec9f64",
+          "name": "read_file",
+          "arguments": {
+            "path": "text.go"
+          }
+        },
+        {
+          "call_id": "chatcmpl-tool-a1f503fffaefb590",
+          "name": "read_file",
+          "arguments": {
+            "path": "text_test.go"
+          }
+        },
+        {
+          "call_id": "chatcmpl-tool-908e828735d4b7f1",
+          "name": "read_file",
+          "arguments": {
+            "path": "go.mod"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "     1\t// Package text holds small string helpers.\n     2\tpackage text\n     3\t\n     4\timport \"strings\"\n     5\t\n     6\t// Words splits text on whitespace.\n     7\tfunc Words(s string) []string {\n     8\t\treturn strings.Fields(s)\n     9\t}",
+      "call_id": "chatcmpl-tool-beee6996e5ec9f64"
+    },
+    {
+      "role": "tool",
+      "content": "     1\tpackage text\n     2\t\n     3\timport \"testing\"\n     4\t\n     5\tfunc TestWords(t *testing.T) {\n     6\t\tif len(Words(\"a b  c\")) != 3 {\n     7\t\t\tt.Fatal(\"expected three words\")\n     8\t\t}\n     9\t}",
+      "call_id": "chatcmpl-tool-a1f503fffaefb590"
+    },
+    {
+      "role": "tool",
+      "content": "     1\tmodule example.com/text\n     2\t\n     3\tgo 1.22",
+      "call_id": "chatcmpl-tool-908e828735d4b7f1"
+    },
+    {
+      "role": "assistant",
+      "content": "Now I'll implement the `Wrap` function and write the table-driven test.",
+      "tool_calls": [
+        {
+          "call_id": "chatcmpl-tool-92e0e49b871fe926",
+          "name": "edit_file",
+          "arguments": {
+            "path": "text.go",
+            "new": "// Words splits text on whitespace.\nfunc Words(s string) []string {\n\treturn strings.Fields(s)\n}\n\n// Wrap wraps text into lines of at most `width` characters, breaking only at spaces.\nfunc Wrap(text string, width int) []string {\n\tif width <= 0 {\n\t\treturn nil\n\t}\n\n\tfields := strings.Fields(text)\n\tif len(fields) == 0 {\n\t\treturn nil\n\t}\n\n\tlines := []string{}\n\tvar current string\n\n\tfor _, word := range fields {\n\t\tif current == \"\" {\n\t\t\tcurrent = word\n\t\t} else if len(current)+1+len(word) <= width {\n\t\t\tcurrent += \" \" + word\n\t\t} else {\n\t\t\tlines = append(lines, current)\n\t\t\tcurrent = word\n\t\t}\n\t}\n\n\tif current != \"\" {\n\t\tlines = append(lines, current)\n\t}\n\n\treturn lines\n}",
+            "old": "// Words splits text on whitespace.\nfunc Words(s string) []string {\n\treturn strings.Fields(s)\n}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "replaced 1 occurrence(s) in text.go",
+      "call_id": "chatcmpl-tool-92e0e49b871fe926"
+    },
+    {
+      "role": "assistant",
+      "content": "Now let me write the table-driven test:",
+      "tool_calls": [
+        {
+          "call_id": "chatcmpl-tool-9c7f6bfb85557e71",
+          "name": "edit_file",
+          "arguments": {
+            "path": "text_test.go",
+            "new": "package text\n\nimport \"testing\"\n\nfunc TestWords(t *testing.T) {\n\tif len(Words(\"a b  c\")) != 3 {\n\t\tt.Fatal(\"expected three words\")\n\t}\n}\n\nfunc TestWrap(t *testing.T) {\n\ttests := []struct {\n\t\tname   string\n\t\ttext   string\n\t\twidth  int\n\t\twant   []string\n\t}{\n\t\t{\n\t\t\tname:  \"empty input\",\n\t\t\ttext:  \"\",\n\t\t\twidth: 10,\n\t\t\twant:  nil,\n\t\t},\n\t\t{\n\t\t\tname:  \"whitespace only\",\n\t\t\ttext:  \"   \",\n\t\t\twidth: 10,\n\t\t\twant:  nil,\n\t\t},\n\t\t{\n\t\t\tname:  \"single word fits\",\n\t\t\ttext:  \"hello\",\n\t\t\twidth: 10,\n\t\t\twant:    []string{\"hello\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"multiple words fit on one line\",\n\t\t\ttext:  \"hello world\",\n\t\t\twidth: 20,\n\t\t\twant:   []string{\"hello world\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"multiple lines needed\",\n\t\t\ttext:  \"hello world foo bar\",\n\t\t\twidth: 10,\n\t\t\twant:   []string{\"hello\", \"world foo\", \"bar\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"word longer than width\",\n\t\t\ttext:  \"superlongword short\",\n\t\t\twidth: 5,\n\t\t\twant:   []string{\"superlongword\", \"short\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"width zero\",\n\t\t\ttext:  \"hello\",\n\t\t\twidth: 0,\n\t\t\twant:   nil,\n\t\t},\n\t\t{\n\t\t\tname:  \"negative width\",\n\t\t\ttext:  \"hello\",\n\t\t\twidth: -1,\n\t\t\twant:   nil,\n\t\t},\n\t\t{\n\t\t\tname:  \"extra whitespace collapses\",\n\t\t\ttext:  \"  hello   world  \",\n\t\t\twidth: 20,\n\t\t\twant:   []string{\"hello world\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"exact width fit\",\n\t\t\ttext:  \"hello world\",\n\t\t\twidth: 11,\n\t\t\twant:   []string{\"hello world\"},\n\t\t},\n\t\t{\n\t\t\tname:  \"exact boundary forces break\",\n\t\t\ttext:  \"hello world\",\n\t\t\twidth: 10,\n\t\t\twant:   []string{\"hello\", \"world\"},\n\t\t},\n\t}\n\n\tfor _, tt := range tests {\n\t\tt.Run(tt.name, func(t *testing.T) {\n\t\t\tgot := Wrap(tt.text, tt.width)\n\t\t\tif len(got) == len(tt.want) && (got == nil && tt.want == nil || (got != nil && tt.want != nil)) {\n\t\t\t\tif got == nil && tt.want == nil {\n\t\t\t\t\treturn\n\t\t\t\t}\n\t\t\t\tfor i := range got {\n\t\t\t\t\tif got[i] != tt.want[i] {\n\t\t\t\t\t\tt.Errorf(\"got %v, want %v\", got, tt.want)\n\t\t\t\t\t\tbreak\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\treturn\n\t\t\t}\n\t\t\tt.Errorf(\"Wrap(%q, %d) = %v, want %v\", tt.text, tt.width, got, tt.want)\n\t\t})\n\t}\n}",
+            "old": "package text\n\nimport \"testing\"\n\nfunc TestWords(t *testing.T) {\n\tif len(Words(\"a b  c\")) != 3 {\n\t\tt.Fatal(\"expected three words\")\n\t}\n}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "replaced 1 occurrence(s) in text_test.go",
+      "call_id": "chatcmpl-tool-9c7f6bfb85557e71"
+    },
+    {
+      "role": "assistant",
+      "content": "Now let me run the tests:",
+      "tool_calls": [
+        {
+          "call_id": "chatcmpl-tool-bd6c996138c05d96",
+          "name": "run",
+          "arguments": {
+            "command": "go test ./..."
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "ok  \texample.com/text\t0.006s",
+      "call_id": "chatcmpl-tool-bd6c996138c05d96"
+    },
+    {
+      "role": "assistant",
+      "content": "All tests pass. Here's a summary of what was done:\n\n- **Added `Wrap(text string, width int) []string`** to `text.go`: Splits input on whitespace using `strings.Fields`, then greedily packs words onto lines without exceeding `width`. Words longer than `width` get their own line. Returns `nil` for non-positive width or whitespace-only/empty input.\n- **Added table-driven test** in `text_test.go` covering: empty input, whitespace-only input, single word, multiple words fitting on one line, multiple lines needed, word longer than width, zero/negative width, whitespace collapsing, exact boundary fits and breaks."
+    }
+  ]
+}
