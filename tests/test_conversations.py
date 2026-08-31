@@ -307,7 +307,7 @@ async def test_each_plan_event_carries_the_whole_list(folder, tmp_path) -> None:
     runtime = runtime_for(
         ScriptedModel(
             calls(("c1", "write_plan", {"steps": [{"text": "a"}, {"text": "b"}]})),
-            calls(("c2", "update_plan", {"changes": [{"id": "s1", "status": "completed"}]})),
+            calls(("c2", "update_plan", {"changes": [{"id": "1", "status": "completed"}]})),
             says("done"),
         ),
         tmp_path,

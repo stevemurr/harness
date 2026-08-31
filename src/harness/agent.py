@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.approval import Approvals
+from harness.environment import describe
 from harness.loop import AgentLoop, Limits, Observer, Outcome, Turn, system, user
 from harness.mode import NORMAL, Mode, ModeState
 from harness.plan import Plan
@@ -164,7 +165,15 @@ class Agent:
             loaded = await self.store.load(session_id)
             if loaded is not None and loaded.messages:
                 return loaded, False
-        return Transcript([system(self.system_prompt + self.modes.current.prompt)]), True
+        opening = "\n\n".join(
+            part
+            for part in (
+                self.system_prompt + self.modes.current.prompt,
+                describe(self.workspace.root),
+            )
+            if part.strip()
+        )
+        return Transcript([system(opening)]), True
 
     def _recorder(self, session_id: str) -> Observer:
         """Persist each turn as it completes.

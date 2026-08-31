@@ -61,7 +61,13 @@ class WritePlan:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "text": {"type": "string"},
+                                "text": {
+                                    "type": "string",
+                                    "description": (
+                                        "What the step achieves. Do not include an id: ids "
+                                        "are assigned by this tool and returned to you."
+                                    ),
+                                },
                                 "status": _STATUS,
                             },
                             "required": ["text"],
@@ -108,8 +114,20 @@ class UpdatePlan:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {"type": "string"},
-                                "text": {"type": "string"},
+                                "id": {
+                                    "type": "string",
+                                    "description": (
+                                        "The step id this tool gave you, as shown in "
+                                        "square brackets -- \"1\", \"2\". Ids are assigned "
+                                        "here and never reused, so they are not positions: "
+                                        "after a removal the remaining ids keep their "
+                                        "original numbers."
+                                    ),
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "New wording for the step, if it changed.",
+                                },
                                 "status": _STATUS,
                             },
                             "required": ["id"],
@@ -118,7 +136,7 @@ class UpdatePlan:
                     },
                     "add": {
                         "type": "array",
-                        "description": "Steps to append.",
+                        "description": "Steps to append. They are given fresh ids.",
                         "items": {
                             "type": "object",
                             "properties": {

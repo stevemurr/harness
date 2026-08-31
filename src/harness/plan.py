@@ -93,7 +93,13 @@ class Plan:
         raise UnknownStep(f"no step {step_id!r}. Known steps: {known}")
 
     def _mint(self) -> str:
-        step_id = f"s{self._next}"
+        # A plain number, not `s1`. The prefix was meant to look unlike a position so a model
+        # would not confuse the two; measured against a live model on 2026-08-30 it instead
+        # meant `update_plan` was called with "1" and refused -- twice in four scenarios,
+        # and the plan tools were half of all tool failures. Ids stay server-assigned and are
+        # never reused, so they still are not positions; they merely look like what a model
+        # reaches for first.
+        step_id = str(self._next)
         self._next += 1
         return step_id
 

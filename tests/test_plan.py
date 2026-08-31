@@ -50,8 +50,8 @@ async def test_writing_a_plan_returns_it_with_ids(kit) -> None:
     )
 
     assert result.ok
-    assert "[s1] read the parser" in result.content
-    assert "[s2] add the test" in result.content
+    assert "[1] read the parser" in result.content
+    assert "[2] add the test" in result.content
     assert [s.status for s in plan.steps] == [Status.PENDING, Status.PENDING]
 
 
@@ -85,7 +85,7 @@ async def test_updating_a_status_leaves_every_other_step_alone(kit) -> None:
     )
 
     result = await call(
-        registry, ctx, "update_plan", changes=[{"id": "s2", "status": "completed"}]
+        registry, ctx, "update_plan", changes=[{"id": "2", "status": "completed"}]
     )
 
     assert result.ok
@@ -101,7 +101,7 @@ async def test_a_step_can_be_reworded_in_place(kit) -> None:
     registry, plan, ctx = kit
     await call(registry, ctx, "write_plan", steps=[{"text": "vague"}])
 
-    await call(registry, ctx, "update_plan", changes=[{"id": "s1", "text": "specific"}])
+    await call(registry, ctx, "update_plan", changes=[{"id": "1", "text": "specific"}])
 
     assert plan.steps[0].text == "specific"
 
@@ -110,7 +110,7 @@ async def test_steps_can_be_added_and_removed(kit) -> None:
     registry, plan, ctx = kit
     await call(registry, ctx, "write_plan", steps=[{"text": "a"}, {"text": "b"}])
 
-    await call(registry, ctx, "update_plan", remove=["s1"], add=[{"text": "c"}])
+    await call(registry, ctx, "update_plan", remove=["1"], add=[{"text": "c"}])
 
     assert [s.text for s in plan.steps] == ["b", "c"]
 
@@ -120,11 +120,11 @@ async def test_added_steps_get_fresh_ids_that_never_collide(kit) -> None:
     the new one -- a silent wrong edit."""
     registry, plan, ctx = kit
     await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
-    await call(registry, ctx, "update_plan", remove=["s1"])
+    await call(registry, ctx, "update_plan", remove=["1"])
 
     await call(registry, ctx, "update_plan", add=[{"text": "b"}])
 
-    assert [s.id for s in plan.steps] == ["s2"]
+    assert [s.id for s in plan.steps] == ["2"]
 
 
 async def test_an_unknown_id_is_a_readable_failure_naming_what_exists(kit) -> None:
@@ -132,12 +132,12 @@ async def test_an_unknown_id_is_a_readable_failure_naming_what_exists(kit) -> No
     await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
 
     result = await call(
-        registry, ctx, "update_plan", changes=[{"id": "s9", "status": "completed"}]
+        registry, ctx, "update_plan", changes=[{"id": "9", "status": "completed"}]
     )
 
     assert not result.ok
-    assert "no step 's9'" in result.content
-    assert "s1" in result.content
+    assert "no step '9'" in result.content
+    assert "1" in result.content
 
 
 async def test_one_bad_id_applies_none_of_the_changes(kit) -> None:
@@ -148,7 +148,7 @@ async def test_one_bad_id_applies_none_of_the_changes(kit) -> None:
 
     result = await call(
         registry, ctx, "update_plan",
-        changes=[{"id": "s1", "status": "completed"}, {"id": "s9", "status": "completed"}],
+        changes=[{"id": "1", "status": "completed"}, {"id": "9", "status": "completed"}],
     )
 
     assert not result.ok
@@ -159,7 +159,7 @@ async def test_a_removal_that_names_a_missing_step_changes_nothing(kit) -> None:
     registry, plan, ctx = kit
     await call(registry, ctx, "write_plan", steps=[{"text": "a"}])
 
-    result = await call(registry, ctx, "update_plan", remove=["s9"])
+    result = await call(registry, ctx, "update_plan", remove=["9"])
 
     assert not result.ok
     assert len(plan.steps) == 1
@@ -180,7 +180,7 @@ async def test_a_note_explains_a_change_of_shape(kit) -> None:
 
     result = await call(
         registry, ctx, "update_plan",
-        remove=["s1"], add=[{"text": "b"}], note="the parser already handled it",
+        remove=["1"], add=[{"text": "b"}], note="the parser already handled it",
     )
 
     assert "the parser already handled it" in result.content
@@ -209,7 +209,7 @@ def test_the_plan_holds_no_opinion_about_how_many_steps_are_in_progress() -> Non
 
 def test_finding_a_step_in_an_empty_plan_says_the_plan_is_empty() -> None:
     with pytest.raises(UnknownStep, match="the plan is empty"):
-        Plan().find("s1")
+        Plan().find("1")
 
 
 class ScriptedModel:
