@@ -35,6 +35,20 @@ from harness.tools.base import Registry
 
 LADDER = Path(__file__).parent / "ladder"
 CODE_TOOLS = {"find_definition", "find_references"}
+MUTATING = {"write_file", "edit_file"}
+
+
+def _verified_last(sequence: list[str]) -> bool:
+    """Whether anything was run after the last edit.
+
+    Not "did it test", which nothing here can judge -- only whether the run ended by
+    changing something and never looking again. A model that edits and stops has declared
+    completion it did not check.
+    """
+    if not any(name in MUTATING for name in sequence):
+        return True  # nothing was changed, so there was nothing to re-check
+    last_edit = max(i for i, name in enumerate(sequence) if name in MUTATING)
+    return "run" in sequence[last_edit + 1:]
 
 
 def rungs(only: str = "") -> list[Path]:
@@ -134,10 +148,13 @@ async def attempt(rung: Path, work: Path, *, with_code: bool, max_turns: int) ->
     failed: Counter[str] = Counter()
     refused: Counter[str] = Counter()
     compactions = 0
+    #: Every tool call in order, so the run can be asked whether it checked its own work.
+    sequence: list[str] = []
 
     def watch(turn) -> None:
         for call, result in turn.results:
             used[call.name] += 1
+            sequence.append(call.name)
             if result.refused:
                 refused[call.name] += 1
             elif not result.ok:
@@ -165,6 +182,13 @@ async def attempt(rung: Path, work: Path, *, with_code: bool, max_turns: int) ->
 
     passed, why = verify(rung, work)
     return {
+        # Did it check its own work? The rung that failed on `Truncate.__init__() missing
+        # a required argument` had made a design change across three files and run one
+        # command in fourteen turns. Catching that once is a rung; counting it is a
+        # measurement, and the system prompt already tells the model to do it -- "treat
+        # completion as unproven and check it against the actual state of the folder".
+        "verified_last": _verified_last(sequence),
+        "mutations": sum(sequence.count(t) for t in MUTATING),
         "rung": rung.name,
         "tests": _meta(rung)["tests"],
         "commit": commit(),

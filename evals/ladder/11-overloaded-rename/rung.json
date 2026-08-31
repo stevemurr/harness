@@ -1,0 +1,6 @@
+{
+  "tests": "Renaming two of three identically-named methods, one referenced as a value.",
+  "seed_from": {
+    "src/harness": "harness"
+  }
+}

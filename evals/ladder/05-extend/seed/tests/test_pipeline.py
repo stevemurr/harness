@@ -1,5 +1,4 @@
 import pytest
-
 from pipeline.runner import run_pipeline
 
 
