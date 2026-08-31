@@ -25,6 +25,21 @@ def test_it_says_the_folder_is_not_a_boundary(tmp_path: Path) -> None:
     assert "not a sandbox" in describe(tmp_path)
 
 
+def test_it_steers_to_relative_paths(tmp_path: Path) -> None:
+    """Naming the folder is not enough -- it has to say what to do with the name.
+
+    Measured 2026-08-30: the first version stated the absolute path and said relative paths
+    resolve there. The model read the path and used it, mistyped it once, then wrote one
+    relative path prefixed with the folder name -- creating a nested folder and splitting
+    the work between the two. It burned 30+ turns lost between them where the previous
+    version had finished in 20.
+    """
+    block = describe(tmp_path)
+
+    assert "Use relative paths" in block
+    assert "never need to `cd`" in block
+
+
 def test_it_lists_what_is_there(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "README.md").write_text("hi")
