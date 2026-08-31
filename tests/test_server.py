@@ -734,3 +734,25 @@ async def _settle(app, timeout: float = 5.0) -> None:
     background task exists; a client only ever sees the event log."""
     tasks = [r.task for r in app.state.runtime.runs.values() if r.task is not None]
     await asyncio.wait(tasks, timeout=timeout)
+
+
+async def test_the_watch_page_is_served_for_a_thread(tmp_path: Path) -> None:
+    """Keyed by thread, not by run: a run id only exists once work has started, and the
+    point of watching is to be there before then."""
+    app = app_for(ScriptedModel(says("done")), tmp_path)
+    async with client_for(app) as client:
+        # Outside the /api/v1 prefix, because a person types this one.
+        page = await client.get("http://harness/watch/thr_whatever")
+
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert "EventSource" in page.text
+
+
+async def test_watching_an_impossible_thread_says_so(tmp_path: Path) -> None:
+    app = app_for(ScriptedModel(says("done")), tmp_path)
+    async with client_for(app) as client:
+        answer = await client.get("/watch/not!a!thread/events")
+
+    assert answer.status_code == 404
+    assert answer.json()["detail"]["code"] == "no_such_thread"

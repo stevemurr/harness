@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>harness · watching</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8; --fg: #1c1b19; --dim: #6b6862; --rule: #e2ded7;
+    --card: #fff; --ok: #2f7d4f; --bad: #a83232; --warn: #9a6b1f;
+    --accent: #3a5f8a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17161a; --fg: #e8e6e3; --dim: #8b8781; --rule: #2c2a30;
+            --card: #1e1d22; --ok: #6cc08a; --bad: #e08585; --warn: #d3a44a;
+            --accent: #8fb3dd; }
+  }
+  * { box-sizing: border-box }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--rule);
+           padding: .8rem 1.2rem; display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap }
+  h1 { font-size: .95rem; margin: 0; font-weight: 600; letter-spacing: .02em }
+  .meta { color: var(--dim); font-size: .82rem }
+  .pill { border: 1px solid var(--rule); border-radius: 999px; padding: .1rem .6rem; font-size: .78rem }
+  main { padding: 1rem 1.2rem 4rem; max-width: 62rem }
+  .turn { border-left: 2px solid var(--rule); padding: .1rem 0 .1rem .9rem; margin: 0 0 1.1rem }
+  .turn > .n { color: var(--dim); font-size: .78rem; letter-spacing: .04em }
+  .say { white-space: pre-wrap; margin: .35rem 0 .6rem }
+  .tool { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+          padding: .4rem .65rem; margin: .3rem 0; display: flex; gap: .6rem; align-items: baseline }
+  .tool .name { font-weight: 600 }
+  .tool .arg { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 }
+  .mark { width: 1.1rem; flex: none }
+  .active .mark { color: var(--warn) } .completed .mark { color: var(--ok) } .failed .mark { color: var(--bad) }
+  .plan { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+          padding: .5rem .75rem; margin: .4rem 0 }
+  .plan div { display: flex; gap: .5rem }
+  .plan .done { color: var(--dim); text-decoration: line-through }
+  .plan .now { font-weight: 600 }
+  .event { color: var(--dim); font-size: .82rem; margin: .3rem 0 }
+  .compact { color: var(--accent); border-top: 1px dashed var(--accent);
+             border-bottom: 1px dashed var(--accent); padding: .4rem 0; margin: .8rem 0 }
+  .final { border: 1px solid var(--rule); border-radius: 6px; padding: .7rem .9rem;
+           background: var(--card); white-space: pre-wrap; margin-top: 1rem }
+  a { color: var(--accent) }
+</style>
+
+<header>
+  <h1>harness</h1>
+  <span class="meta" id="thread"></span>
+  <span class="pill" id="status">connecting</span>
+  <span class="meta" id="counts"></span>
+</header>
+<main>
+  <div id="log"></div>
+  <div id="final"></div>
+</main>
+
+<script>
+// The stream carries stored transcript rows -- {role, content, tool_calls, call_id} -- and
+// not event-log envelopes. Rendering the transcript means this works for any run that holds
+// a Store, including an eval in another process, which is the case it was built for.
+const thread = location.pathname.split("/").filter(Boolean).pop();
+document.getElementById("thread").textContent = thread;
+const log = document.getElementById("log");
+const answered = new Map();      // call_id -> the row awaiting its result
+let turns = 0, calls = 0;
+
+const el = (cls, text) => { const d = document.createElement("div"); d.className = cls; if (text) d.textContent = text; return d; };
+const setStatus = (t) => document.getElementById("status").textContent = t;
+const bump = () => document.getElementById("counts").textContent = `${turns} turns · ${calls} calls`;
+const near = () => (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 120;
+
+function row(message) {
+  const stick = near();
+  if (message.kind === "thread") { setStatus("watching"); return; }
+
+  if (message.role === "compaction") {
+    log.appendChild(el("compact", "context compacted — the transcript still holds every turn"));
+    const note = el("say"); note.textContent = (message.content || "").slice(0, 600);
+    log.lastChild.appendChild(note);
+  } else if (message.role === "user") {
+    const block = el("turn");
+    block.appendChild(el("n", "asked"));
+    block.appendChild(el("say", message.content || ""));
+    log.appendChild(block);
+  } else if (message.role === "assistant") {
+    turns++; bump();
+    const block = el("turn");
+    block.appendChild(el("n", `turn ${turns}`));
+    if ((message.content || "").trim()) block.appendChild(el("say", message.content));
+    for (const call of message.tool_calls || []) {
+      calls++;
+      const line = el("tool active");
+      line.appendChild(el("mark", "◐"));
+      const name = el("name"); name.textContent = call.name;
+      const arg = el("arg"); arg.textContent = JSON.stringify(call.arguments || {}).slice(1, -1);
+      line.append(name, arg);
+      block.appendChild(line);
+      answered.set(call.call_id, line);
+    }
+    bump();
+    log.appendChild(block);
+  } else if (message.role === "tool") {
+    const line = answered.get(message.call_id);
+    const body = (message.content || "").trim();
+    const bad = /^(?:[a-z_]+ failed:|invalid arguments|no tool named)/.test(body)
+             || /refus|not allowed|outside/i.test(body.slice(0, 90));
+    if (line) {
+      line.className = "tool " + (bad ? "failed" : "completed");
+      line.firstChild.textContent = bad ? "✗" : "✓";
+      const first = body.split("\n")[0].slice(0, 120);
+      line.lastChild.textContent += first ? "  → " + first : "";
+      answered.delete(message.call_id);
+    }
+  }
+  if (stick) window.scrollTo(0, document.body.scrollHeight);
+}
+
+const source = new EventSource(`/api/v1/watch/${thread}/events`);
+source.onopen = () => setStatus("watching");
+source.onerror = () => setStatus("waiting for the run…");
+source.onmessage = (m) => { try { row(JSON.parse(m.data)); } catch (e) {} };
+</script>

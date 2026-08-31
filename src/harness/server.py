@@ -14,6 +14,7 @@ with no name on it, which tells them nothing they can act on.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ from uuid import uuid4
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from harness.config import (
@@ -44,7 +45,7 @@ from harness.conversations import Runtime
 from harness.providers.base import Provider
 from harness.runs import DECISIONS, CommandRefused, Run
 from harness.settings import Settings
-from harness.store.base import Store
+from harness.store.base import Store, StoreError
 from harness.stream import HEARTBEAT, event_stream
 from harness.workspace import WorkspaceError
 from harness.workspaces import (
@@ -445,6 +446,9 @@ def create_app(
         Route(f"{API}/runs", list_runs),
         Route(f"{API}/runs/{{run_id}}/events", events),
         Route(f"{API}/runs/{{run_id}}/commands", commands, methods=["POST"]),
+        # Watching. The page is outside the API prefix because a person types it.
+        Route("/watch/{thread_id}", watch_page),
+        Route(f"{API}/watch/{{thread_id}}/events", watch_events),
     ]
 
     @asynccontextmanager
@@ -475,6 +479,59 @@ def create_app(
     app.state.runtime = runtime
     app.state.workspaces = folders
     return app
+
+
+async def watch_page(request: Request) -> Response:
+    """The page. One file, no build step, no dependency.
+
+    Keyed by thread rather than by run, because a thread is the thing a person has a name
+    for -- a run id only exists once the work has started, and the point is to be watching
+    before then.
+    """
+    page = (Path(__file__).parent / "watch.html").read_text(encoding="utf-8")
+    return Response(page, media_type="text/html; charset=utf-8")
+
+
+async def watch_events(request: Request) -> Response:
+    """A thread's transcript as it is written, as SSE.
+
+    Tailing the stored transcript rather than subscribing to a run's event log, and the
+    reason is which runs are watchable. The event log lives in memory and only exists for
+    work this process started; the transcript is on disk and is written by anything holding
+    a `Store` -- including an eval running in another process entirely, which is what this
+    was built for. It costs the per-call liveness the event log has: a row appears when its
+    turn is recorded, not when the call begins.
+    """
+    thread_id = request.path_params["thread_id"]
+    store = request.app.state.runtime.store
+    try:
+        path = store.path_for(thread_id)
+    except (StoreError, AttributeError) as exc:
+        raise ApiError(404, "no_such_thread", str(exc)) from exc
+
+    async def rows() -> AsyncIterator[str]:
+        seen, idle = 0, 0.0
+        while True:
+            if path.exists():
+                lines = path.read_text(encoding="utf-8").splitlines()
+                for line in lines[seen:]:
+                    if line.strip():
+                        yield f"data: {line}\n\n"
+                if len(lines) > seen:
+                    seen, idle = len(lines), 0.0
+            await asyncio.sleep(0.5)
+            idle += 0.5
+            # A comment keeps an idle connection alive; `stream.py` explains why silence
+            # kills one.
+            if idle >= 10:
+                idle = 0.0
+                yield ": still here\n\n"
+
+    return StreamingResponse(
+        rows(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 async def named_failure(_request: Request, exc: Exception) -> Response:

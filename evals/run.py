@@ -36,6 +36,11 @@ from harness.store import JsonlStore
 from harness.store.codec import encode
 from harness.tools.base import Registry
 
+#: Where transcripts go. The harness's own folder by default, so `harness-serve` can watch
+#: a run it did not start and `harness --threads` lists it -- a long rung is something you
+#: want to look at while it happens.
+THREADS = Path("~/.harness/threads").expanduser()
+
 LADDER = Path(__file__).parent / "ladder"
 LONG = Path(__file__).parent / "long"
 CODE_TOOLS = {"find_definition", "find_references"}
@@ -253,7 +258,7 @@ async def attempt(
     # it. Two reasons, and the second is the one that matters for a ninety-minute rung: it
     # can be watched with `tail -f`, and a run that is killed keeps everything up to the
     # turn it died on. Without it a long run that is interrupted loses the lot.
-    threads = work.parent / "threads"
+    threads = THREADS
     agent = build(
         work, model,
         store=JsonlStore(threads),
@@ -376,6 +381,9 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    global THREADS
+    if args.threads:
+        THREADS = Path(args.threads).expanduser()
     work_root = Path(args.work) if args.work else Path(".eval-work").resolve()
     work_root.mkdir(parents=True, exist_ok=True)
     arms = [True, False] if args.both else [not args.no_code]

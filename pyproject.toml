@@ -49,6 +49,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 96
 src = ["src", "tests"]
+# Eval seeds are fixtures the agent is asked to work on, not this project's code. They are
+# written to be a starting point rather than to satisfy a linter.
+extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
