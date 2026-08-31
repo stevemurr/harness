@@ -3,6 +3,35 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## Measured: the index is worth about 1.9x on the rung built for it
+
+The clean run, after the three defects below were fixed and with both arms under identical
+settings. n=5 per arm, so read the direction rather than the digits.
+
+    rung                  arm   pass  turns   secs   peak ctx  find_*
+    09-needle-rename      code   4/5   25.0   57.1     40,750     4
+    09-needle-rename      base   3/5   23.0   62.3     48,037     0
+    10-callers            code   4/5   18.0   33.7     27,011    14
+    10-callers            base   3/5   16.0   31.1     32,169     0
+    11-overloaded-rename  code   5/5   32.0   67.9     46,735    21
+    11-overloaded-rename  base   4/5   40.0  129.9     83,619     0
+
+    code: 13/15 passed, median 44s, peak context 39,012
+    base: 10/15 passed, median 67s, peak context 48,037
+
+Each rung favours the index by exactly one attempt, which alone is nothing; the same
+direction on three independent rungs is worth more than any of them.
+
+**`11-overloaded-rename` shows the mechanism.** 67.9s against 129.9s, and peak context
+46,735 against 83,619 -- the arm without the index pulls nearly twice the context, because
+`find_references` answers in one call what costs the other arm thirty-one greps over five
+thousand lines. A smaller context makes every later call cheaper, which is why the gap is in
+seconds rather than in turns.
+
+The comparison between arms is sound: both ran in the same pass under the same sampling. A
+comparison against the earlier baseline is not, because the sampling and the tool fixes
+changed together.
+
 ## Retracted: "code search is 5.5x faster on a cross-file rename"
 
 Reported from a single attempt at `11-overloaded-rename`: 47.0s with the code tools against

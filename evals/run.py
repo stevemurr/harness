@@ -36,6 +36,7 @@ from harness.store.codec import encode
 from harness.tools.base import Registry
 
 LADDER = Path(__file__).parent / "ladder"
+LONG = Path(__file__).parent / "long"
 CODE_TOOLS = {"find_definition", "find_references"}
 MUTATING = {"write_file", "edit_file"}
 
@@ -78,8 +79,9 @@ def _verified_last(sequence: list[str]) -> bool:
     return "run" in sequence[last_edit + 1:]
 
 
-def rungs(only: str = "") -> list[Path]:
-    chosen = [p for p in sorted(LADDER.iterdir()) if (p / "task.md").exists()]
+def rungs(only: str = "", suite: str = "ladder") -> list[Path]:
+    root = LONG if suite == "long" else LADDER
+    chosen = [p for p in sorted(root.iterdir()) if (p / "task.md").exists()]
     if only:
         wanted = set(only.split(","))
         chosen = [p for p in chosen if p.name in wanted]
@@ -160,8 +162,9 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
         )
     except subprocess.TimeoutExpired:
         return False, "verify timed out"
+    score = _score(done.stdout)
     if done.returncode == 0:
-        return True, ""
+        return True, score
 
     failed = [
         line.removeprefix("__FAILED__").strip()
@@ -175,7 +178,24 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
     ]
     where = failed[0] if failed else ""
     said = spoke[-1] if spoke else ""
-    return False, (f"{where}  ||  {said}" if where and said else where or said)[:240]
+    detail = (f"{where}  ||  {said}" if where and said else where or said)[:240]
+    return False, f"{score} {detail}".strip() if score else detail
+
+
+def _score(output: str) -> str:
+    """A rung may report partial credit by printing `SCORE <passed> <total>`.
+
+    Binary is fine for a rung that takes eight seconds and indefensible for one that takes
+    ninety minutes -- one bit for an hour of compute. A long rung says how far it got, and a
+    run that reaches four fifths says so instead of reading the same as one that reached
+    nothing.
+    """
+    for line in reversed(output.splitlines()):
+        if line.startswith("SCORE "):
+            parts = line.split()
+            if len(parts) >= 3:
+                return f"[{parts[1]}/{parts[2]}]"
+    return ""
 
 
 class Recording:
@@ -340,6 +360,11 @@ async def main() -> None:
     parser.add_argument("--both", action="store_true", help="Run each rung with and without.")
     parser.add_argument("--repeat", type=int, default=1, help="Attempts per rung per arm.")
     parser.add_argument("--keep", default="evals/runs", help="Where to write transcripts.")
+    parser.add_argument(
+        "--suite", default="ladder", choices=["ladder", "long"],
+        help="`ladder` is the fast suite. `long` is the 30-90 minute rungs -- kept apart so "
+             "the fast one stays something you can run on a whim.",
+    )
     args = parser.parse_args()
 
     work_root = Path(args.work) if args.work else Path(".eval-work").resolve()
@@ -347,7 +372,7 @@ async def main() -> None:
     arms = [True, False] if args.both else [not args.no_code]
 
     results: list[dict] = []
-    for rung in rungs(args.only):
+    for rung in rungs(args.only, args.suite):
         for with_code in arms:
             arm = "code" if with_code else "base"
             for attempt_number in range(1, args.repeat + 1):

@@ -980,5 +980,38 @@
     "refused": {},
     "compactions": 0,
     "attempt": 4
+  },
+  {
+    "context_peak_chars": 121208,
+    "context_peak_tokens": 32543,
+    "context_total_chars": 2531441,
+    "model_seconds": 155.4,
+    "model_calls": 28,
+    "verified_last": true,
+    "mutations": 7,
+    "recovered": 0,
+    "unrecovered": 0,
+    "rung": "11-overloaded-rename",
+    "tests": "Renaming two of three identically-named methods, one referenced as a value.",
+    "commit": "2d4881e",
+    "arm": "base",
+    "passed": true,
+    "why": "",
+    "stop": "done",
+    "detail": "",
+    "turns": 28,
+    "seconds": 155.8,
+    "calls": 30,
+    "tools": {
+      "edit_file": 7,
+      "grep": 6,
+      "read_file": 7,
+      "run": 1,
+      "update_plan": 9
+    },
+    "failed": {},
+    "refused": {},
+    "compactions": 0,
+    "attempt": 5
   }
 ]
