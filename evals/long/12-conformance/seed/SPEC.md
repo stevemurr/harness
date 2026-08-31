@@ -10,7 +10,18 @@ These hold for every instruction below. They are stated once, here.
 1. **All arithmetic is 32-bit two's complement and wraps.** `2147483647 ADD 1` is
    `-2147483648`. Every arithmetic result is reduced into that range before it is pushed.
 2. **Every error prints exactly `E<nn>: <message>` on its own line and stops the program.**
-   Two digits, zero padded. Nothing else is printed after it. The process exits 1.
+   Two digits, zero padded. Nothing else is printed after it. The process exits 1. The
+   message is not yours to choose -- these are the only errors and these are their exact
+   texts:
+
+   | printed exactly | when |
+   |---|---|
+   | `E01: stack is empty` | popping a value when the stack is empty |
+   | `E02: division by zero` | `DIV` or `MOD` with a divisor of zero |
+   | `E03: variable is not set` | `LOAD` of a variable never `STORE`d |
+   | `E04: unknown label` | a jump or call to a label that is not defined |
+   | `E05: no call frame` | `RET` with nothing to return to |
+   | `E06: unknown instruction` | an instruction this table does not list |
 3. **`PRINT` writes the value followed by a newline.** Nothing else writes to output.
 4. **The stack is empty at the start.** Popping an empty stack is error `E01`.
 

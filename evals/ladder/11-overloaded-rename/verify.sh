@@ -30,9 +30,17 @@ EOF
 
 # Both use sites moved, including the one that is not a call.
 grep -q "self.registry.dispatch(" harness/runner.py
-! grep -q "self.registry.run(" harness/runner.py
+# `if ... then exit` rather than `! ...`: a command whose value is inverted is
+# exempt from `set -e`, so every `! grep` here failed silently and gated nothing.
+if grep -q "self.registry.run(" harness/runner.py; then
+    echo "FAILED: runner.py still calls self.registry.run(" >&2
+    exit 1
+fi
 grep -q "\.invoke," harness/agent.py
-! grep -qE "\)\.run,$" harness/agent.py
+if grep -qE "\)\.run,$" harness/agent.py; then
+    echo "FAILED: agent.py still passes ).run, as a value" >&2
+    exit 1
+fi
 
 # The file still parses everywhere, so nothing was broken while editing.
 python3 - <<'EOF'

@@ -81,6 +81,19 @@ So: **a rung seeded from live source must assert properties and never tallies. C
 rung in three directions -- fails unsolved, passes when solved correctly, fails the plausible
 wrong solution. Read transcripts before believing anything derived from counts.**
 
+## `seeded.json` is now suspect
+
+An audit found that `! cmd` is exempt from `set -e`, so every inverted check in a verify
+script failed silently and gated nothing. `09-needle-rename` had three and `11-overloaded-
+rename` two -- the two rungs behind the 1.9x measurement. `09`'s "every call site moved"
+assertion was among them, which is the rung's entire point, so a run could pass having left
+call sites behind.
+
+All are now `if ... then exit 1`, and the fixed `09` catches a deliberately-left call site.
+But `.eval-work` was deleted to recover disk, so those artifacts are gone and the run cannot
+be re-graded. **`09`'s numbers in `seeded.json` should not be trusted; `11`'s were mostly
+protected by its `ast` checks, which did gate.** The 1.9x figure needs re-measuring.
+
 ## Not started
 
 `12-conformance` and `13-migration` are built and validated against reference solutions but
