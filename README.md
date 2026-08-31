@@ -80,16 +80,49 @@ src/harness/
 
 ## Running it
 
-```sh
-export HARNESS_BASE_URL=https://api.openai.com/v1   # or any compatible endpoint
-export HARNESS_API_KEY=sk-...
-export HARNESS_MODEL=gpt-4o
+Configure once:
 
-harness "add a test for the parser"      # asks before anything changes
-harness -y "..."                          # approve everything (no sandbox -- read that again)
-harness --sessions                        # what has been run
-harness --resume <session> "now do X"     # continue where it left off
+```sh
+harness --init          # writes ~/.harness/config.toml, mode 0600
 ```
+
+```toml
+[provider]
+base_url = "http://192.168.1.237:4000/v1"
+model = "qwen3.6"
+api_key = "sk-..."
+
+# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM
+# answers with an empty string without this.
+[provider.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[server]
+host = "127.0.0.1"
+port = 8080
+```
+
+Then neither front end needs arguments:
+
+```sh
+harness "add a test for the parser"      # asks before anything changes
+harness-serve                            # the HTTP server orca talks to
+harness -y "..."                          # approve everything (no sandbox -- read that again)
+harness --threads                         # what has been run
+harness --resume <thread> "now do X"      # continue where it left off
+```
+
+**A flag beats an environment variable beats the file beats the built-in default** -- one
+rule for every setting, so nothing in the file can override something you typed. Both front
+ends read the same file, because a deployment that needs `chat_template_kwargs` needs it
+whichever way the agent is driven; the CLI having it and the server not showed up only as an
+empty answer, which is the hardest kind of bug to attribute.
+
+`api_key` is a secret in a file, which is a trade rather than an oversight. A keyring is what
+a *client* wants -- something a person logs into -- but a server started at boot has nobody
+to prompt. A file only its owner can read beats an environment variable, which is visible in
+`ps` on some systems and leaks into every child the agent spawns. The file is written 0600
+and refuses to load a key from one that others can read.
 
 ## Views
 

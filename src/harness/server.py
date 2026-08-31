@@ -14,6 +14,7 @@ with no name on it, which tells them nothing they can act on.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -26,6 +27,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from harness.config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_HOST,
+    DEFAULT_MODEL,
+    DEFAULT_PORT,
+    Config,
+    load,
+    settle,
+)
+from harness.config import Provider as ProviderSettings
+from harness.config import Server as ServerSettings
 from harness.conversations import Runtime
 from harness.providers.base import Provider
 from harness.runs import DECISIONS, CommandRefused, Run
@@ -517,12 +529,90 @@ def build_app(args: argparse.Namespace) -> Starlette:
     from harness.providers.openai import OpenAICompatible
     from harness.store import JsonlStore
 
+    settings = resolve(args)
     return create_app(
         provider=OpenAICompatible(
-            base_url=args.base_url, model=args.model, api_key=args.api_key
+            base_url=settings.provider.base_url,
+            model=settings.provider.model,
+            api_key=settings.provider.api_key,
+            extra_body=settings.provider.extra_body,
         ),
         store=JsonlStore(THREADS),
-        token=args.token,
+        token=settings.server.token,
+    )
+
+
+def _extra_body(raw: str) -> dict[str, Any]:
+    """Provider dialect from a flag or the environment, or nothing.
+
+    The terminal front end grew this and the server did not, so a deployment that needs it --
+    a Qwen3 behind LiteLLM answers with an empty string without it -- worked through `harness`
+    and silently produced nothing through `harness-serve`. Two front ends over one provider
+    should not disagree about what the provider needs. (2026-08-31)
+    """
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--extra-body is not JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit("--extra-body must be a JSON object")
+    return parsed
+
+
+def resolve(args: argparse.Namespace) -> Config:
+    """Flags, then environment, then the config file, then the built-in defaults.
+
+    One rule for every setting. Five settings resolved separately in two front ends is ten
+    chances to get the order subtly different, and a precedence that varies per setting is
+    one nobody can hold in their head.
+    """
+    stored = load(Path(args.config).expanduser() if args.config else None)
+    environment = os.environ
+    extra = _extra_body(args.extra_body) or _extra_body(
+        environment.get("HARNESS_EXTRA_BODY", "")
+    )
+    return Config(
+        provider=ProviderSettings(
+            base_url=settle(
+                args.base_url,
+                environment.get("HARNESS_BASE_URL", ""),
+                stored.provider.base_url,
+                DEFAULT_BASE_URL,
+            ),
+            model=settle(
+                args.model,
+                environment.get("HARNESS_MODEL", ""),
+                stored.provider.model,
+                DEFAULT_MODEL,
+            ),
+            api_key=settle(
+                args.api_key,
+                environment.get("HARNESS_API_KEY", ""),
+                stored.provider.api_key,
+                "",
+            ),
+            extra_body=extra or stored.provider.extra_body,
+        ),
+        server=ServerSettings(
+            host=settle(
+                args.host,
+                environment.get("HARNESS_HOST", ""),
+                stored.server.host,
+                DEFAULT_HOST,
+            ),
+            port=int(
+                args.port
+                or environment.get("HARNESS_PORT", "")
+                or stored.server.port
+                or DEFAULT_PORT
+            ),
+            token=settle(
+                args.token, environment.get("HARNESS_TOKEN", ""), stored.server.token, ""
+            ),
+        ),
+        path=stored.path,
     )
 
 
@@ -532,22 +622,34 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="harness-serve", description="Serve the harness over HTTP."
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--model", default=os.environ.get("HARNESS_MODEL", "gpt-4o"))
+    parser.add_argument("--host", default="")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--model", default="")
+    parser.add_argument("--config", default="", help="Path to config.toml.")
+    parser.add_argument("--base-url", default="")
+    parser.add_argument("--api-key", default="")
     parser.add_argument(
-        "--base-url",
-        default=os.environ.get("HARNESS_BASE_URL", "https://api.openai.com/v1"),
+        "--extra-body",
+        default="",
+        help=(
+            "JSON merged into every model request, for deployment dialect the OpenAI "
+            "schema does not cover. A Qwen3 behind LiteLLM answers with an empty string "
+            "without it. (env: HARNESS_EXTRA_BODY)"
+        ),
     )
-    parser.add_argument("--api-key", default=os.environ.get("HARNESS_API_KEY", ""))
     parser.add_argument(
         "--token",
-        default=os.environ.get("HARNESS_TOKEN", ""),
+        default="",
         help="Require this bearer token. No token means no authentication.",
     )
     args = parser.parse_args(argv)
 
-    uvicorn.run(build_app(args), host=args.host, port=args.port, log_level="info")
+    settings = resolve(args)
+    app = build_app(args)
+    if settings.path is not None:
+        log.info("settings from %s", settings.path)
+    log.info("model %s at %s", settings.provider.model, settings.provider.base_url)
+    uvicorn.run(app, host=settings.server.host, port=settings.server.port, log_level="info")
     return 0
 
 

@@ -20,6 +20,14 @@ from pathlib import Path
 
 from harness.agent import build
 from harness.approval import Approvals, Decision, Policy, Request
+from harness.config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    ConfigError,
+    load,
+    settle,
+    write_example,
+)
 from harness.loop import Turn
 from harness.mode import NORMAL, PLAN
 from harness.providers.openai import OpenAICompatible
@@ -135,12 +143,24 @@ async def main_async(args: argparse.Namespace) -> int:
         print(red(f"--extra-body is not JSON: {exc}"), file=sys.stderr)
         return 2
 
+    # Same file and same precedence as `harness-serve`: a deployment configured once works
+    # whichever way the agent is driven. The two disagreeing about the provider shows up only
+    # as an empty answer, which is the hardest kind of bug to attribute.
+    stored = load(Path(args.config).expanduser() if args.config else None)
     provider = OpenAICompatible(
-        base_url=args.base_url,
-        model=args.model,
-        api_key=args.api_key,
+        base_url=settle(
+            args.base_url, os.environ.get("HARNESS_BASE_URL", ""),
+            stored.provider.base_url, DEFAULT_BASE_URL,
+        ),
+        model=settle(
+            args.model, os.environ.get("HARNESS_MODEL", ""),
+            stored.provider.model, DEFAULT_MODEL,
+        ),
+        api_key=settle(
+            args.api_key, os.environ.get("HARNESS_API_KEY", ""), stored.provider.api_key, ""
+        ),
         max_tokens=args.max_tokens,
-        extra_body=extra,
+        extra_body=extra or stored.provider.extra_body,
     )
     approvals = Approvals(
         policy=Policy(approve_everything=args.yes),
@@ -198,24 +218,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="harness", description="Run a coding agent over a folder."
     )
-    parser.add_argument("prompt", help="What you want done.")
+    parser.add_argument("prompt", nargs="?", default="", help="What you want done.")
     parser.add_argument(
         "-C", "--folder", default=".", help="Folder to work in (default: here)."
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("HARNESS_MODEL", "gpt-4o"),
-        help="Model name (env: HARNESS_MODEL).",
+        default="",
+        help="Model name (env: HARNESS_MODEL, or provider.model in config.toml).",
     )
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("HARNESS_BASE_URL", "https://api.openai.com/v1"),
-        help="OpenAI-compatible endpoint (env: HARNESS_BASE_URL).",
+        default="",
+        help="OpenAI-compatible endpoint (env: HARNESS_BASE_URL, or provider.base_url).",
     )
     parser.add_argument(
-        "--api-key", default=os.environ.get("HARNESS_API_KEY", ""), help="env: HARNESS_API_KEY"
+        "--api-key", default="", help="env: HARNESS_API_KEY, or provider.api_key"
     )
     parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument("--config", default="", help="Path to config.toml.")
     parser.add_argument(
         "--extra-body",
         default=os.environ.get("HARNESS_EXTRA_BODY", ""),
@@ -229,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--threads", action="store_true", help="List recent threads and exit."
+    )
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Write a starter ~/.harness/config.toml and exit.",
     )
     parser.add_argument(
         "-p",
@@ -245,6 +271,20 @@ def main(argv: list[str] | None = None) -> int:
         "your filesystem -- there is no sandbox.",
     )
     args = parser.parse_args(argv)
+    if not args.prompt and not (args.init or args.threads):
+        parser.error("a prompt is required unless --init or --threads is given")
+
+    if args.init:
+        try:
+            path = write_example(Path(args.config).expanduser() if args.config else None)
+        except ConfigError as exc:
+            print(red(str(exc)), file=sys.stderr)
+            return 2
+        print(f"wrote {path}")
+        print(
+            dim("set provider.base_url, provider.model and provider.api_key, then run it")
+        )
+        return 0
 
     if args.threads:
         return asyncio.run(_list_sessions())

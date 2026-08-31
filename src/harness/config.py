@@ -1,0 +1,197 @@
+"""Settings that survive between runs, so a terminal is not four exports long.
+
+`~/.harness/config.toml`, beside `threads/`. Both front ends read it -- the terminal CLI and
+the HTTP server -- because a deployment that needs `chat_template_kwargs` needs it whichever
+way the agent is driven, and the two disagreeing about the provider is a bug that only shows
+up as an empty answer. That happened: the CLI grew `--extra-body` and the server did not, so
+the same model worked one way and silently produced nothing the other.
+
+## Precedence
+
+A flag beats an environment variable beats this file beats the built-in default. That order
+is the one people expect and the one that makes a config file safe to write: nothing here
+can override something you typed.
+
+## The key
+
+`api_key` is a secret in a file, which is a real trade rather than an oversight. The
+alternative is a keyring, and a keyring is what a *client* wants -- something a person logs
+into. A server started by a supervisor at boot has nobody to prompt, so it reads a file or
+an environment variable, and a file that only its owner can read is the better of the two:
+an environment variable is visible in `ps` output on some systems and leaks into every child
+process the agent spawns.
+
+So the file is created 0600, and `load` says so plainly when it finds one that is not.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+DEFAULT_PATH = Path("~/.harness/config.toml")
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-4o"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8080
+
+#: Every key this file may carry, so a typo is an error rather than a setting that does
+#: nothing. A silently ignored `base_ur1` is a person reading a correct-looking file and
+#: wondering why the default is in force.
+_PROVIDER_KEYS = frozenset({"base_url", "model", "api_key", "extra_body"})
+_SERVER_KEYS = frozenset({"host", "port", "token"})
+_TABLES = frozenset({"provider", "server"})
+
+
+class ConfigError(Exception):
+    """The config file exists and cannot be used. Never raised for an absent file."""
+
+
+@dataclass(frozen=True, slots=True)
+class Provider:
+    base_url: str = DEFAULT_BASE_URL
+    model: str = DEFAULT_MODEL
+    api_key: str = field(default="", repr=False)
+    #: Merged into every model request. See `providers/openai.py` for why this exists.
+    extra_body: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Server:
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
+    #: When set, the server requires it as a bearer token. Empty means no auth at all.
+    token: str = field(default="", repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Config:
+    provider: Provider = field(default_factory=Provider)
+    server: Server = field(default_factory=Server)
+    #: Where this came from, or None. Front ends print it so a surprising setting is
+    #: traceable to a file rather than guessed at.
+    path: Path | None = None
+
+
+def load(path: Path | None = None) -> Config:
+    """Read the config, or return defaults if there is none.
+
+    An absent file is the normal case and not an error. A file that exists and cannot be
+    parsed is an error, because silently falling back to defaults would leave someone
+    looking at settings that are not in force.
+    """
+    resolved = (path or DEFAULT_PATH).expanduser()
+    if not resolved.is_file():
+        return Config()
+
+    try:
+        raw = tomllib.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"{resolved}: {exc}") from exc
+
+    if unknown := set(raw) - _TABLES:
+        raise ConfigError(
+            f"{resolved}: unknown section(s) {', '.join(sorted(unknown))}. "
+            f"Expected: {', '.join(sorted(_TABLES))}."
+        )
+
+    provider_table = _table(raw, "provider", _PROVIDER_KEYS, resolved)
+    server_table = _table(raw, "server", _SERVER_KEYS, resolved)
+
+    extra = provider_table.get("extra_body", {})
+    if not isinstance(extra, dict):
+        raise ConfigError(f"{resolved}: provider.extra_body must be a table")
+
+    if provider_table.get("api_key") and _is_group_or_world_readable(resolved):
+        raise ConfigError(
+            f"{resolved} holds an api_key and is readable by other users. "
+            f"Run: chmod 600 {resolved}"
+        )
+
+    return Config(
+        provider=Provider(
+            base_url=str(provider_table.get("base_url") or DEFAULT_BASE_URL),
+            model=str(provider_table.get("model") or DEFAULT_MODEL),
+            api_key=str(provider_table.get("api_key") or ""),
+            extra_body=dict(extra),
+        ),
+        server=Server(
+            host=str(server_table.get("host") or DEFAULT_HOST),
+            port=int(server_table.get("port") or DEFAULT_PORT),
+            token=str(server_table.get("token") or ""),
+        ),
+        path=resolved,
+    )
+
+
+def _table(raw: dict, name: str, allowed: frozenset[str], path: Path) -> dict:
+    table = raw.get(name, {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [{name}] must be a table")
+    if unknown := set(table) - allowed:
+        raise ConfigError(
+            f"{path}: unknown key(s) in [{name}]: {', '.join(sorted(unknown))}. "
+            f"Expected: {', '.join(sorted(allowed))}."
+        )
+    return table
+
+
+def _is_group_or_world_readable(path: Path) -> bool:
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return False
+    return bool(mode & (stat.S_IRGRP | stat.S_IROTH))
+
+
+def settle(flag: str | None, environment: str, configured: str, default: str) -> str:
+    """One setting, resolved. A flag beats an env var beats the file beats the default.
+
+    Written once rather than at each call site: five settings resolved the same way in two
+    front ends is ten chances to get the order subtly different, and a precedence that
+    varies per setting is one nobody can hold in their head.
+    """
+    if flag:
+        return flag
+    if environment:
+        return environment
+    if configured:
+        return configured
+    return default
+
+
+def write_example(path: Path | None = None) -> Path:
+    """Write a starter config, 0600, and return where it went.
+
+    Refuses to overwrite: a command that silently replaces a file holding an API key is one
+    people run once by accident.
+    """
+    resolved = (path or DEFAULT_PATH).expanduser()
+    if resolved.exists():
+        raise ConfigError(f"{resolved} already exists; edit it rather than replacing it")
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(
+        "# harness settings. A flag beats an env var beats this file.\n"
+        "\n"
+        "[provider]\n"
+        f'base_url = "{DEFAULT_BASE_URL}"\n'
+        f'model = "{DEFAULT_MODEL}"\n'
+        'api_key = ""\n'
+        "\n"
+        "# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM\n"
+        "# answers with an empty string without this.\n"
+        "# [provider.extra_body.chat_template_kwargs]\n"
+        "# enable_thinking = false\n"
+        "\n"
+        "[server]\n"
+        f'host = "{DEFAULT_HOST}"\n'
+        f"port = {DEFAULT_PORT}\n"
+        '# token = ""   # set to require a bearer token; empty means no auth\n',
+        encoding="utf-8",
+    )
+    os.chmod(resolved, 0o600)
+    return resolved
