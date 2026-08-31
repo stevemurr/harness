@@ -38,27 +38,58 @@ from harness.types import Message, Role, Transcript
 #: reader is the same agent, mid-task, and what it needs is the state of the work rather
 #: than an account of the conversation.
 HANDOFF_PROMPT = """\
-You are compacting the context of a coding agent that is part-way through a task, so that it
-can keep working in a smaller context. Write the note the agent will wake up holding.
+You are compacting the context of a coding agent that is part-way through a task, so it can
+keep working in a smaller context. Write the note the agent will wake up holding.
 
-Cover, in this order and only where each applies:
+Use exactly these headings, in this order. Omit a heading only if it would be empty.
 
-  * The original request, in the user's own terms. This is the one thing that must survive
-    intact -- everything else is in service of it.
-  * What has actually been done: files created or changed, and what the change was.
-  * What has been learned about the codebase that was expensive to find out -- where things
-    live, what a function does, why an approach was abandoned.
-  * The current state of the work, and the immediate next step.
-  * Anything the user asked for, corrected, or refused along the way, and any commitment
-    made to them.
+MODE:
+One line, copied from here exactly: {mode}
 
-{mode}
-Write it as notes to yourself, not as a report to a reader. Be specific: name files, symbols
-and commands rather than describing them. Do not speculate about what happens next beyond
-the next step, and do not include anything you were not told.
+REQUEST:
+Every separate thing the user asked for, quoted in their own words, one per line, in the
+order they asked. Include earlier requests even if they are already finished. This is the
+one thing that must survive intact.
+
+CHANGED:
+Only what was actually altered: files written or edited, and commands that changed something
+or produced a result worth keeping. If nothing has been changed, write "nothing yet" and move
+on. Discoveries do not belong here even though finding them took work.
+
+FOUND:
+What is now known about the code that was expensive to discover, one line each: where things
+live, what a function does, exact line numbers, measurements, what a command reported, why an
+approach was ruled out. Spend most of the note here.
+
+STATE:
+Two or three sentences on where the work stands.
+
+NEXT:
+One sentence naming the single next action.
+
+USER:
+Anything the user corrected, refused, or committed you to.
+
+Rules:
+
+  * One line per item. No sub-bullets, no nested lists, no paragraphs inside a section.
+  * Each fact appears exactly once, under one heading. A line number recorded in FOUND is not
+    repeated in CHANGED or STATE; repeating it wastes the context this note exists to save.
+  * Name files, symbols, commands and numbers instead of describing them: "serveAudio at
+    main.go:156 is 82.6% covered, os.Open error path untested" not "some handlers lack
+    coverage".
+  * Record findings, not reasoning. Do not weigh options, estimate difficulty, judge whether
+    something is worth doing, or narrate a chain of thought. If you find yourself writing
+    "this is tricky" or "actually", delete the line.
+  * Include nothing you were not told.
+  * No preamble and no closing summary. Start at MODE and stop after the last heading.
 """
 
-#: The one fact the summary must carry that the transcript will no longer show.
+#: The one fact the summary must carry that the transcript will no longer show, phrased as
+#: the note should state it -- the instruction to state it lives in the prompt above, not
+#: here. Kept separate because a note told to copy this line "exactly" copies whatever is in
+#: it: with the instruction inlined, the summary carried "State that in the note, so it does
+#: not read an older instruction as still standing" as though it were a fact about the run.
 #:
 #: `messages[0]` is written once at thread creation and never rewritten, so a thread started
 #: with `--plan` asserts read-only forever -- and the only thing contradicting it is the tool
@@ -68,13 +99,10 @@ the next step, and do not include anything you were not told.
 #: `exit_plan_mode` in normal mode, so it cannot even ask again.
 MODE_NOTES = {
     True: (
-        "\nThe agent is in PLAN MODE: it may not write files or run commands until the user "
-        "approves a plan. State that in the note.\n"
+        "The agent is in PLAN MODE and may not write files or run commands until the user "
+        "approves a plan."
     ),
-    False: (
-        "\nThe agent may write files and run commands. State that in the note, so it does "
-        "not read an older instruction as still standing.\n"
-    ),
+    False: "The agent may write files and run commands.",
 }
 
 

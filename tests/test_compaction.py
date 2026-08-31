@@ -19,7 +19,15 @@ import pytest
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals, Policy
-from harness.compaction import Compaction, Meter, State, anchor_for, digest, view
+from harness.compaction import (
+    MODE_NOTES,
+    Compaction,
+    Meter,
+    State,
+    anchor_for,
+    digest,
+    view,
+)
 from harness.conversations import _ending
 from harness.loop import system, user
 from harness.providers.base import Completion, ProviderError
@@ -475,6 +483,17 @@ async def test_the_summary_records_that_a_plan_was_approved(folder: Path) -> Non
     assert model.summarised
     told = model.summarised[0].messages[0].content
     assert "may write files and run commands" in told
+
+
+def test_the_mode_note_is_a_fact_and_not_an_instruction() -> None:
+    """The prompt tells the summariser to copy this line exactly, so whatever is in it
+    reaches the note as though it were a fact about the run. With the instruction inlined,
+    a real summary carried "State that in the note, so it does not read an older instruction
+    as still standing" as a bullet -- observed against the live endpoint."""
+    for note in MODE_NOTES.values():
+        assert "State that" not in note
+        assert "note" not in note.lower()
+        assert note.endswith(".")
 
 
 # --- the meter ------------------------------------------------------------------------------
