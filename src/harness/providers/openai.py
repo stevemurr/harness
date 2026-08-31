@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 
 from harness.loop import parse_arguments
-from harness.providers.base import ProviderError
+from harness.providers.base import Completion, ProviderError
 from harness.tools.base import ToolSpec
 from harness.types import Message, Role, ToolCall, Transcript
 
@@ -38,6 +38,11 @@ class OpenAICompatible:
     max_tokens: int | None = None
     timeout: float = 300.0
     max_retries: int = 3
+    #: How much context this model has, for `compaction`. A fact about the model, so it
+    #: lives beside `model` rather than in a settings object threaded through both front
+    #: ends -- `cli.py` builds an agent one way and the server builds one another, and a
+    #: setting that has to reach both is a setting one of them will be missing.
+    context_window: int = 262_144
     #: Fields merged into every request body, for deployment dialect the OpenAI schema does
     #: not cover. Needed in practice, not in theory: a Qwen3 behind LiteLLM spends its whole
     #: token budget in `reasoning_content` and returns `content: ""` unless the body carries
@@ -72,7 +77,7 @@ class OpenAICompatible:
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
+    ) -> Completion:
         body: dict[str, Any] = {
             **self.extra_body,
             "model": self.model,
@@ -97,7 +102,7 @@ class OpenAICompatible:
                 await asyncio.sleep(delay)
         raise last or ProviderError("no attempt was made")
 
-    async def _once(self, body: dict[str, Any]) -> Message:
+    async def _once(self, body: dict[str, Any]) -> Completion:
         try:
             response = await self._http().post("/chat/completions", json=body)
         except httpx.TimeoutException as exc:
@@ -120,7 +125,29 @@ class OpenAICompatible:
         choices = payload.get("choices") or []
         if not choices:
             raise ProviderError(f"response carried no choices: {json.dumps(payload)[:300]}")
-        return decode_message(choices[0].get("message") or {})
+
+        # The endpoint has already counted the tokens this request cost. Nothing else here
+        # can count them as well -- a tokeniser would be this model's only by coincidence --
+        # so the field is the measurement, and it is free.
+        usage = payload.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
+        return Completion(
+            decode_message(choices[0].get("message") or {}),
+            prompt_tokens if isinstance(prompt_tokens, int) else None,
+            _body_size(body),
+        )
+
+
+def _body_size(body: dict[str, Any]) -> int:
+    """Characters actually serialised, tool schemas included.
+
+    Counted here because this is the only place that knows the request's shape, and the
+    schemas are a real and constant part of what the window holds.
+    """
+    try:
+        return len(json.dumps(body))
+    except (TypeError, ValueError):  # a value the caller put in `extra_body`
+        return 0
 
 
 # --- wire encoding ----------------------------------------------------------------------

@@ -55,6 +55,7 @@ src/harness/
   loop.py        the agent loop
   workspace.py   path resolution and containment; tools never resolve their own
   approval.py    what may proceed without asking
+  compaction.py  the render, and when a long run hands off to a smaller context
   runner.py      joins the registry to approvals
   tools/
     base.py      the tool contract: ToolSpec, ToolContext, Registry
@@ -91,6 +92,7 @@ harness --init          # writes ~/.harness/config.toml, mode 0600
 base_url = "http://192.168.1.237:4000/v1"
 model = "qwen3.6"
 api_key = "sk-..."
+context_window = 262144   # at 80% of this, the agent compacts and carries on
 
 # Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM
 # answers with an empty string without this.
@@ -264,6 +266,68 @@ refusing at dispatch is the boundary. A model can call a tool it was never offer
 resumed transcript can carry one, and models invent names. Before the dispatch check
 existed, a scripted model asked for `write_file` in plan mode and the file was written.
 
+## Compaction
+
+A coding agent fills a context window long before it runs out of turns -- one `pytest`
+result is 30k characters. At 80% of the window the agent summarises what has happened and
+carries on in a smaller context, and **nothing is removed from the transcript**:
+
+```
+transcript.jsonl (append-only, complete)              what the provider is sent
+  {system}                                              {system}
+  {user: "add a test for the parser"}                   {user: <summary>}
+  {assistant + tool_calls}    ─┐                        {assistant + tool_calls}  ─┐ kept
+  {tool: 30k of pytest}        │ summarised             {tool: ...}                │ tail
+  {assistant + tool_calls}     │                        {assistant}               ─┘
+  {tool: ...}                 ─┘                        {tool}
+  {compaction: summary, anchor} ← appended
+  {assistant}
+  {tool}
+```
+
+Compaction appends one message and deletes none, so `cat` still shows every turn, `tail -f`
+still follows a live run, resume is still replay, and there is no migration. **This is what
+"the transcript is the state" was for.** The README has said since the first commit that
+what the model sees is the transcript *rendered* for a provider, and until now nothing
+exercised it -- `compaction.view` is that render, and it is a pure function. One durable
+fact, one view of it. The obvious implementation instead replaces old messages with a
+summary, which makes the file a rendering of some other truth and gives `JsonlStore` a
+second writer beside `append`.
+
+**It is not a tool**, and that is mechanical rather than a preference. A tool returns a
+string that becomes a TOOL message: it has no path to the transcript (`ToolContext` is
+`paths`, deliberately), it runs *after* the oversized request has gone out, and a boundary
+placed around a tool result is the dangling call `unanswered_calls` refuses. The principled
+objection is the one `plan.py` makes -- compaction is control state, and a model that could
+compact away an instruction it disliked would be a failure with no detection.
+
+The boundary points at its kept tail **by digest, not by index**. An index looks obviously
+right, by analogy with `events.py`, and is wrong: `EventLog` is in memory and never drops a
+row, while `JsonlStore.load` deliberately drops lines it cannot parse, which is how it
+survives a crash mid-append. A torn final line concatenated with the next run's first
+append is one unparseable line where two messages were, and every index after it shifts.
+
+Measurement is the endpoint's own `usage.prompt_tokens`, used to calibrate a character
+estimate rather than directly -- the decision has to be made *before* a request and that
+number describes the last one. It self-corrects per model, needs no tokeniser, and refuses
+to believe a measurement outside `[1/6, 1/1.5]`: an endpoint reporting `prompt_tokens: 0`
+would otherwise switch compaction off for the life of the process, which looks exactly like
+nothing being wrong.
+
+```toml
+[provider]
+context_window = 262144
+
+[compaction]
+enabled = true
+at = 0.8          # fraction of the window
+keep_turns = 2    # trailing turns kept verbatim
+```
+
+`keep_turns` is not zero on purpose: compaction fires at the top of a turn, so the newest
+messages are tool results the model *has not read yet*, and summarising those is the one
+place lossiness is guaranteed to hurt.
+
 ## The plan
 
 One tool, `update_plan`, taking the whole checklist every time. That is Codex's schema --
@@ -345,11 +409,17 @@ deleted its own control journal.
 
 ## Adding a provider
 
-Implement `Provider` in one file under `providers/`. All wire translation lives there --
-`Message`, `ToolCall` and `ToolSpec` know nothing about JSON shapes, because those shapes
-differ (OpenAI wants tool results as a `tool` role message; Anthropic wants
-`tool_result` blocks inside a `user` message). Putting `to_openai()` on a domain type would
-make the first provider written the one every other has to imitate.
+Implement `Provider` in one file under `providers/`. One method: a transcript and the tools
+in, a `Completion` -- the assistant message, and what the request cost -- out. All wire
+translation lives there; `Message`, `ToolCall` and `ToolSpec` know nothing about JSON
+shapes, because those shapes differ (OpenAI wants tool results as a `tool` role message;
+Anthropic wants `tool_result` blocks inside a `user` message). Putting `to_openai()` on a
+domain type would make the first provider written the one every other has to imitate.
+
+`Completion` carries `prompt_tokens` and `sent_chars` because the provider is the only thing
+that knows what it actually serialised -- the body holds the tool schemas as well as the
+transcript. Both are optional in practice: plenty of endpoints omit `usage`, and compaction
+falls back to an estimate rather than requiring it.
 
 ## There is no sandbox
 

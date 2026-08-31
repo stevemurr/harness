@@ -38,13 +38,19 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
+#: The window the model behind this harness actually has. Worth writing down rather than
+#: inheriting an OpenAI-shaped number: too large and compaction never fires before the
+#: endpoint 400s, so the feature ships off; too small and it compacts runs that had room.
+#: Neither error announces itself, which is why it is in the file `--init` writes.
+DEFAULT_CONTEXT_WINDOW = 262_144
 
 #: Every key this file may carry, so a typo is an error rather than a setting that does
 #: nothing. A silently ignored `base_ur1` is a person reading a correct-looking file and
 #: wondering why the default is in force.
-_PROVIDER_KEYS = frozenset({"base_url", "model", "api_key", "extra_body"})
+_PROVIDER_KEYS = frozenset({"base_url", "model", "api_key", "extra_body", "context_window"})
 _SERVER_KEYS = frozenset({"host", "port", "token"})
-_TABLES = frozenset({"provider", "server"})
+_COMPACTION_KEYS = frozenset({"enabled", "at", "keep_turns"})
+_TABLES = frozenset({"provider", "server", "compaction"})
 
 
 class ConfigError(Exception):
@@ -58,6 +64,9 @@ class Provider:
     api_key: str = field(default="", repr=False)
     #: Merged into every model request. See `providers/openai.py` for why this exists.
     extra_body: dict[str, Any] = field(default_factory=dict)
+    #: How much context this model has. A property of the model, so it sits here and is
+    #: handed to the provider rather than threaded to both front ends separately.
+    context_window: int = DEFAULT_CONTEXT_WINDOW
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,9 +78,19 @@ class Server:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionSettings:
+    """When to hand off to a smaller context. See `harness/compaction.py`."""
+
+    enabled: bool = True
+    at: float = 0.8
+    keep_turns: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     provider: Provider = field(default_factory=Provider)
     server: Server = field(default_factory=Server)
+    compaction: CompactionSettings = field(default_factory=CompactionSettings)
     #: Where this came from, or None. Front ends print it so a surprising setting is
     #: traceable to a file rather than guessed at.
     path: Path | None = None
@@ -101,6 +120,7 @@ def load(path: Path | None = None) -> Config:
 
     provider_table = _table(raw, "provider", _PROVIDER_KEYS, resolved)
     server_table = _table(raw, "server", _SERVER_KEYS, resolved)
+    compaction_table = _table(raw, "compaction", _COMPACTION_KEYS, resolved)
 
     extra = provider_table.get("extra_body", {})
     if not isinstance(extra, dict):
@@ -118,11 +138,25 @@ def load(path: Path | None = None) -> Config:
             model=str(provider_table.get("model") or DEFAULT_MODEL),
             api_key=str(provider_table.get("api_key") or ""),
             extra_body=dict(extra),
+            context_window=int(
+                provider_table.get("context_window") or DEFAULT_CONTEXT_WINDOW
+            ),
         ),
         server=Server(
             host=str(server_table.get("host") or DEFAULT_HOST),
             port=int(server_table.get("port") or DEFAULT_PORT),
             token=str(server_table.get("token") or ""),
+        ),
+        compaction=CompactionSettings(
+            # `is None` rather than `or`: `enabled = false` is the whole point of the key,
+            # and `or` would read it as absent and turn compaction back on.
+            enabled=(
+                True
+                if compaction_table.get("enabled") is None
+                else bool(compaction_table["enabled"])
+            ),
+            at=float(compaction_table.get("at") or 0.8),
+            keep_turns=int(compaction_table.get("keep_turns") or 2),
         ),
         path=resolved,
     )
@@ -181,6 +215,7 @@ def write_example(path: Path | None = None) -> Path:
         f'base_url = "{DEFAULT_BASE_URL}"\n'
         f'model = "{DEFAULT_MODEL}"\n'
         'api_key = ""\n'
+        f"context_window = {DEFAULT_CONTEXT_WINDOW}\n"
         "\n"
         "# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM\n"
         "# answers with an empty string without this.\n"
@@ -190,7 +225,13 @@ def write_example(path: Path | None = None) -> Path:
         "[server]\n"
         f'host = "{DEFAULT_HOST}"\n'
         f"port = {DEFAULT_PORT}\n"
-        '# token = ""   # set to require a bearer token; empty means no auth\n',
+        '# token = ""   # set to require a bearer token; empty means no auth\n'
+        "\n"
+        "# Summarise and hand off to a smaller context at this fraction of the window.\n"
+        "# [compaction]\n"
+        "# enabled = true\n"
+        "# at = 0.8\n"
+        "# keep_turns = 2\n",
         encoding="utf-8",
     )
     os.chmod(resolved, 0o600)

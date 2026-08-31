@@ -36,6 +36,7 @@ from uuid import uuid4
 
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals
+from harness.compaction import Compaction
 from harness.events import Visibility
 from harness.loop import Observer, Turn
 from harness.mode import NORMAL, PLAN, ModeState
@@ -46,7 +47,7 @@ from harness.runs import CommandRefused, Run, RunStatus, one_line, policy_for, p
 from harness.store.base import Store
 from harness.tools.ask import Questioner
 from harness.tools.base import Registry, Tool, ToolContext, ToolSpec
-from harness.types import Message, StopReason, ToolResult
+from harness.types import Message, Role, StopReason, ToolResult
 from harness.workspace import Workspace
 
 log = logging.getLogger(__name__)
@@ -126,6 +127,28 @@ class Watched:
         return result
 
 
+def compaction_reporter(live: Live):
+    """Tell a following client that the context was handed off.
+
+    A `user` row, not a developer one. Someone watching a run deserves to know the agent is
+    now working from a summary, because it is the honest explanation for any change in how
+    it behaves next -- and without it the only available explanation is the model.
+
+    Tolerates no run in flight: an `Agent` driven directly has a `Live` holding nothing.
+    """
+
+    async def report(summary: str, before: int, after: int) -> None:
+        run = live.run
+        if run is None:
+            return
+        run.publish(
+            "context.compacted",
+            {"summary": summary, "chars_before": before, "chars_after": after},
+        )
+
+    return report
+
+
 def publish_plan(run: Run, plan: Plan) -> None:
     """The whole checklist, every time.
 
@@ -157,7 +180,7 @@ def observer_for(live: Live) -> Observer:
 
         prose = turn.assistant.content.strip()
         if prose:
-            # One delta per turn, because `Provider.complete` returns a whole message --
+            # One delta per turn, because `Provider.complete` answers with a whole message --
             # there is no streaming below this. The stream identity is the run, so the
             # model's narration accumulates across turns instead of each turn replacing
             # the last; the terminal event's summary replaces the lot.
@@ -255,6 +278,7 @@ def open_conversation(
     workspace_id: str,
     provider: Provider,
     store: Store,
+    compaction: Compaction | None = None,
 ) -> Conversation:
     """Build the agent for one conversation, with the front end's collaborators in place.
 
@@ -280,6 +304,8 @@ def open_conversation(
         modes=modes,
         store=store,
         observers=[observer_for(live)],
+        compaction=compaction or Compaction(),
+        on_compaction=compaction_reporter(live),
     )
     return Conversation(
         thread_id=thread_id,
@@ -318,6 +344,10 @@ class Runtime:
 
     provider: Provider
     store: Store
+    #: Threaded rather than defaulted, because `[compaction] enabled = false` has to mean the
+    #: same thing through `harness-serve` as through `harness`. A setting one front end reads
+    #: and the other does not is the bug `config.py` was written about.
+    compaction: Compaction = field(default_factory=Compaction)
     conversations: dict[str, Conversation] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
 
@@ -336,6 +366,7 @@ class Runtime:
             workspace_id,
             self.provider,
             self.store,
+            self.compaction,
         )
         self.conversations[thread_id] = opened
         return opened
@@ -434,7 +465,18 @@ def _ending(stop: StopReason, messages: list[Message]) -> tuple[str, str]:
     make impossible, so it must not be thrown away one layer above it.
     """
     if stop.kind == "done":
-        last = next((m.content.strip() for m in reversed(messages) if m.content.strip()), "")
+        # Skipping a compaction boundary: its content is a handoff note the agent wrote to
+        # itself, and a model whose final message is empty -- the ordinary shape when a
+        # thinking model spends its budget in `reasoning_content` -- would otherwise hand
+        # the person that note as the answer.
+        last = next(
+            (
+                m.content.strip()
+                for m in reversed(messages)
+                if m.content.strip() and m.role is not Role.COMPACTION
+            ),
+            "",
+        )
         return "run.completed", last or "Finished."
     if stop.kind == "cancelled":
         return "run.cancelled", stop.detail or "Cancelled."

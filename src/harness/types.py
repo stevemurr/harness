@@ -23,6 +23,11 @@ class Role(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+    #: A compaction boundary. Never sent to a provider -- `compaction.view` renders it as a
+    #: user message carrying its summary, and the messages behind it are left out. It is in
+    #: the transcript because the transcript is the state: compaction appends this and
+    #: removes nothing, so the file stays complete and append-only.
+    COMPACTION = "compaction"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +53,15 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     #: Set only on TOOL messages: which call this answers.
     call_id: str | None = None
+    #: Set only on COMPACTION messages: identifies the message the verbatim kept tail begins
+    #: at, as a digest of that message rather than its index.
+    #:
+    #: An index would be smaller and is wrong. `EventLog` can key by index because it is in
+    #: memory and never drops a row; `JsonlStore.load` deliberately drops lines it cannot
+    #: parse, which is how it survives a crash mid-append. A torn final line concatenated
+    #: with the next run's first append is one unparseable line where two messages were, so
+    #: every index after it shifts by two -- permanently, in the file this points into.
+    keep_from: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +139,7 @@ class Transcript:
                     if later.role is Role.TOOL
                 }
                 return tuple(c for c in message.tool_calls if c.call_id not in answered)
-            if message.role is Role.USER:
+            if message.role in (Role.USER, Role.COMPACTION):
                 return ()
         return ()
 

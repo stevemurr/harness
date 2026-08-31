@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from harness.providers.base import Completion
 from harness.tools.base import ToolSpec
 from harness.types import Message, Role, ToolCall, Transcript
 
@@ -39,20 +40,26 @@ class ScriptedModel:
     """
 
     name = "scripted"
+    #: What a call reports as costing, for tests that drive the compaction threshold. A
+    #: number here is a number `compaction.Meter` calibrates against; `None` is an endpoint
+    #: that omits `usage`, which is a case worth being able to script.
+    context_window: int = 0
 
-    def __init__(self, *replies: Message) -> None:
+    def __init__(self, *replies: Message, prompt_tokens: int | None = None) -> None:
         self._replies = list(replies)
         #: A copy per call, not a reference: the transcript is mutated in place as the run
         #: goes on, so holding the live object would make every entry show the final state.
         self.seen: list[Transcript] = []
         self.tools_offered: list[tuple[str, ...]] = []
+        self._prompt_tokens = prompt_tokens
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
+    ) -> Completion:
         self.seen.append(Transcript(list(transcript.messages)))
         self.tools_offered.append(tuple(t.name for t in tools))
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
+        reply = self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
+        return Completion(reply, self._prompt_tokens, 1)
 
     async def aclose(self) -> None:
         return None
@@ -74,7 +81,7 @@ class Broken:
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
+    ) -> Completion:
         raise self._error
 
     async def aclose(self) -> None:

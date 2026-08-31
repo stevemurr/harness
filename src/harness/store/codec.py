@@ -26,6 +26,8 @@ def encode(message: Message) -> dict[str, Any]:
         ]
     if message.call_id is not None:
         body["call_id"] = message.call_id
+    if message.keep_from:
+        body["keep_from"] = message.keep_from
     return body
 
 
@@ -52,4 +54,5 @@ def decode(raw: dict[str, Any]) -> Message:
             for entry in raw.get("tool_calls") or []
         ),
         call_id=raw.get("call_id"),
+        keep_from=raw.get("keep_from") or "",
     )

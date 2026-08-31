@@ -7,6 +7,12 @@ So the log is an append-only list, sequences are its indices plus one, and a row
 edited, reordered or removed once appended. There is no compaction and no rewrite, because
 either one turns a cursor a client is still holding into a lie.
 
+That rule is about **this log**, and `harness/compaction.py` does not break it: compacting a
+transcript appends a `context.compacted` row here like any other event, and appends a
+boundary message there. Neither removes anything. The distinction matters in the other
+direction too -- a transcript can key its boundary by content but not by index, precisely
+because `JsonlStore.load` drops lines this log never does.
+
 Two rules beyond that, both from the client contract:
 
   * **Exactly one terminal event, and nothing after it.** A publish after a terminal one is

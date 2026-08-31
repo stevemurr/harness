@@ -1,7 +1,7 @@
 """The model boundary.
 
 This is the whole of how the harness talks to a model, and it is one method: give it a
-transcript and the tools available, get back one assistant message.
+transcript and the tools available, get back one assistant message and what it cost.
 
 Adding a provider is implementing this protocol in one file. Nothing else in the harness
 learns about it -- not the loop, not the tools, not the approval layer. The composition
@@ -27,10 +27,31 @@ Every provider owes the same three guarantees, because the loop above depends on
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from harness.tools.base import ToolSpec
 from harness.types import Message, Transcript
+
+
+@dataclass(frozen=True, slots=True)
+class Completion:
+    """One assistant turn, and the measurement that comes back with it.
+
+    `usage` is what the endpoint says the request cost, and it is `None`-able because
+    plenty of OpenAI-compatible servers omit the field -- the harness must work without it
+    rather than require it.
+
+    `sent_chars` is here because the provider is the only thing that knows what it actually
+    serialised. The request body carries the tool schemas as well as the transcript, and the
+    rule above says wire encoding does not leak upward, so a caller counting characters
+    itself would be breaking that rule to get a worse number. Together the two calibrate the
+    estimate in `compaction.Meter`.
+    """
+
+    message: Message
+    prompt_tokens: int | None = None
+    sent_chars: int = 0
 
 
 class ProviderError(Exception):
@@ -55,7 +76,7 @@ class Provider(Protocol):
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
+    ) -> Completion:
         """One assistant turn. Raises `ProviderError` when the endpoint cannot answer."""
         ...
 
@@ -68,10 +89,12 @@ def bind(provider: Provider, tools: Sequence[ToolSpec]):
     """Adapt a provider to what `AgentLoop` wants: transcript in, message out.
 
     The loop takes a plain callable rather than a `Provider` so it can be tested with a
-    scripted function and never needs to know this protocol exists.
+    scripted function and never needs to know this protocol exists. `Agent` does not use
+    this -- it has its own adapter, because it also has to measure and compact -- so this
+    is for a caller driving the loop directly.
     """
 
     async def complete(transcript: Transcript) -> Message:
-        return await provider.complete(transcript, tools)
+        return (await provider.complete(transcript, tools)).message
 
     return complete

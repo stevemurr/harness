@@ -20,10 +20,23 @@ it when the run *starts*. Hence `open_thread`. (2026-08-30)
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.approval import Approvals
+from harness.compaction import (
+    Compaction,
+    State,
+    anchor_for,
+    chars,
+    handoff_prompt,
+    last_boundary,
+    view,
+)
 from harness.environment import describe
 from harness.loop import AgentLoop, Limits, Observer, Outcome, Turn, system, user
 from harness.mode import NORMAL, Mode, ModeState
@@ -35,6 +48,8 @@ from harness.tools.ask import Questioner
 from harness.tools.base import Registry, ToolContext, ToolSpec
 from harness.types import Message, Role, Transcript
 from harness.workspace import Workspace
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a coding agent working in a single folder.
 
@@ -78,6 +93,13 @@ class Agent:
     #: What the agent may do. A person sets this, never the model -- the model can only ask
     #: to leave plan mode, and a person answers.
     modes: ModeState = field(default_factory=ModeState)
+    #: When to compact. A person sets this too, and for the same reason: compaction decides
+    #: what the model is allowed to forget, which is not a decision to hand the model.
+    compaction: Compaction = field(default_factory=Compaction)
+    #: Told when a compaction happened, with the summary and what it saved. Optional and
+    #: ordinary, like every other collaborator: the CLI prints a line, a server publishes an
+    #: event, a script passes nothing.
+    on_compaction: Callable[[str, int, int], Awaitable[None] | None] | None = None
 
     async def open_thread(self, thread_id: str | None = None) -> str:
         """Resolve or create the thread, and return its id -- before any work happens.
@@ -129,7 +151,7 @@ class Agent:
         loop = AgentLoop(
             # Tools are chosen per call rather than once, because the mode can change
             # mid-run: approving a plan unlocks the writing tools from the next turn on.
-            complete=self._complete,
+            complete=self._completer(thread_id, State()),
             run_tool=ToolRunner(
                 self.registry,
                 ToolContext(paths=self.workspace),
@@ -141,8 +163,146 @@ class Agent:
         )
         return await loop.run(transcript)
 
-    async def _complete(self, transcript: Transcript) -> Message:
-        return await self.provider.complete(transcript, self._specs())
+    def _completer(self, thread_id: str, state: State):
+        """The loop's model call, with compaction on the way out.
+
+        A closure over the thread id, in the shape `_recorder` already uses, because a
+        boundary has to be *written* where it is appended. `Observer` is told about turns
+        and a boundary is not one, so nothing else on the persistence path would ever see
+        it -- and a boundary that lives only in memory means every resume reloads the whole
+        uncompacted history and pays for the same summary again.
+
+        Not a field on `self`: one `Agent` serves many runs, both here and in the server,
+        which caches one per thread for the life of the process.
+        """
+
+        async def complete(transcript: Transcript) -> Message:
+            window = getattr(self.provider, "context_window", 0)
+            rendered = view(transcript)
+
+            if state.should_compact(
+                rendered, self.compaction, window
+            ) and await self._compact(transcript, thread_id, state, window):
+                rendered = view(transcript)
+
+            # The guard `loop.py` runs before every turn checks the raw transcript, and what
+            # goes on the wire is now the render. `types.py` calls that check a boundary not
+            # to relax, so it is applied to the object actually being sent -- a render with a
+            # dangling call is a bug here, and sending the transcript whole is a worse answer
+            # than an opaque 400 but a better one than a silent corruption.
+            if rendered is not transcript and Transcript(rendered.messages).unanswered_calls():
+                log.error("compacted view has unanswered tool calls; sending it whole")
+                rendered = transcript
+
+            completion = await self.provider.complete(rendered, self._specs())
+            state.meter.record(completion.prompt_tokens, completion.sent_chars)
+            return completion.message
+
+        return complete
+
+    async def _compact(
+        self, transcript: Transcript, thread_id: str, state: State, window: int
+    ) -> bool:
+        """Summarise the history behind the kept tail, and append the boundary.
+
+        Returns whether anything was compacted. Every early exit here leaves the run to
+        continue uncompacted, which may end in the provider's own context error -- an honest
+        failure with a name, and better than mangling a transcript to avoid it.
+        """
+        messages = transcript.messages
+        floor = last_boundary(messages) + 1
+
+        # `keep_turns` bounds turns, not bytes: nothing caps tool calls per turn and each
+        # result may be 30k characters, so two kept turns can be most of a window on their
+        # own. Keep fewer of them until the tail is modest -- *fewer*, which means an anchor
+        # further along the transcript. Reaching further back is the opposite operation and
+        # makes the tail bigger; written that way first, it grew the tail until there was
+        # nothing left in front of it and every compaction was abandoned.
+        #
+        # Never below one turn. The newest messages are tool results the model has not read
+        # yet, and a tail that still does not fit is a reason to compact everything in front
+        # of it, not a reason to give up.
+        budget = self.compaction.threshold(window) / 2
+        keep = max(self.compaction.keep_turns, 1)
+        while True:
+            anchor, start = anchor_for(messages, keep)
+            if keep <= 1 or state.meter.estimate(Transcript(messages[start:])) <= budget:
+                break
+            keep -= 1
+
+        # There has to be a *turn* behind the tail, not merely a message. Measured: with a
+        # short history the tail can reach back to the first assistant message, leaving only
+        # the user's prompt to summarise -- and a run then paid for a full-context call to
+        # replace a two-character prompt with a sixteen-character summary, making the render
+        # larger than the transcript it rendered. Checked before the call, because the call
+        # is the expensive part.
+        if start <= floor or not any(
+            m.role is Role.ASSISTANT for m in messages[floor:start]
+        ):
+            # Not latched. "Nothing to compact yet" is a condition the next turn may change,
+            # and re-checking costs nothing -- this guard runs before the model call, not
+            # after it. Latching here would fire on the very first turn of every run, where
+            # there is no history at all, and never clear. Only a compaction that was
+            # actually attempted and did not help sets `exhausted`.
+            return False
+
+        # Rendered, not sliced: the anchor indexes raw messages and a render is a different
+        # list, so slicing one by the other cuts in the wrong place -- past the intended
+        # point on an early-compacted thread, which is a dangling call in the summarisation
+        # request itself.
+        prefix = view(Transcript(messages[:start]))
+        try:
+            completion = await self.provider.complete(
+                Transcript(
+                    [
+                        system(handoff_prompt(self.modes.planning)),
+                        *prefix.messages[1:],
+                        user("Write the handoff note now."),
+                    ]
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("could not summarise for compaction; continuing uncompacted")
+            state.exhausted = True
+            return False
+
+        summary = completion.message.content.strip()
+        if not summary:
+            state.exhausted = True
+            return False
+
+        # Appended only now. A cancel or a failure above must not leave a boundary that
+        # claims to summarise a history it never read.
+        before = chars(transcript)
+        boundary = Message(Role.COMPACTION, summary, keep_from=anchor)
+        transcript.append(boundary)
+
+        after = chars(view(transcript))
+        if after >= before:
+            # The summary came back longer than what it replaced. Keeping the boundary would
+            # cost context rather than save it, and would do so permanently -- every later
+            # render reads through it. Drop it, and stop trying.
+            transcript.messages.pop()
+            state.exhausted = True
+            return False
+
+        await self._write(thread_id, [boundary])
+        await self._notify(summary, before, after)
+        return True
+
+    async def _notify(self, summary: str, before: int, after: int) -> None:
+        if self.on_compaction is None:
+            return
+        try:
+            outcome = self.on_compaction(summary, before, after)
+            if inspect.isawaitable(outcome):
+                await outcome
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("compaction observer failed")
 
     def _specs(self) -> tuple[ToolSpec, ...]:
         """The tools this mode offers.

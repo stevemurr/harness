@@ -41,6 +41,11 @@ def conversation() -> list[Message]:
         ),
         Message(Role.TOOL, "     1\tprint('hi')", call_id="call_1"),
         Message(Role.ASSISTANT, "done"),
+        # A compaction boundary, because `keep_from` is a field only this message carries
+        # and a store that drops it makes the thread unresumable -- `compaction.view` then
+        # finds a boundary it cannot render from. `MemoryStore` holds the objects, so only
+        # `JsonlStore` can lose it, and only a suite parameterised over both would notice.
+        Message(Role.COMPACTION, "summary of what happened", keep_from="a1b2c3d4e5f60718"),
     ]
 
 

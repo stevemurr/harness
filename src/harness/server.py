@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from harness.compaction import Compaction
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_HOST,
@@ -99,6 +100,7 @@ def create_app(
     token: str = "",
     instance_id: str | None = None,
     heartbeat: float = HEARTBEAT,
+    compaction: Compaction | None = None,
 ) -> Starlette:
     """The server, with its collaborators handed in.
 
@@ -106,7 +108,9 @@ def create_app(
     scripted model -- which is the practical argument for the interface, separate from the
     design one.
     """
-    runtime = Runtime(provider=provider, store=store)
+    runtime = Runtime(
+        provider=provider, store=store, compaction=compaction or Compaction()
+    )
     folders = workspaces or Workspaces()
     identity = (
         os.environ.get("ORCA_MANAGED_INSTANCE_ID", "")
@@ -536,9 +540,15 @@ def build_app(args: argparse.Namespace) -> Starlette:
             model=settings.provider.model,
             api_key=settings.provider.api_key,
             extra_body=settings.provider.extra_body,
+            context_window=settings.provider.context_window,
         ),
         store=JsonlStore(THREADS),
         token=settings.server.token,
+        compaction=Compaction(
+            enabled=settings.compaction.enabled,
+            at=settings.compaction.at,
+            keep_turns=settings.compaction.keep_turns,
+        ),
     )
 
 

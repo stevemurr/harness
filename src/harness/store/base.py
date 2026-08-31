@@ -10,7 +10,9 @@ running tests that already exist rather than by writing new ones -- which is mos
 reason this is an interface at all.
 
 **What this deliberately does not have**: no event table, no outbox, no snapshots, no
-sequence numbers, no migrations. The predecessor needed those because it had to resume
+sequence numbers, no migrations -- and no `replace` or `rewrite`. `append` is the only
+writer, which is what lets compaction be an append rather than a second way to change a
+stored transcript. The predecessor needed those because it had to resume
 *mid-effect* -- reconstruct which declared side effects had been claimed, executed or
 half-executed, without repeating one. This harness has no effects to be part-way through.
 It has a list of messages, and the last one either landed or did not. If a client later

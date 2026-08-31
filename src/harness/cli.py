@@ -20,8 +20,10 @@ from pathlib import Path
 
 from harness.agent import build
 from harness.approval import Approvals, Decision, Policy, Request
+from harness.compaction import SEED_CHARS_PER_TOKEN, Compaction
 from harness.config import (
     DEFAULT_BASE_URL,
+    DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MODEL,
     ConfigError,
     load,
@@ -82,6 +84,23 @@ def _plan_line(line: str) -> str:
     if line.startswith("◐"):
         return bold(line)
     return line
+
+
+def report_compaction(summary: str, before: int, after: int) -> None:
+    """Say that the context was handed off, and how much smaller it got.
+
+    Said out loud rather than kept in a log: an agent that quietly forgets things and does
+    not mention it leaves a person attributing the change in its behaviour to the model.
+    Nothing is lost from the transcript -- the file still holds every turn -- and this line
+    is what tells someone that, if they wonder.
+    """
+    tokens = lambda n: int(n / SEED_CHARS_PER_TOKEN)  # noqa: E731
+    print(
+        dim(
+            f"\ncompacted context · ~{tokens(before):,} → ~{tokens(after):,} tokens · "
+            "the transcript still holds every turn\n"
+        )
+    )
 
 
 async def approve(request: Request) -> Decision:
@@ -160,6 +179,14 @@ async def main_async(args: argparse.Namespace) -> int:
             args.api_key, os.environ.get("HARNESS_API_KEY", ""), stored.provider.api_key, ""
         ),
         max_tokens=args.max_tokens,
+        context_window=int(
+            settle(
+                str(args.context_window or ""),
+                os.environ.get("HARNESS_CONTEXT_WINDOW", ""),
+                str(stored.provider.context_window or ""),
+                str(DEFAULT_CONTEXT_WINDOW),
+            )
+        ),
         extra_body=extra or stored.provider.extra_body,
     )
     approvals = Approvals(
@@ -178,6 +205,12 @@ async def main_async(args: argparse.Namespace) -> int:
         # is a better answer than a hang.
         ask=ask_user if sys.stdin.isatty() else None,
     )
+    agent.compaction = Compaction(
+        enabled=stored.compaction.enabled,
+        at=stored.compaction.at,
+        keep_turns=stored.compaction.keep_turns,
+    )
+    agent.on_compaction = report_compaction
 
     print(dim(f"harness · {provider.name} · {agent.workspace.root}"))
     if args.plan:
@@ -236,6 +269,14 @@ def main(argv: list[str] | None = None) -> int:
         "--api-key", default="", help="env: HARNESS_API_KEY, or provider.api_key"
     )
     parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument(
+        "--context-window",
+        type=int,
+        default=None,
+        help="How much context the model has. At 80%% of it the agent summarises what has "
+        "happened and carries on in a smaller one; nothing is removed from the transcript. "
+        "(env: HARNESS_CONTEXT_WINDOW, or provider.context_window in config.toml)",
+    )
     parser.add_argument("--config", default="", help="Path to config.toml.")
     parser.add_argument(
         "--extra-body",
