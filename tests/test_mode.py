@@ -7,36 +7,16 @@ Everything else here is about that one fact and the gate that lifts it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from conftest import ScriptedModel, calls
 from harness.agent import Agent, build, default_registry
 from harness.approval import Approvals, Decision, Policy, Request, deny_all
 from harness.mode import NORMAL, PLAN, Mode, ModeState
-from harness.tools.base import ToolSpec
-from harness.types import Message, Role, ToolCall, Transcript
+from harness.types import Message, Role
 from harness.workspace import Workspace
-
-
-class ScriptedModel:
-    name = "scripted"
-
-    def __init__(self, *replies: Message) -> None:
-        self._replies = list(replies)
-        self.tools_offered: list[tuple[str, ...]] = []
-
-    async def complete(self, transcript: Transcript, tools: Sequence[ToolSpec] = ()) -> Message:
-        self.tools_offered.append(tuple(t.name for t in tools))
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-    async def aclose(self) -> None:
-        return None
-
-
-def calls(*specs: tuple[str, str, dict]) -> Message:
-    return Message(Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs))
 
 
 @pytest.fixture

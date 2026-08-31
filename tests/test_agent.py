@@ -1,48 +1,22 @@
 """The composition root, driven end to end against a scripted model.
 
-No network. `Provider` is an interface, so a test implements it in six lines -- which is the
-practical argument for the interface, separate from the design one.
+No network: the model is `conftest.ScriptedModel`, which is six lines implementing
+`Provider` -- the practical argument for that interface, separate from the design one.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from conftest import Broken, ScriptedModel, calls
 from harness.agent import Agent, build, default_registry
 from harness.approval import Approvals, Policy, deny_all
 from harness.providers.base import ProviderError
 from harness.store import MemoryStore
-from harness.tools.base import ToolSpec
-from harness.types import Message, Role, ToolCall, Transcript
+from harness.types import Message, Role
 from harness.workspace import Workspace
-
-
-class ScriptedModel:
-    """Replies in order, then repeats the last. Records what it was asked."""
-
-    name = "scripted"
-
-    def __init__(self, *replies: Message) -> None:
-        self._replies = list(replies)
-        self.seen: list[Transcript] = []
-        self.tools_offered: list[tuple[str, ...]] = []
-
-    async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
-        self.seen.append(Transcript(list(transcript.messages)))
-        self.tools_offered.append(tuple(t.name for t in tools))
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-    async def aclose(self) -> None:
-        return None
-
-
-def calls(*specs: tuple[str, str, dict]) -> Message:
-    return Message(Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs))
 
 
 @pytest.fixture
@@ -121,16 +95,9 @@ async def test_a_refused_tool_is_reported_and_nothing_is_written(folder: Path) -
 
 
 async def test_a_provider_failure_ends_the_run_without_raising(folder: Path) -> None:
-    class Broken:
-        name = "broken"
+    model = Broken(ProviderError("endpoint is down", retryable=False))
 
-        async def complete(self, transcript, tools=()):
-            raise ProviderError("endpoint is down", retryable=False)
-
-        async def aclose(self):
-            return None
-
-    outcome = await agent_over(folder, Broken()).run("do it")
+    outcome = await agent_over(folder, model).run("do it")
 
     assert outcome.stop.kind == "error"
     assert "endpoint is down" in outcome.stop.detail

@@ -14,42 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
 import pytest
 import uvicorn
 
+from conftest import ScriptedModel, calls, says
 from harness.server import create_app
 from harness.store import JsonlStore
-from harness.tools.base import ToolSpec
-from harness.types import Message, Role, ToolCall, Transcript
 
 HEARTBEAT = 0.1
-
-
-class ScriptedModel:
-    name = "scripted"
-
-    def __init__(self, *replies: Message) -> None:
-        self._replies = list(replies)
-
-    async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-    async def aclose(self) -> None:
-        return None
-
-
-def says(text: str) -> Message:
-    return Message(Role.ASSISTANT, text)
-
-
-def calls(*specs: tuple[str, str, dict]) -> Message:
-    return Message(Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs))
 
 
 class Served:

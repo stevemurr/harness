@@ -7,17 +7,17 @@ not control state, and a run finishes identically whether it was written or not.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from conftest import ScriptedModel
 from harness.agent import Agent, default_registry
 from harness.approval import Approvals, Policy
 from harness.plan import Plan, Status, Step
-from harness.tools.base import Registry, ToolContext, ToolSpec
+from harness.tools.base import Registry, ToolContext
 from harness.tools.plan import plan_tools
-from harness.types import Message, Role, ToolCall, Transcript
+from harness.types import Message, Role, ToolCall
 from harness.workspace import Workspace
 
 
@@ -135,21 +135,6 @@ def test_the_plan_holds_no_opinion_about_how_many_steps_are_in_progress() -> Non
 
 def test_an_empty_plan_renders_as_one() -> None:
     assert Plan().render() == "(the plan is empty)"
-
-
-class ScriptedModel:
-    name = "scripted"
-
-    def __init__(self, *replies: Message) -> None:
-        self._replies = list(replies)
-
-    async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-    async def aclose(self) -> None:
-        return None
 
 
 async def test_a_run_ends_identically_whether_a_plan_was_written_or_not(

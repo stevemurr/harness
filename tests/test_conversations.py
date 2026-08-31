@@ -8,42 +8,16 @@ what the harness does onto what a client shows is testable without a socket.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from conftest import Broken, ScriptedModel, calls, says
 from harness.approval import Decision
 from harness.conversations import Runtime
 from harness.events import Visibility
 from harness.runs import RunStatus, progress_id
-from harness.tools.base import ToolSpec
-from harness.types import Message, Role, ToolCall, Transcript
-
-
-class ScriptedModel:
-    """Replies in order, then repeats the last. Same six lines `test_agent.py` uses."""
-
-    name = "scripted"
-
-    def __init__(self, *replies: Message) -> None:
-        self._replies = list(replies)
-
-    async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
-    ) -> Message:
-        return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-    async def aclose(self) -> None:
-        return None
-
-
-def calls(*specs: tuple[str, str, dict]) -> Message:
-    return Message(Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs))
-
-
-def says(text: str) -> Message:
-    return Message(Role.ASSISTANT, text)
+from harness.types import Message, Role, ToolCall
 
 
 @pytest.fixture
@@ -173,16 +147,7 @@ async def test_a_run_that_hit_the_turn_limit_did_not_complete(folder, tmp_path) 
 async def test_a_provider_failure_ends_the_run_as_failed_not_as_a_traceback(
     folder, tmp_path
 ) -> None:
-    class Broken:
-        name = "broken"
-
-        async def complete(self, transcript, tools=()):
-            raise RuntimeError("the endpoint is down")
-
-        async def aclose(self):
-            return None
-
-    runtime = runtime_for(Broken(), tmp_path)
+    runtime = runtime_for(Broken(RuntimeError("the endpoint is down")), tmp_path)
 
     run = await drive(runtime, folder, "go")
 

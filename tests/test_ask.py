@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import ScriptedModel
 from harness.mode import NORMAL, PLAN, ModeState
 from harness.plan import Plan
 from harness.tools.ask import AskUser, ask_tools
@@ -102,31 +103,15 @@ def test_the_question_tool_survives_plan_mode() -> None:
 
 
 async def test_a_run_can_ask_in_plan_mode_end_to_end(tmp_path: Path) -> None:
-    from collections.abc import Sequence
 
     from harness.agent import Agent, default_registry
     from harness.approval import Approvals, Policy
-    from harness.tools.base import ToolSpec
-    from harness.types import Message, Role, Transcript
-
-    class Scripted:
-        name = "scripted"
-
-        def __init__(self, *replies: Message) -> None:
-            self._replies = list(replies)
-            self.offered: list[tuple[str, ...]] = []
-
-        async def complete(self, transcript: Transcript, tools: Sequence[ToolSpec] = ()):
-            self.offered.append(tuple(t.name for t in tools))
-            return self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
-
-        async def aclose(self) -> None:
-            return None
+    from harness.types import Message, Role
 
     async def person(question: str, options: tuple[str, ...]) -> str:
         return "the second one"
 
-    model = Scripted(
+    model = ScriptedModel(
         Message(
             Role.ASSISTANT,
             "",
@@ -147,7 +132,7 @@ async def test_a_run_can_ask_in_plan_mode_end_to_end(tmp_path: Path) -> None:
 
     outcome = await agent.run("how would you build this?")
 
-    assert "ask_user" in model.offered[0]
+    assert "ask_user" in model.tools_offered[0]
     assert outcome.stop.ok
     assert agent.modes.planning
 
