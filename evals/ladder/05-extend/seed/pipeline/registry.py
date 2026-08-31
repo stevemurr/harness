@@ -2,11 +2,7 @@
 
 from pipeline.steps import Squeeze, Strip, Upper
 
-STEPS = {
-    "upper": Upper(),
-    "strip": Strip(),
-    "squeeze": Squeeze(),
-}
+STEPS = {"upper": Upper(), "strip": Strip(), "squeeze": Squeeze()}
 
 
 def lookup(name: str):

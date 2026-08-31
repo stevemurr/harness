@@ -19,7 +19,5 @@ class Strip(Step):
 
 
 class Squeeze(Step):
-    """Collapse runs of whitespace into single spaces."""
-
     def apply(self, text: str) -> str:
         return " ".join(text.split())

@@ -1,3 +1,3 @@
 {
-  "tests": "Finding one wrong line in working code, without touching the tests."
+  "tests": "A defect one call below the test that fails, with a tempting wrong fix."
 }

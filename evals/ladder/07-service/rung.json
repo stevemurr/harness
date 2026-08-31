@@ -1,3 +1,3 @@
 {
-  "tests": "Something that has to run, bind a port and answer correctly."
+  "tests": "State shared across requests, where the obvious place for it is per-request."
 }
