@@ -34,7 +34,23 @@ class OpenAICompatible:
     base_url: str
     model: str
     api_key: str = ""
+    #: Sampling. Defaults are the OpenAI-shaped neutral ones; a deployment sets what its
+    #: model actually wants, in `[provider]`. Qwen3.6 in non-thinking mode asks for
+    #: temperature 0.7, top_p 0.80, top_k 20, presence_penalty 1.5 -- and its own
+    #: `generation_config.json` ships `do_sample: true`, so temperature 0 is not merely
+    #: unusual for it but contrary to how it was configured to run. Greedy decoding is the
+    #: prime suspect for the repetition this harness measured: five of 110 eval attempts
+    #: burned their turn budget re-issuing calls they had already made, one of them 32
+    #: times. (2026-08-31)
     temperature: float = 0.0
+    #: Nucleus sampling. `None` leaves it out of the body entirely, which is not the same
+    #: as sending 1.0 -- some gateways treat an explicit value differently from an absent
+    #: one, and a harness should not invent a parameter nobody asked for.
+    top_p: float | None = None
+    #: Penalises tokens already present, which is what a model card means by "reduce
+    #: endless repetitions". Standard OpenAI, so it goes in the body rather than in
+    #: `extra_body`.
+    presence_penalty: float | None = None
     max_tokens: int | None = None
     timeout: float = 300.0
     max_retries: int = 3
@@ -88,6 +104,10 @@ class OpenAICompatible:
             body["tools"] = [encode_tool(spec) for spec in tools]
         if self.max_tokens is not None:
             body["max_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            body["top_p"] = self.top_p
+        if self.presence_penalty is not None:
+            body["presence_penalty"] = self.presence_penalty
 
         last: Exception | None = None
         for attempt in range(self.max_retries):

@@ -193,6 +193,9 @@ def provider():
         api_key=settings.provider.api_key,
         extra_body=settings.provider.extra_body,
         context_window=settings.provider.context_window,
+        temperature=settings.provider.temperature,
+        top_p=settings.provider.top_p,
+        presence_penalty=settings.provider.presence_penalty,
         timeout=600,
     )
 

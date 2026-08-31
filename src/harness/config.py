@@ -49,7 +49,10 @@ DEFAULT_CONTEXT_WINDOW = 262_144
 #: Every key this file may carry, so a typo is an error rather than a setting that does
 #: nothing. A silently ignored `base_ur1` is a person reading a correct-looking file and
 #: wondering why the default is in force.
-_PROVIDER_KEYS = frozenset({"base_url", "model", "api_key", "extra_body", "context_window"})
+_PROVIDER_KEYS = frozenset({
+    "base_url", "model", "api_key", "extra_body", "context_window",
+    "temperature", "top_p", "presence_penalty",
+})
 _SERVER_KEYS = frozenset({"host", "port", "token"})
 _COMPACTION_KEYS = frozenset({"enabled", "at", "keep_turns"})
 _OUTPUT_KEYS = frozenset({"per_result", "per_turn"})
@@ -71,6 +74,12 @@ class Provider:
     #: How much context this model has. A property of the model, so it sits here and is
     #: handed to the provider rather than threaded to both front ends separately.
     context_window: int = DEFAULT_CONTEXT_WINDOW
+    #: Sampling, per whatever the model's own card recommends. Here rather than in
+    #: `settings.py` because these are facts about a model and not knobs of this harness:
+    #: the right numbers change when the model does, and only a deployment knows which.
+    temperature: float = 0.0
+    top_p: float | None = None
+    presence_penalty: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +151,9 @@ def load(path: Path | None = None) -> Config:
             context_window=int(
                 provider_table.get("context_window") or DEFAULT_CONTEXT_WINDOW
             ),
+            temperature=float(provider_table.get("temperature", 0.0)),
+            top_p=_optional_float(provider_table.get("top_p")),
+            presence_penalty=_optional_float(provider_table.get("presence_penalty")),
         ),
         server=Server(
             host=str(server_table.get("host") or DEFAULT_HOST),
@@ -178,6 +190,16 @@ def load(path: Path | None = None) -> Config:
         ),
         path=resolved,
     )
+
+
+def _optional_float(value: Any) -> float | None:
+    """A sampling parameter, or nothing at all.
+
+    Absent is not zero. `presence_penalty = 0` is a real instruction to penalise nothing,
+    and leaving the key out means "do not send it" -- which some gateways treat
+    differently from sending the neutral value.
+    """
+    return None if value is None else float(value)
 
 
 def _table(raw: dict, name: str, allowed: frozenset[str], path: Path) -> dict:
@@ -234,6 +256,13 @@ def write_example(path: Path | None = None) -> Path:
         f'model = "{DEFAULT_MODEL}"\n'
         'api_key = ""\n'
         f"context_window = {DEFAULT_CONTEXT_WINDOW}\n"
+        "\n"
+        "# Sampling, from your model's own card. These are Qwen3.6's for non-thinking\n"
+        "# mode; a different model wants different numbers. temperature = 0 is greedy\n"
+        "# decoding, which several model cards warn produces endless repetition.\n"
+        "# temperature = 0.7\n"
+        "# top_p = 0.8\n"
+        "# presence_penalty = 1.5\n"
         "\n"
         "# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM\n"
         "# answers with an empty string without this.\n"

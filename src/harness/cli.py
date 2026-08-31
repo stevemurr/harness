@@ -179,6 +179,9 @@ async def main_async(args: argparse.Namespace) -> int:
             args.api_key, os.environ.get("HARNESS_API_KEY", ""), stored.provider.api_key, ""
         ),
         max_tokens=args.max_tokens,
+        temperature=stored.provider.temperature,
+        top_p=stored.provider.top_p,
+        presence_penalty=stored.provider.presence_penalty,
         context_window=int(
             settle(
                 str(args.context_window or ""),
