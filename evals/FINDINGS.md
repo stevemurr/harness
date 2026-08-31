@@ -1,0 +1,65 @@
+# What the ladder has actually shown
+
+Measurements, and the ones that were wrong. A number in a commit message cannot be edited
+once it is pushed; this file can, so it is where a claim goes to be checked.
+
+## Retracted: "code search is 5.5x faster on a cross-file rename"
+
+Reported from a single attempt at `11-overloaded-rename`: 47.0s with the code tools against
+260.6s without. It does not survive repetition.
+
+    code   46.2  90.6  148.9  184.1  224.8    median 148.9    spread 179s
+    base  107.6 111.5  132.3  134.7  140.4    median 132.3    spread  33s
+
+At n=5 the code arm is **slightly slower** at the median and has five times the variance.
+The original pairing took a near-best code run against a base run of 260.6s -- which lies
+outside the entire n=5 base range, so it was an outlier being compared against a best case.
+Best-versus-worst, twice over.
+
+Pass rate at n=5 is 4/5 with the tools against 3/5 without, which is one attempt of
+difference and means nothing.
+
+**The lesson is about method, not about the tools.** Every conclusion drawn from counting
+tool calls in this eval deserves the same scepticism. Counts show volume, not what happened:
+the same arithmetic turned a refused-then-retried call into apparent diligence, and turned
+one lucky pairing into a headline.
+
+## What the transcripts do show
+
+All three code-arm runs examined reach for the index immediately -- `find_definition` four
+times and `find_references` twice, at call position 1 to 3 -- and get the same correct
+answer. Whether the tools are used is settled. What varies is what happens next:
+
+| run | after the index | calls | identical repeats | result |
+|---|---|---|---|---|
+| code.3 | read, four edits, run | 34 | 0 | 46.2s, passed |
+| code.1 | eleven `read_file` re-deriving it | 55 | 1 | 224.8s, passed |
+| code.4 | forty-four greps | 55 | 32 | failed |
+
+`code.4` was handed the complete answer and then abandoned it. That is the same repetition
+pathology the turn limit was catching: five of 110 baseline attempts burned their budget,
+and those five are the runs that repeat themselves.
+
+## Open: does the sampling fix it
+
+The baseline ran with `temperature=0.0` -- greedy decoding on a model whose own
+`generation_config.json` ships `do_sample: true`, and with `presence_penalty` at 0 where the
+card asks for 1.5.
+
+The tuned run reached 95 of 110 attempts before being stopped, and recorded **zero**
+`max_turns` against five in the baseline. That is suggestive and not yet an answer:
+`11-overloaded-rename` is the rung that held the worst spirals, and the tuned run never
+reached it.
+
+## Void: `09` and `10` in both runs
+
+`09-needle-rename` asserted a count of the seeded source, which went stale when
+`harness/code/lsp.py` was added mid-session. It failed every attempt in both runs for that
+reason. Re-verified against the corrected check, all ten tuned artifacts pass: the rung was
+10/10 and reported 0/10.
+
+Both rungs now assert properties rather than tallies, and neither has a valid number in
+either run. They need re-running in both arms before any comparison means anything.
+
+**The rule this cost us:** a rung seeded from live source must never assert a count of that
+source, or it silently begins grading the last commit instead of the agent.
