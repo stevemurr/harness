@@ -70,6 +70,12 @@ src/harness/
     memory.py    for tests
   agent.py       the composition root
   cli.py         the terminal front end
+  events.py      one run's event log, and the cursor guarantee
+  runs.py        one run, and what a client can do to it in flight
+  conversations.py  what a server front end passes `Agent`, and why it is four things
+  workspaces.py  a registered folder, and how one is identified
+  stream.py      the event stream, and the three things that hang a client
+  server.py      the HTTP front end: routes, and the one error shape
 ```
 
 ## Running it
@@ -102,6 +108,60 @@ Same `Agent`, three front ends, no new abstractions.
 Persistence is one of those observers, so the loop never learns that storage exists and a
 run with no store takes the same path. Observers may be async precisely for this: a store
 write that is not awaited has not happened.
+
+**The server was written, and it found the count wrong.** Not the claim -- nothing in
+`AgentLoop`, `Agent` or any tool changed -- but the number. It is four collaborators, and
+the two that were missed are missed for reasons worth knowing:
+
+  * `Registry`, because `Observer` is told about a completed *turn*. An activity row
+    published from there can only ever arrive already finished, so a turn whose second tool
+    call is a three-minute `pytest` shows a client nothing at all until the whole turn ends.
+    The server wraps each tool instead, opening the row when the call starts.
+  * `Store`, because `Agent.run` returns the session id when the run *ends* and a client is
+    told the conversation's identity when the run is *accepted*.
+
+Both are interfaces that already existed and both are swapped at the composition root, which
+is the part of the claim that mattered. `src/harness/runs.py` says it at length.
+
+## Serving it
+
+```sh
+harness-serve --port 8080          # HARNESS_TOKEN=... to require a bearer token
+```
+
+The same `Agent` behind HTTP, which is what the `orca` terminal client drives. A run is a
+background task with an append-only event log (`runs.py`, `events.py`); what a server passes
+`Agent` is in `conversations.py`; the rest is transport.
+
+A run is a background task and not a thing hanging off a connection, so **closing the
+terminal is not cancelling**. A run parked on an approval waits as long as the person takes,
+and a client that comes back reads from where it stopped.
+
+**One guarantee is load-bearing: `?after_seq` is exact.** The same cursor always yields the
+same suffix of the log. A following client reconnects on any transport failure, and its
+correctness after every reconnect rests on that and nothing else. The log is an append-only
+list and sequences are its indices, which is the whole implementation.
+
+**Three things silently hang a following client**, each found by a hang rather than by
+reading, and all three written out in `server.py` rather than left to a helper:
+
+  1. `stream.end` must carry an SSE `event:` line. As a `type` inside `data` it reads as an
+     ordinary event of an unknown kind, and the follow reconnects from its cursor, gets the
+     same frame, and loops forever in silence.
+  2. The response must end immediately after it. A client reads to EOF rather than breaking
+     out of the stream, so `stream.end` says what happened and EOF is what returns control.
+  3. An idle stream needs a `:` comment every few seconds or it dies quietly.
+
+Threads are the store's sessions and there is no second store: a workspace id is a function
+of its path, so a conversation from a previous process is still listed and still readable
+with nothing persisted but the transcript. The event log and the run listing are in memory,
+deliberately -- persisting them means a second durable record beside the transcript, and
+`store/base.py` already says why that waits for a measurement.
+
+Two things the client contract offers that this backend refuses rather than accepts
+quietly, because a command accepted and not honoured leaves someone watching for a change
+that cannot come: `steer`, since `AgentLoop.run` owns the transcript for the length of a run
+and takes no input channel; and `answer`, since nothing here asks the person a question.
 
 ## Storage is a file per session
 
