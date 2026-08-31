@@ -15,6 +15,13 @@ dependencies = [
     # apply either: one validation per tool call, against a model round-trip measured in
     # seconds.
     "jsonschema>=4.23",
+    # The server front end. Starlette is routing, a request object and a streaming
+    # response -- which is the whole of what an SSE endpoint needs, and it leaves the three
+    # things that actually hang a client (the `event:` line, closing after it, the idle
+    # comment) written out where they can be read. A framework that generated the stream
+    # would hide exactly those three.
+    "starlette>=0.37",
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +30,10 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
+
+[project.scripts]
+harness = "harness.cli:main"
+harness-serve = "harness.server:main"
 
 [build-system]
 requires = ["hatchling"]
