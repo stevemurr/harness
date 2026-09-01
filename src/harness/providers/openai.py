@@ -21,8 +21,7 @@ import httpx
 
 from harness.loop import parse_arguments
 from harness.providers.base import Completion, ProviderError
-from harness.tools.base import ToolSpec
-from harness.types import Message, Role, ToolCall, Transcript
+from harness.types import Message, Role, ToolCall, ToolSpec, Transcript
 
 log = logging.getLogger(__name__)
 
@@ -191,7 +190,11 @@ def encode_message(message: Message) -> dict[str, Any]:
             "tool_call_id": message.call_id,
             "content": message.content,
         }
-    body: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    # An arrival is a user-shaped row on the wire and its own thing in the transcript. The
+    # framing `inbox.render` put in the text is what tells the model who it is really from,
+    # because `system | user | assistant | tool` has nowhere else to put that.
+    role = "user" if message.role is Role.ARRIVAL else message.role.value
+    body: dict[str, Any] = {"role": role, "content": message.content}
     if message.tool_calls:
         body["tool_calls"] = [
             {

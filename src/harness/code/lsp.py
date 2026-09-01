@@ -352,7 +352,7 @@ class LspIndex:
             # `containerName`, which may be describing something else entirely. Matching
             # `name` exactly finds every Python method and no Go one.
             qualifier, _, offered = (entry.get("name") or "").rpartition(".")
-            if offered != bare:
+            if not self._same_symbol(offered, bare):
                 continue  # the server matches loosely; answer about the name asked
             location = entry.get("location") or {}
             uri = location.get("uri") or (entry.get("location") or {}).get("targetUri")
@@ -375,15 +375,35 @@ class LspIndex:
             )
         return tuple(symbols)
 
+    def _same_symbol(self, offered: str, asked: str) -> bool:
+        """Whether a name the server offered answers the name that was asked.
+
+        Exact, for every server whose symbol names are the identifier itself. It is a method
+        rather than an `==` because Swift's are not: sourcekit-lsp indexes a method under its
+        full selector, `balance(for:)`, and a model that asks for `balance` is asking a
+        reasonable question that an exact match answers with silence.
+        """
+        return offered == asked
+
+    def _needle(self, symbol: Symbol) -> str:
+        """The text to find on the definition line, to fix the exact column.
+
+        Usually the symbol's own name. Separate from it because a name can carry more than
+        appears in the source -- `balance(for:)` is what Swift calls the method and
+        `balance` is what is written at that line.
+        """
+        return symbol.name
+
     async def references(self, symbol: Symbol) -> tuple[Location, ...]:
         path = symbol.location.path
+        needle = self._needle(symbol)
         # Before starting anything. A wrong line is answerable from the file alone, and
         # spinning up a language server -- 272MB of Node, several seconds cold -- to
         # discover it is work nobody needed.
-        column = _column_of(path, symbol.location.line, symbol.name)
+        column = _column_of(path, symbol.location.line, needle)
         if column is None:
             raise CodeIndexError(
-                f"{symbol.name!r} does not appear on {path.name}:{symbol.location.line}, "
+                f"{needle!r} does not appear on {path.name}:{symbol.location.line}, "
                 f"which reads: {_line_text(path, symbol.location.line).strip()[:80]!r}. "
                 "Check the line, or call find_definition again if the file has changed."
             )

@@ -1,0 +1,4 @@
+BLOCK body 0,0 200x40
+  BLOCK p 0,0 200x40
+    LINE 0,0 200x20 "the quick brown fox jumps"
+    LINE 0,20 184x20 "over the lazy dog again"

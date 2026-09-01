@@ -30,8 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from harness.tools.base import ToolSpec
-from harness.types import Message, Transcript
+from harness.types import Message, ToolSpec, Transcript
 
 
 @dataclass(frozen=True, slots=True)

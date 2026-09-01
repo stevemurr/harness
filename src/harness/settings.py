@@ -76,7 +76,13 @@ class Compaction:
     #: Fraction of the window at which to compact. The headroom above it has to absorb one
     #: whole turn, because the estimate is necessarily taken before the turn that grows the
     #: transcript -- which is what `Output.per_turn` exists to bound.
-    at: float = 0.8
+    #:
+    #: Lowered from 0.8 on 2026-09-01. Two `14-engine` runs designed as compaction probes
+    #: never reached it: 200 turns ended at 42% of the window and 441 turns at 63%, so the
+    #: feature this rung exists to exercise had not run once. At 0.5 the second of those runs
+    #: would have compacted around turn 330. The headroom argument above is unaffected --
+    #: there is more of it, not less.
+    at: float = 0.5
     #: How many trailing turns survive verbatim. Not zero: compaction fires at the top of a
     #: turn, so the newest messages are tool results the model has not read yet, and
     #: summarising those is where lossiness is guaranteed to hurt.
@@ -103,6 +109,39 @@ class Shell:
     """The `run` tool. Output limits are not here -- they are `Output`, for every tool."""
 
     timeout: int = 120
+
+
+@dataclass(frozen=True, slots=True)
+class Web:
+    """The two research tools, `web_search` and `open_url`.
+
+    One group for both, because they share a timeout and a `User-Agent` and are always
+    added together -- splitting them would be two objects that must agree about the same
+    endpoint's manners.
+    """
+
+    #: Seconds for one request. Well under `Shell.timeout`: a search that has not answered
+    #: in this long is a search being refused slowly, and a run has better things to wait on.
+    timeout: float = 20.0
+    #: Results one search returns unless the caller asks for fewer. DuckDuckGo's page holds
+    #: about ten, so asking for more than that returns what there was rather than failing.
+    max_results: int = 8
+    #: DuckDuckGo's form endpoint. A field rather than a constant so a deployment behind a
+    #: mirror can point somewhere else without editing the tool.
+    endpoint: str = "https://html.duckduckgo.com/html/"
+    #: Characters of extracted text one page may return. `Output.per_result` would cut a
+    #: larger answer anyway; cutting here means the cut lands on a paragraph boundary and
+    #: says so, rather than arriving as a sentence that stops.
+    max_chars: int = 20_000
+    #: Bytes read off the wire before giving up. A page this size is not an article.
+    max_bytes: int = 5_000_000
+    #: Redirect hops followed. Each one is re-checked against the address rules, which is
+    #: why they are followed here rather than by `httpx`.
+    max_redirects: int = 5
+    #: Whether to refuse loopback, private, link-local and reserved addresses. A field, so
+    #: a person who genuinely wants an agent reading their intranet can say so -- and has
+    #: to say so.
+    block_private: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,4 +182,5 @@ class Settings:
     limits: Limits = field(default_factory=Limits)
     compaction: Compaction = field(default_factory=Compaction)
     shell: Shell = field(default_factory=Shell)
+    web: Web = field(default_factory=Web)
     code: Code = field(default_factory=Code)

@@ -1,0 +1,3 @@
+BLOCK body 0,0 800x14
+  BLOCK p 0,0 800x14
+    LINE 0,0 20x14 "attr"

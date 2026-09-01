@@ -1,0 +1,6 @@
+BLOCK body 0,0 800x54
+  BLOCK div 0,0 800x34
+    BLOCK p 0,0 800x34
+      LINE 0,0 90x34 "inside"
+  BLOCK p 0,34 800x20
+    LINE 0,34 56x20 "outside"

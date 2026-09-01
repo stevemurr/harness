@@ -53,8 +53,9 @@ def known() -> tuple[type[CodeIndex], ...]:
     """
     from harness.code.gopls import Gopls
     from harness.code.pyright import Pyright
+    from harness.code.sourcekit import SourceKit
 
-    return (Pyright, Gopls)
+    return (Pyright, Gopls, SourceKit)
 
 
 @dataclass(frozen=True, slots=True)

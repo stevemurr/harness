@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from harness.tools.base import ToolSpec
+from harness.types import ToolSpec
 
 
 class Decision(StrEnum):

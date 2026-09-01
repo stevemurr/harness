@@ -35,7 +35,7 @@ from hashlib import sha256
 from harness.prompts import prompt
 from harness.settings import Compaction
 from harness.store.codec import encode
-from harness.types import Message, Role, Transcript
+from harness.types import Message, Role, Source, Transcript
 
 #: What the summarising model is told. A handoff between two contexts, not a précis: the
 #: reader is the same agent, mid-task, and what it needs is the state of the work rather
@@ -117,8 +117,34 @@ def view(transcript: Transcript) -> Transcript:
             start = index
             break
 
+    # The user's words are carried whole across the boundary: the request they opened with,
+    # and anything they said while the run worked. Everything else behind the cut is
+    # represented by the summary, which is a model's account of what happened -- and an
+    # instruction is not an event. Nothing makes a summariser carry "use tabs, never spaces"
+    # forward, so a steer sent at turn 3 of a 400-turn run would stop existing the moment the
+    # run compacted, with nothing left to show it ever did.
+    #
+    # This is the *only* mechanism. `handoff.md` used to ask the summariser to quote every
+    # request verbatim -- the same guarantee, asked of a model instead of made structurally,
+    # and never once exercised because compaction has never fired. Two copies that can drift
+    # apart are worse than either alone: the reader cannot tell which is authoritative. So
+    # the prompt now records what became of each request and this keeps the words.
+    #
+    # Only the user's. A watched log can print thousands of lines, and carrying those across
+    # every future boundary is how a run that compacted to make room ends up bigger than it
+    # was before. Scanned from the start of the transcript rather than from the previous
+    # boundary, because pinning that reaches back only one boundary carries a steer across
+    # the first compaction and drops it at the second -- passing every short test and
+    # failing only in the runs long enough to need it.
+    pinned = [
+        message
+        for message in messages[1:start]
+        if message.role is Role.USER
+        or (message.role is Role.ARRIVAL and message.source == Source.PERSON)
+    ]
     rendered = [
         messages[0],
+        *pinned,
         Message(Role.USER, messages[boundary].content),
         *messages[start:boundary],
         *messages[boundary + 1 :],

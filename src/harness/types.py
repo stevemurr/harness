@@ -28,7 +28,33 @@ class Role(StrEnum):
     #: the transcript because the transcript is the state: compaction appends this and
     #: removes nothing, so the file stays complete and append-only.
     COMPACTION = "compaction"
+    #: Something that arrived for the run from outside it -- a person typing while it
+    #: worked, a background command ending, a watched process printing. Recorded so the
+    #: transcript says what actually happened, and flattened to `user` by `encode_message`
+    #: because the wire has no third-party slot. See `inbox.py`.
+    ARRIVAL = "arrival"
 
+
+class Source(StrEnum):
+    """Who an arrival is from, which decides how much weight it should carry.
+
+    Two, and deliberately not three. There was a `PROCESS` source here that carried a
+    watched process's *output*, and it was wrong: see the module note on attribution.
+    """
+
+    #: A person, typing while the run was working. The one case where the `user` slot on
+    #: the wire is not a lie -- it really is the user.
+    PERSON = "person"
+    #: The harness, reporting something that happened: a background command ended, a watch
+    #: was stopped. **Metadata only** -- never what a process printed.
+    HARNESS = "harness"
+    #: Lines from something the model asked to watch. This one *does* carry content, and
+    #: the rule above bends here for a reason rather than by accident: a watch whose notice
+    #: says only "3 new lines" costs a turn to read every time, which is no watch at all.
+    #: The model chose the filter and asked to be told, and the injection risk is the same
+    #: whether the text arrives here or as the result of `read_watch` -- only the attribution
+    #: differs. So the framing carries it, the way `open_url` fences a fetched page.
+    WATCH = "watch"
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
@@ -62,6 +88,15 @@ class Message:
     #: with the next run's first append is one unparseable line where two messages were, so
     #: every index after it shifts by two -- permanently, in the file this points into.
     keep_from: str = ""
+    #: Set only on ARRIVAL messages: which `inbox.Source` the arrival came from.
+    #:
+    #: The wire has no third-party slot, so `render` folds provenance into the text and
+    #: `encode_message` flattens the role to `user`. That is enough for the model and not
+    #: enough for the harness: `compaction.view` keeps a person's words across a boundary
+    #: and lets a watch's output go, and telling those apart by matching the framing string
+    #: would make that wording load-bearing in a second place -- editable in `inbox.py`,
+    #: silently breaking something in `compaction.py`.
+    source: Source | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +162,26 @@ class ToolResult:
                 f"{self.content[-tail:]}"
             )
         return ToolResult(body, self.ok, self.refused)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    """What the model is told about a tool.
+
+    `parameters` is JSON Schema, and it is the single source of truth for what the tool
+    accepts: the provider sees it, and the registry validates against it. There is no
+    second place that says what the arguments are.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    #: Whether running this can change anything outside the harness -- the filesystem, the
+    #: network, another process. Declared by the tool rather than listed centrally, so
+    #: adding a tool cannot forget to say, and so the approval layer never has to know what
+    #: tools exist. A read-only tool is approved automatically; a mutating one is asked
+    #: about, subject to policy.
+    mutates: bool = False
 
 
 @dataclass

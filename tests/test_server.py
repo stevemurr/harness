@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from conftest import ScriptedModel, calls, says
-from harness.server import create_app, is_id, workspace_id_for
+from harness.server import complete_lines, create_app, is_id, workspace_id_for
 from harness.store import JsonlStore
 from harness.types import Role
 
@@ -641,11 +641,13 @@ async def test_cancel_ends_the_run(folder, tmp_path) -> None:
     assert [f[2].get("type") for f in frames if f[2].get("type")][-1] == "run.cancelled"
 
 
-async def test_steering_a_run_in_flight_is_refused_rather_than_swallowed(
+async def test_steering_a_run_in_flight_is_queued_for_the_next_turn(
     folder, tmp_path
 ) -> None:
-    """`AgentLoop.run` owns the transcript for the length of a run and takes no input
-    channel, so there is nowhere to put a further instruction until it ends."""
+    """`AgentLoop.run` owns the transcript for the length of a run, and used to take no
+    input channel at all -- this was a 409 saying so. It has an inbox now: the words are
+    appended at the next turn boundary, which is the only point where the transcript is
+    provably free of unanswered tool calls."""
     app = app_for(
         ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
     )
@@ -661,8 +663,27 @@ async def test_steering_a_run_in_flight_is_refused_rather_than_swallowed(
         await client.post(f"/runs/{run_id}/commands", json={"type": "cancel"})
         await _settle(app)
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "unsupported_command"
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+
+
+async def test_steering_with_nothing_in_it_is_refused(folder, tmp_path) -> None:
+    app = app_for(
+        ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
+    )
+    async with client_for(app) as client:
+        _, _, accepted = await start(client, folder)
+        run_id = accepted.json()["run_id"]
+        await _wait_for(client, run_id, "approval.requested")
+
+        response = await client.post(
+            f"/runs/{run_id}/commands", json={"type": "steer", "content": "   "}
+        )
+        await client.post(f"/runs/{run_id}/commands", json={"type": "cancel"})
+        await _settle(app)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_request"
 
 
 async def test_a_command_nobody_defined_is_refused(folder, tmp_path) -> None:
@@ -756,3 +777,157 @@ async def test_watching_an_impossible_thread_says_so(tmp_path: Path) -> None:
 
     assert answer.status_code == 404
     assert answer.json()["detail"]["code"] == "no_such_thread"
+
+
+# -- the folder picker -------------------------------------------------------------------
+
+
+async def test_folders_lists_directories_a_browser_cannot_see(tmp_path: Path) -> None:
+    """A browser has no view of the machine's filesystem and `webkitdirectory` reports a
+    folder's name rather than its path, so the picking has to happen server-side."""
+    root = tmp_path / "root"
+    (root / "alpha").mkdir(parents=True)
+    (root / "beta").mkdir()
+    (root / "a-file.txt").write_text("not a folder")
+    (root / ".hidden").mkdir()
+
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        body = (await client.get("/folders", params={"path": str(root)})).json()
+
+    assert [entry["name"] for entry in body["entries"]] == ["alpha", "beta"]
+    assert body["path"] == str(root)
+    assert body["parent"] == str(tmp_path)
+    assert body["vcs"] == "none"
+
+
+async def test_folders_reports_a_git_repository_so_the_client_can_declare_it(
+    tmp_path: Path,
+) -> None:
+    """`POST /workspaces` asks the client to declare `vcs`, and this is the side that can
+    actually see the folder."""
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        body = (await client.get("/folders", params={"path": str(root)})).json()
+
+    assert body["vcs"] == "git"
+
+
+async def test_folders_names_the_failure_for_a_path_that_is_not_there(
+    tmp_path: Path,
+) -> None:
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        response = await client.get("/folders", params={"path": str(tmp_path / "gone")})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "no_such_folder"
+
+
+async def test_folders_refuses_a_file_rather_than_listing_nothing(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("x")
+
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        response = await client.get("/folders", params={"path": str(target)})
+
+    assert response.status_code == 400
+    assert "not a directory" in response.json()["detail"]["message"]
+
+
+async def test_the_console_page_is_served_and_read_per_request(tmp_path: Path) -> None:
+    """Read from disk on every request, like `watch.html`, so editing the page is a refresh
+    rather than a restart -- which is the whole reason it is one file and not a build."""
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://harness"
+    ) as client:
+        response = await client.get("/console")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "harness · console" in response.text
+
+
+# -- tailing a file that is still being written -------------------------------------------
+
+
+def test_a_half_written_line_is_not_delivered_or_counted() -> None:
+    """The bug this exists for: the watch stream consumed a partial row, the client could
+    not parse it and dropped it, and the cursor had already moved past -- so the completed
+    row was never sent and one message went missing until the page was reloaded."""
+    row = '{"role": "assistant", "content": "done"}'
+
+    held = complete_lines(f"{row}\n" + '{"role": "tool", "content": "xxx')
+
+    assert held == [row]
+
+
+def test_the_completed_line_arrives_once_its_newline_does() -> None:
+    row = '{"role": "assistant", "content": "done"}'
+    partial = '{"role": "tool", "content": "xxx'
+
+    seen = len(complete_lines(f"{row}\n{partial}"))
+    after = complete_lines(f"{row}\n{partial}\"}}\n")
+
+    assert seen == 1
+    assert after[seen:] == ['{"role": "tool", "content": "xxx"}']
+
+
+def test_a_whole_file_is_returned_unchanged() -> None:
+    assert complete_lines("a\nb\nc\n") == ["a", "b", "c"]
+    assert complete_lines("") == []
+    assert complete_lines("only-a-fragment") == []
+
+
+async def test_a_folder_can_be_made_from_the_picker(tmp_path: Path) -> None:
+    """So a thread can be started somewhere that does not exist yet, without leaving the
+    picker to run `mkdir`."""
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        response = await client.post(
+            "/folders", json={"path": str(tmp_path), "name": "my-project"}
+        )
+
+    assert response.status_code == 201
+    assert (tmp_path / "my-project").is_dir()
+    assert response.json()["path"] == str(tmp_path / "my-project")
+
+
+async def test_a_folder_name_may_not_carry_a_path(tmp_path: Path) -> None:
+    """One level, by name. A separator would let the picker write anywhere the user can,
+    which is a larger capability than the one being asked for."""
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        for name in ("../escape", "a/b", ".."):
+            response = await client.post("/folders", json={"path": str(tmp_path), "name": name})
+            assert response.status_code == 400, name
+            assert response.json()["detail"]["code"] == "invalid_request"
+
+    assert not (tmp_path.parent / "escape").exists()
+
+
+async def test_making_a_folder_that_is_there_says_so(tmp_path: Path) -> None:
+    (tmp_path / "taken").mkdir()
+
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        response = await client.post("/folders", json={"path": str(tmp_path), "name": "taken"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "folder_exists"
+
+
+async def test_making_a_folder_under_one_that_is_not_there(tmp_path: Path) -> None:
+    app = app_for(ScriptedModel(says("hi")), tmp_path)
+    async with client_for(app) as client:
+        response = await client.post(
+            "/folders", json={"path": str(tmp_path / "gone"), "name": "x"}
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "no_such_folder"

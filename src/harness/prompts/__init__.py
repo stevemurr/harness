@@ -12,6 +12,19 @@ the prose stands alone: a system prompt does, a parameter's description does not
 
 Read through `importlib.resources` rather than by path, so it works from an installed wheel
 and not only from a checkout.
+
+## Where `system.md` came from
+
+Its `# How you work` section is adapted from OpenAI's Codex CLI prompt
+(`codex-rs/core/gpt_5_2_prompt.md`, Apache-2.0), which is the prompt their *general* models
+get -- the codex-trained ones get a terse 80-line file instead, because the behaviour is
+already in the weights. Ours is the general case, so the long one is the right comparison.
+
+Adapted rather than copied: `apply_patch`, their approval-mode vocabulary and their inline
+citation format name things this harness does not have, and instructing a model to use a tool
+that does not exist is worse than saying nothing. The planning examples are theirs verbatim,
+because teaching the shape by example is the whole technique and paraphrasing them would be
+teaching a different shape.
 """
 
 from __future__ import annotations

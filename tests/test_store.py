@@ -13,6 +13,7 @@ to encode and decode, and only the pair together prove the contract is about *va
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -241,3 +242,34 @@ def test_a_caller_supplied_id_still_cannot_walk_out_of_the_store(tmp_path: Path)
     for hostile in ("../escape", "a/b", "", ".."):
         with pytest.raises(StoreError):
             store.path_for(hostile)
+
+
+async def test_threads_are_newest_first_across_both_id_shapes(tmp_path: Path) -> None:
+    """Ids come in two shapes -- `20260901T...` minted by the store and `thr_<hex>` minted
+    by the server -- and sorting by name put every `thr_` ahead of every `2026`, since
+    "t" > "2". A listing asking for the newest few returned only server threads and hid a
+    running eval behind threads a day older."""
+    store = JsonlStore(tmp_path)
+    old_stamped = await store.create(tmp_path, "20260101T000000000000-aaaaaaaa")
+    server_made = await store.create(tmp_path, "thr_0000000000000001")
+    new_stamped = await store.create(tmp_path, "20260901T000000000000-bbbbbbbb")
+
+    # Touch them into a known order: the timestamped one is the most recent write.
+    for thread_id, when in ((old_stamped, 1000), (server_made, 2000), (new_stamped, 3000)):
+        path = store.path_for(thread_id)
+        os.utime(path, (when, when))
+
+    listed = [info.thread_id for info in await store.threads(limit=10)]
+
+    assert listed == [new_stamped, server_made, old_stamped]
+
+
+async def test_a_short_limit_keeps_the_most_recent(tmp_path: Path) -> None:
+    """The bug's real cost: `limit` cut off the thread that was being written to."""
+    store = JsonlStore(tmp_path)
+    quiet = await store.create(tmp_path, "thr_0000000000000002")
+    busy = await store.create(tmp_path, "20260901T000000000000-cccccccc")
+    os.utime(store.path_for(quiet), (1000, 1000))
+    os.utime(store.path_for(busy), (9000, 9000))
+
+    assert [info.thread_id for info in await store.threads(limit=1)] == [busy]

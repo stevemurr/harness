@@ -21,6 +21,7 @@ from harness.agent import Agent, default_registry
 from harness.approval import Approvals, Policy
 from harness.compaction import MODE_NOTES, Meter, State, anchor_for, digest, view
 from harness.conversations import _ending
+from harness.inbox import Envelope, Source, render
 from harness.loop import system, user
 from harness.providers.base import Completion, ProviderError
 from harness.settings import Compaction, Settings
@@ -219,7 +220,8 @@ def test_the_render_is_valid_from_every_position_a_boundary_could_take() -> None
         rendered = view(Transcript([*messages, boundary_at(messages, index)]))
 
         assert valid(rendered), f"anchor {index} rendered a transcript no provider accepts"
-        assert rendered.messages[1].content == "what happened"
+        # Not by position: the user's own words are pinned ahead of the summary now.
+        assert any(m.content == "what happened" for m in rendered.messages)
 
 
 def test_the_render_is_pure() -> None:
@@ -249,18 +251,25 @@ def test_a_second_compaction_never_carries_the_first_boundary_into_the_render() 
     rendered = view(Transcript(twice))
 
     assert valid(rendered)
-    assert rendered.messages[1].content == "again"
+    assert any(m.content == "again" for m in rendered.messages)
 
 
 def test_an_anchor_that_is_not_there_keeps_nothing_rather_than_corrupting() -> None:
-    """Degrade the run, never the request. A missing anchor is a shorter context, not a 400."""
+    """Degrade the run, never the request. A missing anchor is a shorter context, not a 400.
+
+    Literally never the request, now: the kept tail is gone but the thing the user asked for
+    is pinned, so the worst case is an agent working from the request and a summary rather
+    than one working from a summary alone.
+    """
     messages = history()
     lost = [*messages, Message(Role.COMPACTION, "what happened", keep_from="0" * 16)]
 
     rendered = view(Transcript(lost))
 
     assert valid(rendered)
-    assert [m.role for m in rendered.messages] == [Role.SYSTEM, Role.USER]
+    # System, the pinned request, and the summary. No tail, because no anchor resolved.
+    assert [m.role for m in rendered.messages] == [Role.SYSTEM, Role.USER, Role.USER]
+    assert "add a test for the parser" in rendered.messages[1].content
 
 
 def test_the_anchor_survives_a_file_whose_indices_shifted() -> None:
@@ -310,7 +319,8 @@ def test_an_anchor_matching_more_than_one_message_resolves_to_the_latest() -> No
     rendered = view(Transcript([*messages, Message(Role.COMPACTION, "s", keep_from=anchor)]))
 
     assert valid(rendered)
-    assert len(rendered.messages) == 4  # system, summary, and the one kept turn
+    # System, the pinned request, the summary, and the one kept turn.
+    assert len(rendered.messages) == 5
 
 
 def test_the_kept_tail_always_begins_on_an_assistant_message() -> None:
@@ -601,3 +611,135 @@ def test_the_run_summary_is_never_the_handoff_note() -> None:
 
     assert type == "run.completed"
     assert summary == "go"
+
+
+# --- what a person said, across a boundary -----------------------------------------------
+
+
+def steer(text: str) -> Message:
+    """A person's words, rendered the way the inbox renders them."""
+    return render(Envelope(Source.PERSON, text))
+
+
+def rendered_text(transcript: Transcript) -> str:
+    return "\n".join(m.content for m in transcript.messages)
+
+
+def test_a_persons_words_survive_a_compaction() -> None:
+    """A summary is a model's account of what happened. An instruction is not an event.
+
+    Someone who steers at turn 3 of a 400-turn run has their words folded into a summary the
+    moment compaction fires, and nothing anywhere requires the summariser to carry them
+    forward -- so the run continues with no trace that anything was said. `Role.ARRIVAL`
+    exists to keep a person's words distinguishable from an agent's, and a boundary is
+    exactly where that distinction was being lost.
+    """
+    messages = [system("s"), user("do it"), steer("use tabs, never spaces"), *history()[2:]]
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+
+    assert "use tabs, never spaces" in rendered_text(rendered)
+    assert valid(rendered)
+
+
+def test_a_persons_words_survive_a_second_compaction() -> None:
+    """The one that matters for a long run, and the one a narrow fix would miss.
+
+    Pinning that searches only back to the *previous* boundary carries a steer across one
+    compaction and drops it at the next, which is worse than not pinning at all: it works
+    in every short test and fails only in the runs long enough to need it.
+    """
+    messages = [system("s"), user("do it"), steer("use tabs, never spaces"), *history()[2:]]
+    # Both anchors are assistant messages, and the second compaction comes after more work
+    # rather than immediately after the first -- otherwise the anchor search runs over an
+    # empty range, the tail is empty, and the test passes without ever exercising a tail.
+    once = [*messages, boundary_at(messages, 11)]
+    later = [*once, *turn("d1"), *turn("d2")]
+    twice = [*later, Message(Role.COMPACTION, "again", keep_from=digest(later[len(once)]))]
+
+    rendered = view(Transcript(twice))
+
+    assert "use tabs, never spaces" in rendered_text(rendered)
+    assert valid(rendered)
+    kept = [m.role for m in rendered.messages if m.role in (Role.ASSISTANT, Role.TOOL)]
+    assert kept, "the second compaction should still keep a tail to pin the steer alongside"
+
+
+def test_a_watch_s_output_is_not_pinned() -> None:
+    """Pinning costs context that never comes back, so it is spent only on a person.
+
+    A watched log can print thousands of lines. Carrying every one of them across every
+    future boundary is how a run that compacted to make room ends up larger than it was
+    before it compacted.
+    """
+    noise = render(Envelope(Source.WATCH, "connection reset by peer", sender="proc_a1"))
+    messages = [system("s"), user("do it"), noise, *history()[2:]]
+
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+
+    assert "connection reset by peer" not in rendered_text(rendered)
+
+
+def test_a_harness_notice_is_not_pinned() -> None:
+    """Metadata about a process that ended is an event, and the summary is where events go."""
+    notice = render(Envelope(Source.HARNESS, "proc_a1 exited 0", sender="proc_a1"))
+    messages = [system("s"), user("do it"), notice, *history()[2:]]
+
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+
+    assert "proc_a1 exited 0" not in rendered_text(rendered)
+
+
+def test_an_arrival_still_in_the_kept_tail_is_not_pinned_twice() -> None:
+    """Pinned ahead of the tail *and* present in it would say it twice, and the second
+    copy reads as the person repeating themselves."""
+    messages = [*history(), steer("use tabs, never spaces"), *turn("late")]
+
+    # Anchored on the last assistant of `history`, which puts the steer *inside* the tail.
+    rendered = view(Transcript([*messages, boundary_at(messages, len(history()) - 2)]))
+
+    assert rendered_text(rendered).count("use tabs, never spaces") == 1
+
+
+def test_pinned_words_keep_the_order_they_were_said_in() -> None:
+    """Two instructions ten minutes apart are a sequence: the later one may amend the
+    earlier, and reversing them inverts what the person asked for."""
+    messages = [
+        system("s"), user("do it"),
+        steer("use tabs"), *history()[2:6], steer("actually, spaces"), *history()[6:],
+    ]
+
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+    text = rendered_text(rendered)
+
+    assert text.index("use tabs") < text.index("actually, spaces")
+
+
+def test_a_pinned_steer_still_says_when_it_arrived() -> None:
+    """Pinning preserves the words; the turn is what preserves their age.
+
+    The two features only work together. Pinned without a turn, a steer from turn 3 sits
+    above the summary in the present tense and reads as though it has just been said, so the
+    model may carry out an instruction it already carried out four hours ago.
+    """
+    early = render(Envelope(Source.PERSON, "use tabs, never spaces"), turn=3)
+    messages = [system("s"), user("do it"), early, *history()[2:]]
+
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+
+    assert "at turn 3" in rendered_text(rendered)
+    assert "use tabs, never spaces" in rendered_text(rendered)
+
+
+def test_the_opening_request_survives_a_compaction() -> None:
+    """The most important instruction in the run, and it used to be the first thing dropped.
+
+    `view` kept the system message and the summary; the task itself lived on only in whatever
+    the summariser chose to write. That is now structural, which is why `handoff.md` no longer
+    asks for the request to be quoted -- one guarantee, in one place.
+    """
+    messages = [system("s"), user("build me a JSON parser with these 12 rules"), *history()[2:]]
+
+    rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
+
+    assert "build me a JSON parser with these 12 rules" in rendered_text(rendered)
+    assert valid(rendered)

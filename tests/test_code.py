@@ -485,3 +485,78 @@ async def test_a_wrong_line_says_what_is_there_rather_than_guessing(project: Pat
 
     assert "does not appear" in str(caught.value)
     assert "class Widget" not in str(caught.value)
+
+
+# -- Swift's naming, which is unlike the others -------------------------------------------
+
+
+def test_swift_matches_a_bare_name_against_the_selector_it_heads() -> None:
+    """sourcekit-lsp indexes a method under its whole selector. Measured against a built
+    SwiftPM package: `balance`, `Ledger.balance` and `record` all returned nothing while
+    `balance(for:)` returned the method -- a silence indistinguishable from "no such
+    symbol" for the shape a model is most likely to ask about."""
+    from harness.code.sourcekit import SourceKit
+
+    index = SourceKit(Path.cwd())
+
+    assert index._same_symbol("balance(for:)", "balance")
+    assert index._same_symbol("record(_:amount:)", "record")
+    assert index._same_symbol("balance(for:)", "balance(for:)")
+    assert index._same_symbol("Ledger", "Ledger")
+
+
+def test_swift_does_not_match_a_name_that_merely_starts_the_same() -> None:
+    """`balanced` is not `balance`, and a prefix rule without the paren would say it is."""
+    from harness.code.sourcekit import SourceKit
+
+    index = SourceKit(Path.cwd())
+
+    assert not index._same_symbol("balanced", "balance")
+    assert not index._same_symbol("balanceSheet(for:)", "balance")
+    assert not index._same_symbol("balance", "balanceSheet")
+
+
+def test_swift_looks_for_what_is_actually_written_at_the_definition() -> None:
+    """`func balance(for name: String)` contains `balance` and never contains
+    `balance(for:)`. Without this the method would be found and then refuse to have its
+    references traced, because the column search would not find its own symbol."""
+    from harness.code.base import Location, Symbol
+    from harness.code.sourcekit import SourceKit
+
+    index = SourceKit(Path.cwd())
+    method = Symbol(
+        name="balance(for:)",
+        location=Location(
+            Path("Ledger.swift"), 8, "    func balance(for name: String) -> Int {"
+        ),
+        kind="method",
+    )
+
+    assert index._needle(method) == "balance"
+
+
+def test_every_other_backend_still_matches_exactly() -> None:
+    """The hooks must be inert where they were not needed: Python and Go name a symbol by
+    the identifier itself, and a loose match there would answer about the wrong thing."""
+    from harness.code.pyright import Pyright
+
+    index = Pyright(Path.cwd())
+
+    assert index._same_symbol("resolve", "resolve")
+    assert not index._same_symbol("resolve(path:)", "resolve")
+
+
+def test_swift_is_offered_only_where_there_is_swift(tmp_path: Path) -> None:
+    from harness.code.servers import for_workspace
+
+    (tmp_path / "main.swift").write_text("print(1)")
+    swift = {index.name for index in for_workspace(tmp_path).available}
+
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "notes.md").write_text("nothing to index")
+
+    assert "sourcekit-lsp" in swift
+    assert "sourcekit-lsp" not in {
+        index.name for index in for_workspace(other).available
+    }

@@ -1,0 +1,2 @@
+BLOCK body 0,0 800x20
+  LINE 0,0 88x20 "Hello world"

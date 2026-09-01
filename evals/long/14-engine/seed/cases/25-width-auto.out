@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x80
+  BLOCK div 25,25 750x30
+    BLOCK p 30,30 740x20
+      LINE 30,30 32x20 "auto"

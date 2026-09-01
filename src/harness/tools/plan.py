@@ -29,14 +29,17 @@ class UpdatePlan:
         default=ToolSpec(
             name="update_plan",
             description=(
-                "Keep a short checklist of the work. Call it once near the start and again "
-                "whenever the state changes. Send the WHOLE list every time, "
-                "including steps that have not changed: this replaces the plan rather than "
-                "patching it. Mark a step in_progress when you start it and completed when "
-                "it is genuinely done, not when you intend to do it, and keep one step in "
-                "progress at a time. Steps are outcomes ('make the parser accept trailing "
-                "commas'), not tool calls ('call edit_file'). Use `explanation` when the "
-                "plan changes shape, since that is the part a person reading it cannot infer."
+                "Keep a short checklist of the work. Listing the steps in your reply "
+                "instead of calling this does not count -- the checklist exists only here. "
+                "Send the first list before your first edit. Skip it for straightforward "
+                "work, and never make a single-step plan. "
+                "Steps are outcomes ('make cases 01 to 08 pass'), not tool calls ('call "
+                "edit_file'). Send the WHOLE list every time, including steps that have not "
+                "changed: this replaces the plan rather than patching it. Keep one step in "
+                "progress at a time, mark a step completed only when it is genuinely done, "
+                "and update the plan after finishing one of the steps you put in it. Use "
+                "`explanation` when the plan changes shape, since that is the part a person "
+                "reading it cannot infer."
             ),
             parameters=schema(
                 {

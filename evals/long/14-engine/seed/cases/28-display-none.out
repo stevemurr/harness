@@ -1,0 +1,5 @@
+BLOCK body 0,0 800x40
+  BLOCK p 0,0 800x20
+    LINE 0,0 40x20 "first"
+  BLOCK p 0,20 800x20
+    LINE 0,20 32x20 "last"

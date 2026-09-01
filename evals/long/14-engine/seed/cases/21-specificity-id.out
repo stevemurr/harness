@@ -1,0 +1,3 @@
+BLOCK body 0,0 800x34
+  BLOCK p 0,0 800x34
+    LINE 0,0 15x34 "a"

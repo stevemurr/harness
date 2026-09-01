@@ -7,6 +7,9 @@ which is where the predecessor found most of its.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from harness.approval import Approvals, Policy
 from harness.loop import AgentLoop, Turn, parse_arguments, share, system, user
 from harness.settings import Limits, Output
 from harness.types import Message, Role, ToolCall, ToolResult, Transcript
@@ -326,3 +329,152 @@ async def test_the_loop_applies_the_turn_budget_across_a_wide_turn() -> None:
     assert len(tools) == 24, "every call must still be answered"
     # Allowing for the truncation marker on each result.
     assert sum(len(m.content) for m in tools) < OUT.per_turn + 24 * 200
+
+
+# -- the same refusal, over and over -------------------------------------------------------
+
+
+async def test_an_identical_refused_call_is_told_it_is_repeating(tmp_path: Path) -> None:
+    """Measured: a run mistyped one character of an absolute path, was correctly told it
+    resolved outside the workspace, and made the identical call 34 times until the refusal
+    cap ended it -- 56 turns, no edits, 0/45. It had already read the reason; what it never
+    learned was that it was repeating itself."""
+    from harness.runner import ToolRunner
+    from harness.tools.base import Registry, ToolContext
+    from harness.tools.files import file_tools
+    from harness.workspace import Workspace
+
+    runner = ToolRunner(
+        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+            policy=Policy(approve_everything=True)
+        )
+    )
+    outside = ToolCall("c1", "read_file", {"path": "/etc/passwd"})
+
+    first = await runner.run(outside)
+    second = await runner.run(ToolCall("c2", "read_file", dict(outside.arguments)))
+
+    assert first.refused and second.refused
+    assert "already called" not in first.content
+    assert "already called" in second.content
+    assert "Do something else" in second.content
+
+
+async def test_a_different_call_is_not_caught_by_it(tmp_path: Path) -> None:
+    from harness.runner import ToolRunner
+    from harness.tools.base import Registry, ToolContext
+    from harness.tools.files import file_tools
+    from harness.workspace import Workspace
+
+    (tmp_path / "here.txt").write_text("fine")
+    runner = ToolRunner(
+        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+            policy=Policy(approve_everything=True)
+        )
+    )
+
+    await runner.run(ToolCall("c1", "read_file", {"path": "/etc/passwd"}))
+    good = await runner.run(ToolCall("c2", "read_file", {"path": "here.txt"}))
+
+    assert good.ok
+    assert "fine" in good.content
+
+
+async def test_a_successful_call_may_be_repeated(tmp_path: Path) -> None:
+    """Never remembered, on purpose. After a compaction the result is gone from the context
+    and re-reading the same file is the correct recovery, not a loop."""
+    from harness.runner import ToolRunner
+    from harness.tools.base import Registry, ToolContext
+    from harness.tools.files import file_tools
+    from harness.workspace import Workspace
+
+    (tmp_path / "here.txt").write_text("fine")
+    runner = ToolRunner(
+        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+            policy=Policy(approve_everything=True)
+        )
+    )
+    call = ToolCall("c1", "read_file", {"path": "here.txt"})
+
+    assert (await runner.run(call)).ok
+    assert (await runner.run(ToolCall("c2", "read_file", {"path": "here.txt"}))).ok
+
+
+async def test_leaving_plan_mode_lets_a_withheld_call_through(tmp_path: Path) -> None:
+    """The one refusal that changes on its own: a tool withheld in plan mode becomes
+    available the moment a plan is approved, so the mode is part of the key."""
+    from harness.mode import PLAN, ModeState
+    from harness.runner import ToolRunner
+    from harness.tools.base import Registry, ToolContext
+    from harness.tools.files import file_tools
+    from harness.workspace import Workspace
+
+    modes = ModeState(current=PLAN)
+    runner = ToolRunner(
+        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)), modes=modes,
+    )
+    write = {"path": "new.txt", "content": "x"}
+
+    blocked = await runner.run(ToolCall("c1", "write_file", dict(write)))
+    modes.leave_plan()
+    allowed = await runner.run(ToolCall("c2", "write_file", dict(write)))
+
+    assert blocked.refused and "plan mode" in blocked.content
+    assert allowed.ok
+    assert (tmp_path / "new.txt").read_text() == "x"
+
+
+# -- what arrives mid-run ------------------------------------------------------------------
+
+
+async def test_an_arrival_is_appended_before_the_next_model_call() -> None:
+    """At a turn boundary and nowhere else. The guard above it has just proved the
+    transcript has no unanswered tool call, which is the condition that makes appending a
+    user-shaped row safe -- do it between a call and its result and the provider rejects
+    the whole request."""
+    seen: list[int] = []
+
+    async def complete(transcript: Transcript) -> Message:
+        seen.append(len(transcript.messages))
+        return Message(Role.ASSISTANT, "done")
+
+    waiting = [Message(Role.ARRIVAL, "the user said: also add tests")]
+
+    async def pending(turn: int) -> list[Message]:
+        return [waiting.pop()] if waiting else []
+
+    transcript = Transcript([system("s"), user("do it")])
+    await AgentLoop(complete=complete, run_tool=ok_tool, pending=pending).run(transcript)
+
+    # Two opening messages plus the arrival, all present before the model was asked.
+    assert seen[0] == 3
+    assert transcript.messages[2].role is Role.ARRIVAL
+
+
+async def test_an_arrival_resets_the_refusal_count() -> None:
+    """A person intervening is the clearest sign a stall may now be breakable, so the run
+    should not carry on towards the cap as though nothing had happened."""
+    async def refused(_call: ToolCall) -> ToolResult:
+        return ToolResult("no", ok=False, refused=True)
+
+    turns = 0
+
+    async def pending(turn: int) -> list[Message]:
+        # One arrival, on the turn before the cap would otherwise be reached.
+        nonlocal turns
+        turns += 1
+        return [Message(Role.ARRIVAL, "try something else")] if turns == 3 else []
+
+    loop = AgentLoop(
+        complete=scripted(calls(("c1", "run", {"command": "x"}))),
+        run_tool=refused,
+        limits=Limits(max_turns=12, max_consecutive_refusals=4),
+        pending=pending,
+    )
+
+    outcome = await loop.run(Transcript([system("s"), user("go")]))
+
+    # Without the reset the run would end at turn 4; the arrival buys it another four.
+    assert outcome.stop.kind == "refused"
+    assert outcome.turns > 4

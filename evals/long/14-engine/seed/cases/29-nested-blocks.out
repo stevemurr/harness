@@ -1,0 +1,6 @@
+BLOCK body 0,0 800x80
+  BLOCK div 10,10 780x60
+    BLOCK div 20,20 760x40
+      BLOCK div 30,30 740x20
+        BLOCK p 30,30 740x20
+          LINE 30,30 32x20 "deep"

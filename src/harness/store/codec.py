@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness.types import Message, Role, ToolCall
+from harness.types import Message, Role, Source, ToolCall
 
 
 def encode(message: Message) -> dict[str, Any]:
@@ -28,6 +28,8 @@ def encode(message: Message) -> dict[str, Any]:
         body["call_id"] = message.call_id
     if message.keep_from:
         body["keep_from"] = message.keep_from
+    if message.source is not None:
+        body["source"] = message.source.value
     return body
 
 
@@ -55,4 +57,18 @@ def decode(raw: dict[str, Any]) -> Message:
         ),
         call_id=raw.get("call_id"),
         keep_from=raw.get("keep_from") or "",
+        source=_source(raw.get("source")),
     )
+
+
+def _source(raw: Any) -> Source | None:
+    """An arrival's provenance, tolerantly.
+
+    Unknown for the same reason `decode` tolerates an unknown role: a transcript written by
+    a newer version should not make an older one crash on read. Provenance it cannot name
+    becomes none at all, which renders and pins as nothing rather than as a person.
+    """
+    try:
+        return Source(raw)
+    except ValueError:
+        return None

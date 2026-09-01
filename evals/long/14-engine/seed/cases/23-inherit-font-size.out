@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x44
+  BLOCK div 8,8 784x28
+    BLOCK p 8,8 784x28
+      LINE 8,8 108x28 "inherited"

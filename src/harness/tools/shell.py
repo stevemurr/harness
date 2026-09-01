@@ -20,11 +20,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import shlex
+import signal
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from harness.processes import Processes, _own_group
 from harness.settings import Shell as ShellSettings
 from harness.tools.base import ToolContext, ToolSpec, schema
 from harness.types import ToolResult
@@ -40,13 +43,23 @@ class Shell:
     """
 
     settings: ShellSettings = field(default_factory=ShellSettings)
+    #: Where a backgrounded command is registered. `None` withholds backgrounding rather
+    #: than pretending: a process nobody is holding is the `&` problem this exists to fix.
+    processes: Processes | None = None
     spec: ToolSpec = field(default=ToolSpec(
         name="run",
         description=(
             "Run a shell command in the workspace directory. Requires the user's approval "
             "before it runs, and it is NOT sandboxed -- it has the same access as the user, "
             "so do not run anything destructive or anything outside the workspace without "
-            "saying why first. Returns combined stdout and stderr with the exit code."
+            "saying why first. Returns combined stdout and stderr with the exit code. Set "
+            "background for a command that does not return on its own -- a server, a "
+            "watcher, a long build: it answers immediately with an id instead of waiting, "
+            "you are told when it ends, and read_process shows what it has printed. Do not "
+            "put `&` in the command, with or without background: `&` detaches the work from "
+            "the shell this call is holding, so the harness ends up watching a wrapper that "
+            "exits at once while the real process runs where nothing can read or stop it. "
+            "background=true is how you detach; `&` is how you lose it."
         ),
         parameters=schema(
             {
@@ -54,6 +67,13 @@ class Shell:
                 "timeout": {
                     "type": "integer",
                     "description": "Seconds before it is killed.",
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Run it detached and answer at once with an id, rather than "
+                        "waiting. For anything that does not exit on its own."
+                    ),
                 },
             },
             required=["command"],
@@ -78,6 +98,36 @@ class Shell:
         command = args["command"]
         timeout = int(args.get("timeout", self.settings.timeout))
 
+        if _backgrounds(command):
+            detail = (
+                "background is already doing that, so the two together leave the harness "
+                "holding the wrapper shell -- which exits immediately -- while the real "
+                "work runs detached. Remove the `&`."
+                if args.get("background")
+                else "that detaches it from this call, so it outlives the run with nothing "
+                "able to read or stop it. Use background=true instead, which gives you an "
+                "id, its output, and a way to end it."
+            )
+            return ToolResult(
+                f"this command backgrounds itself with `&`: {detail}", ok=False, refused=True
+            )
+
+        if args.get("background"):
+            if self.processes is None:
+                return ToolResult(
+                    "background commands are not available in this harness", ok=False,
+                    refused=True,
+                )
+            process = await self.processes.start(
+                command, cwd=ctx.paths.root, env=_environment(), call_id=ctx.call_id
+            )
+            return ToolResult(
+                f"{process.process_id} started (pid {process.pid}) and is running in the "
+                f"background. You will be told when it ends. Call read_process with "
+                f"{process.process_id} to see what it has printed so far, or stop_process "
+                f"to end it."
+            )
+
         process = await asyncio.create_subprocess_shell(
             command,
             cwd=ctx.paths.root,
@@ -87,29 +137,34 @@ class Shell:
             # hands every child the harness's own secrets, and lets ambient config change
             # behaviour between runs. The entries kept are the ones whose absence breaks
             # ordinary tools.
-            env={
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
-                "HOME": os.environ.get("HOME", ""),
-                "USER": os.environ.get("USER", ""),
-                "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-                "TERM": "dumb",
-                # An agent has no terminal to type into, so an interactive prompt is an
-                # indefinite hang rather than a question. These make the common offenders
-                # fail instead of waiting.
-                "GIT_TERMINAL_PROMPT": "0",
-                "DEBIAN_FRONTEND": "noninteractive",
-                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-                "NO_COLOR": "1",
-            },
+            env=_environment(),
+            # Its own process group, so the timeout below can kill everything the command
+            # started rather than only the shell that started it. Without this there is no
+            # group to signal, and `killpg` would reach the harness itself.
+            start_new_session=True,
         )
 
         try:
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
+        except asyncio.CancelledError:
+            # Ctrl-C, or any other cancellation. `start_new_session` above took this command
+            # out of the harness's process group, which is what lets the timeout kill it --
+            # and also what stops the terminal's SIGINT from reaching it. Nothing else would
+            # kill it either: the CLI's shutdown closes the provider and nothing more. So a
+            # command interrupted at the keyboard would keep running with no parent, which
+            # is the `&` failure the harness already refuses commands for.
+            _terminate(process)
+            raise
         except TimeoutError:
             # Kill the whole group, not just the shell: `sh -c "a | b"` leaves children
             # behind that keep the pipe open and the harness waiting on a dead command.
             _terminate(process)
-            await process.wait()
+            # Bounded, because this is the wait the timeout was supposed to end. An
+            # unbounded `process.wait()` here is what turned a 120s timeout into 2748s: the
+            # shell was dead and a surviving `curl` still held the pipe, so the reap waited
+            # on an EOF that could not come until that grandchild died of its own accord.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), 5)
             return ToolResult(
                 f"command timed out after {timeout}s and was killed: {command}", ok=False
             )
@@ -139,6 +194,53 @@ class Shell:
         return ToolResult(f"exit {code}\n{body}")
 
 
+def _backgrounds(command: str) -> bool:
+    """Whether the command line detaches something from the shell the harness is holding.
+
+    `&` is the whole problem and almost every `&` is something else, so the near-misses are
+    removed before looking: `&&` is a conjunction, `2>&1` and `&>` are redirections, and
+    anything inside quotes is text rather than syntax. What is left is a real fork.
+
+    A command that ends by `wait`ing is exempt: `a & b & wait` runs two things at once and
+    still blocks, so nothing is orphaned by the time the call returns.
+
+    Found the hard way, twice in one day. An eval agent ran `python3 server.py 18080 &` in
+    the foreground, the call returned at once, and the process was still up nine minutes
+    later holding its port. Then, with backgrounding available, a run passed
+    `bash noisy.sh &` WITH `background=true` -- so the harness registered the wrapper shell,
+    watched it exit in 0s, and the real script carried on where nothing could read or stop
+    it. The second is worse than the first, because it looks like it worked.
+    """
+    bare = re.sub(r"'[^']*'|\"[^\"]*\"", "", command)
+    bare = bare.replace("&&", "")
+    bare = re.sub(r"\d*>&\d*|&>", "", bare)
+    return "&" in bare and not re.search(r"\bwait\b", bare)
+
+
+def _environment() -> dict[str, str]:
+    """A deliberately built environment rather than an inherited one.
+
+    Inheriting hands every child the harness's own secrets and lets ambient config change
+    behaviour between runs. The entries kept are the ones whose absence breaks ordinary
+    tools. Shared by the waiting and the background paths, so a backgrounded command runs
+    in the same world as a foreground one.
+    """
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+        "HOME": os.environ.get("HOME", ""),
+        "USER": os.environ.get("USER", ""),
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "TERM": "dumb",
+        # An agent has no terminal to type into, so an interactive prompt is an indefinite
+        # hang rather than a question. These make the common offenders fail instead of
+        # waiting.
+        "GIT_TERMINAL_PROMPT": "0",
+        "DEBIAN_FRONTEND": "noninteractive",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "NO_COLOR": "1",
+    }
+
+
 def _program(command: str) -> str:
     """The program a command line invokes, for grant matching.
 
@@ -159,9 +261,240 @@ def _program(command: str) -> str:
 
 
 def _terminate(process: asyncio.subprocess.Process) -> None:
+    """Kill the command and everything it started.
+
+    `process.kill()` signals the shell and nothing else, which is why the comment at the
+    call site has always said "the whole group" while the code killed one process. The
+    difference is invisible until a command leaves a child behind that holds the stdout
+    pipe -- and then the harness waits on that child, not on the timeout it promised.
+
+    Falls back to the single process where the group is gone or cannot be signalled, which
+    is the case where there is nothing left to kill anyway.
+
+    Never signals our own group. A child started without `start_new_session` shares the
+    harness's process group, and `killpg` on that kills the harness -- which is exactly what
+    happened the first time this was written: `watch` spawned without a new session, and the
+    test runner died with SIGKILL and no output at all.
+    """
+    if _own_group(process.pid) is False:
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
     with contextlib.suppress(ProcessLookupError):
         process.kill()
 
 
-def shell_tools(settings: ShellSettings | None = None) -> list[Any]:
-    return [Shell(settings or ShellSettings())]
+@dataclass(frozen=True, slots=True)
+class ReadProcess:
+    """What a background command has printed.
+
+    A tool rather than `read_file` for a containment reason and an attribution one. The
+    output lives in `~/.harness/processes/`, which is outside the workspace, so `read_file`
+    would refuse it -- correctly. And fetching it here makes it the answer to a call the
+    model actually made, which is the whole reason a process's output is never delivered
+    into the transcript on its own. See `inbox.py`.
+    """
+
+    processes: Processes | None = None
+    spec: ToolSpec = field(default=ToolSpec(
+        name="read_process",
+        description=(
+            "Show what a background command has printed so far, most recent output last. "
+            "Works while it is still running and after it has ended."
+        ),
+        parameters=schema(
+            {
+                "process_id": {
+                    "type": "string",
+                    "description": "The id `run` gave you when it started, like proc_1a2b.",
+                },
+            },
+            required=["process_id"],
+        ),
+    ))
+
+    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
+        return f"read {args.get('process_id', '')}", "read_process"
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.processes is None:
+            return ToolResult("no background commands here", ok=False, refused=True)
+        text = self.processes.read(args["process_id"])
+        if text is None:
+            known = ", ".join(self.processes.started) or "none"
+            return ToolResult(
+                f"no process {args['process_id']!r}. Running: {known}", ok=False, refused=True
+            )
+        process = self.processes.get(args["process_id"])
+        state = "still running" if process and process.running else f"exited {process.code}"
+        if not text.strip():
+            return ToolResult(f"[{state}, no output yet]")
+        return ToolResult(f"[{state}]\n{text.rstrip()}")
+
+
+@dataclass(frozen=True, slots=True)
+class StopProcess:
+    """End a background command.
+
+    `mutates` is False, and the reason is containment rather than harmlessness: this can
+    only reach processes in the registry, and the registry only holds what this run started.
+    The prompt tells the model to leave alone what it did not start; here that is not
+    advice, it is the only thing reachable.
+    """
+
+    processes: Processes | None = None
+    spec: ToolSpec = field(default=ToolSpec(
+        name="stop_process",
+        description=(
+            "Stop a background command you started. Only reaches commands from this run."
+        ),
+        parameters=schema(
+            {"process_id": {"type": "string", "description": "The id `run` gave you."}},
+            required=["process_id"],
+        ),
+    ))
+
+    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
+        return f"stop {args.get('process_id', '')}", "stop_process"
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.processes is None:
+            return ToolResult("no background commands here", ok=False, refused=True)
+        what = await self.processes.stop(args["process_id"])
+        if what is None:
+            known = ", ".join(self.processes.started) or "none"
+            return ToolResult(
+                f"no process {args['process_id']!r}. Started here: {known}",
+                ok=False, refused=True,
+            )
+        return ToolResult(f"{args['process_id']} {what}")
+
+
+@dataclass(frozen=True, slots=True)
+class WatchProcess:
+    """Watch a command's output as it appears."""
+
+    processes: Processes | None = None
+    spec: ToolSpec = field(default=ToolSpec(
+        name="watch",
+        description=(
+            "Be told about a command's output MORE THAN ONCE, as it arrives -- every error "
+            "in a log, every file change. Batches of lines reach you between turns, so you "
+            "keep working.\n"
+            "If you only need to be told ONCE that something is ready, this is the wrong "
+            "tool. Use run with background=true and a command that EXITS when the condition "
+            "holds: `until grep -q Ready app.log; do sleep 0.5; done`. You get a single "
+            "notice when it exits. A watch on `tail -f` never ends by itself, so it stays "
+            "armed long after the thing you were waiting for happened.\n"
+            "Filter tightly, and filter for failure too: a watch matching only the happy "
+            "path stays silent through a crash, and silence looks exactly like still "
+            "working. Prefer `grep -E --line-buffered 'done|Error|Traceback|FAILED'` over "
+            "matching success alone -- and note that every stage of a pipe must flush per "
+            "line, so grep needs --line-buffered and awk needs fflush(). A watch that sends "
+            "too much is stopped for you."
+        ),
+        parameters=schema(
+            {
+                "command": {
+                    "type": "string",
+                    "description": "The command to run. Its stdout lines are the events.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "What you are watching, in a few words. It is shown with every "
+                        "notice, so 'errors in deploy.log' beats 'watching logs'."
+                    ),
+                },
+            },
+            required=["command", "description"],
+        ),
+        mutates=True,
+    ))
+
+    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
+        return f"watch: {args.get('command', '')}", f"watch:{_program(args.get('command', ''))}"
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.processes is None:
+            return ToolResult("watching is not available here", ok=False, refused=True)
+        watch = await self.processes.watch(
+            args["command"], args["description"],
+            cwd=ctx.paths.root, env=_environment(), call_id=ctx.call_id,
+        )
+        return ToolResult(
+            f"{watch.watch_id} watching (pid {watch.handle.pid}). Its lines will reach you "
+            f"between turns. Call read_watch with {watch.watch_id} for everything it has "
+            f"printed, or stop_watch to end it."
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadWatch:
+    processes: Processes | None = None
+    spec: ToolSpec = field(default=ToolSpec(
+        name="read_watch",
+        description="Everything a watch has printed, including lines already reported.",
+        parameters=schema(
+            {"watch_id": {"type": "string", "description": "The id `watch` gave you."}},
+            required=["watch_id"],
+        ),
+    ))
+
+    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
+        return f"read {args.get('watch_id', '')}", "read_watch"
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.processes is None:
+            return ToolResult("watching is not available here", ok=False, refused=True)
+        text = self.processes.read_watch(args["watch_id"])
+        if text is None:
+            known = ", ".join(self.processes.watching) or "none"
+            return ToolResult(
+                f"no watch {args['watch_id']!r}. Started here: {known}", ok=False, refused=True
+            )
+        watch = self.processes.watching[args["watch_id"]]
+        state = "still watching" if watch.running else f"ended {watch.code}"
+        if not text.strip():
+            return ToolResult(f"[{state}, nothing printed yet]")
+        return ToolResult(f"[{state}, {watch.lines} lines]\n{text.rstrip()}")
+
+
+@dataclass(frozen=True, slots=True)
+class StopWatch:
+    processes: Processes | None = None
+    spec: ToolSpec = field(default=ToolSpec(
+        name="stop_watch",
+        description="Stop a watch you started. Only reaches watches from this run.",
+        parameters=schema(
+            {"watch_id": {"type": "string", "description": "The id `watch` gave you."}},
+            required=["watch_id"],
+        ),
+    ))
+
+    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
+        return f"stop {args.get('watch_id', '')}", "stop_watch"
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.processes is None:
+            return ToolResult("watching is not available here", ok=False, refused=True)
+        what = await self.processes.stop_watch(args["watch_id"])
+        if what is None:
+            known = ", ".join(self.processes.watching) or "none"
+            return ToolResult(
+                f"no watch {args['watch_id']!r}. Started here: {known}", ok=False, refused=True
+            )
+        return ToolResult(f"{args['watch_id']} {what}")
+
+
+def shell_tools(
+    settings: ShellSettings | None = None, processes: Processes | None = None
+) -> list[Any]:
+    return [
+        Shell(settings or ShellSettings(), processes),
+        ReadProcess(processes),
+        StopProcess(processes),
+        WatchProcess(processes),
+        ReadWatch(processes),
+        StopWatch(processes),
+    ]

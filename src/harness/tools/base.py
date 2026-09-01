@@ -27,28 +27,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import jsonschema
 
-from harness.types import ToolCall, ToolResult
+from harness.types import ToolCall, ToolResult, ToolSpec
 from harness.workspace import Workspace
-
-
-@dataclass(frozen=True, slots=True)
-class ToolSpec:
-    """What the model is told about a tool.
-
-    `parameters` is JSON Schema, and it is the single source of truth for what the tool
-    accepts: the provider sees it, and the registry validates against it. There is no
-    second place that says what the arguments are.
-    """
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-    #: Whether running this can change anything outside the harness -- the filesystem, the
-    #: network, another process. Declared by the tool rather than listed centrally, so
-    #: adding a tool cannot forget to say, and so the approval layer never has to know what
-    #: tools exist. A read-only tool is approved automatically; a mutating one is asked
-    #: about, subject to policy.
-    mutates: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +40,11 @@ class ToolContext:
     """
 
     paths: Workspace
+    #: The id of the call being run, for a tool that has to refer to itself later. A
+    #: background command's exit notice points back at the call that started it, the way
+    #: Claude Code's task notifications carry a `tool-use-id`. Identity rather than a
+    #: capability, which is why it is here and a registry of stateful objects is not.
+    call_id: str = ""
 
 
 @runtime_checkable

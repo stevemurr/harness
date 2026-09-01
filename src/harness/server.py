@@ -18,8 +18,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -42,6 +44,7 @@ from harness.config import (
 from harness.config import Provider as ProviderSettings
 from harness.config import Server as ServerSettings
 from harness.conversations import Runtime
+from harness.inbox import Envelope, Source
 from harness.providers.base import Provider
 from harness.runs import DECISIONS, CommandRefused, Run
 from harness.settings import Settings
@@ -166,6 +169,86 @@ def create_app(
             raise ApiError(409, "workspace_exists", str(exc)) from exc
         return JSONResponse(record.wire(), status_code=201)
 
+    async def list_folders(request: Request) -> Response:
+        """Directories under one path, so a browser can offer a folder picker.
+
+        A browser cannot see the machine's filesystem, and a `webkitdirectory` input reports
+        a folder's *name* and not its path -- which is useless to a server that has to open
+        it. So the picking happens here, one level at a time.
+
+        Read-only, directories only, and hidden entries left out. It widens what this server
+        discloses, and that is worth stating plainly: anyone who can reach this port can
+        already start a run that executes shell commands in any folder, so a listing is a
+        smaller capability than the one next door. It is bound to 127.0.0.1 by default and
+        `[server] token` covers it like every other route.
+        """
+        raw = request.query_params.get("path") or str(Path.home())
+        try:
+            root = Path(raw).expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise ApiError(400, "no_such_folder", f"{raw} cannot be read: {exc}") from exc
+        if not root.is_dir():
+            raise ApiError(400, "no_such_folder", f"{root} is not a directory.")
+
+        entries = []
+        try:
+            for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                if child.name.startswith("."):
+                    continue
+                try:
+                    # A broken symlink raises here rather than answering, and one bad entry
+                    # must not cost the listing.
+                    if child.is_dir():
+                        entries.append({"name": child.name, "path": str(child)})
+                except OSError:
+                    continue
+        except PermissionError as exc:
+            raise ApiError(403, "no_such_folder", f"{root} cannot be listed: {exc}") from exc
+
+        return JSONResponse({
+            "path": str(root),
+            # Empty at the filesystem root, where `parent` is the path itself.
+            "parent": "" if root.parent == root else str(root.parent),
+            "entries": entries[:500],
+            # Declared here only because the client is asked to declare it on registration
+            # and this is the side that can see the folder.
+            "vcs": "git" if (root / ".git").exists() else "none",
+        })
+
+    async def create_folder(request: Request) -> Response:
+        """Make one directory, so a person can start a thread somewhere that does not exist
+        yet without leaving the picker to run `mkdir`.
+
+        One level, by name, under a path that already exists -- not `mkdir -p` and not a
+        path. A name carrying a separator would let the picker write anywhere the user can,
+        which is a bigger capability than the one being asked for. It is still a widening,
+        and the same thing is true of it as of the listing next door: this port already
+        offers a run that executes shell as the user, so a directory is the smaller power.
+        """
+        body = await read_json(request)
+        raw = str(body.get("path") or "").strip()
+        name = str(body.get("name") or "").strip()
+        if not raw or not name:
+            raise ApiError(400, "invalid_request", "path and name are required.")
+        if "/" in name or os.sep in name or name in (".", ".."):
+            raise ApiError(400, "invalid_request", "a folder name cannot contain a path.")
+
+        try:
+            parent = Path(raw).expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise ApiError(400, "no_such_folder", f"{raw} cannot be read: {exc}") from exc
+        if not parent.is_dir():
+            raise ApiError(400, "no_such_folder", f"{parent} is not a directory.")
+
+        target = parent / name
+        try:
+            target.mkdir()
+        except FileExistsError as exc:
+            raise ApiError(409, "folder_exists", f"{target} already exists.") from exc
+        except OSError as exc:
+            raise ApiError(400, "no_such_folder", f"could not create {target}: {exc}") from exc
+        return JSONResponse({"path": str(target), "name": name}, status_code=201)
+
     # -- threads ---------------------------------------------------------------------------
 
     async def create_thread(request: Request) -> Response:
@@ -204,7 +287,13 @@ def create_app(
         for conversation in reversed(list(runtime.conversations.values())):
             if wanted and conversation.workspace_id != wanted:
                 continue
-            rows.append(thread_row(conversation.thread_id, conversation_title(conversation)))
+            rows.append(
+                thread_row(
+                    conversation.thread_id,
+                    conversation_title(conversation),
+                    root=conversation.root,
+                )
+            )
 
         for info in await store.threads(limit=limit):
             # A conversation this process is holding is listed under the thread id its
@@ -214,17 +303,44 @@ def create_app(
             if wanted and workspace_id_for(info.workspace) != wanted:
                 continue
             rows.append(
-                thread_row(info.thread_id, info.title, updated_at=info.created_at.isoformat())
+                thread_row(
+                    info.thread_id,
+                    info.title,
+                    root=info.workspace,
+                )
             )
         return JSONResponse({"threads": rows[:limit]})
 
-    def thread_row(thread_id: str, title: str, updated_at: str = "") -> dict[str, Any]:
+    def last_written(thread_id: str) -> str:
+        """When this thread was last appended to, as the file system knows it.
+
+        `ThreadInfo.created_at` is when the thread was made, which tells a listing nothing
+        about whether anything is happening in it now. An eval running in another process
+        is not in `runtime.runs` either, so the only evidence that survives a process
+        boundary is the transcript's own mtime.
+        """
+        try:
+            when = store.path_for(thread_id).stat().st_mtime
+        except (StoreError, OSError, AttributeError):
+            return ""
+        return datetime.fromtimestamp(when, tz=UTC).isoformat()
+
+    def thread_row(
+        thread_id: str, title: str, updated_at: str = "", root: Path | None = None
+    ) -> dict[str, Any]:
         runs = runtime.for_thread(thread_id)
+        updated_at = updated_at or last_written(thread_id)
         return {
             "thread_id": thread_id,
             "title": title,
             "latest_run_status": runs[0].status.value if runs else "",
             "updated_at": updated_at,
+            # Which folder the thread works in. Both sources already know it -- a held
+            # conversation from its root, a stored one from the workspace the transcript
+            # recorded -- so a listing can be grouped by project rather than being a flat
+            # column of questions with no telling which is which.
+            "folder": root.name if root else "",
+            "root_path": str(root) if root else "",
         }
 
     def conversation_title(conversation: Any) -> str:
@@ -387,16 +503,7 @@ def create_app(
         if kind == "answer":
             return answer(run, body)
         if kind == "steer":
-            # Refused rather than accepted quietly. `AgentLoop.run` owns the transcript for
-            # the length of a run and takes no input channel, so there is nowhere to put a
-            # further instruction until the run ends. Accepting it would leave someone
-            # watching for a change that cannot come.
-            raise ApiError(
-                409,
-                "unsupported_command",
-                "This backend cannot add to a run already going. Wait for it to finish and "
-                "send another message, or cancel it.",
-            )
+            return steer(run, body)
         raise ApiError(400, "unknown_command", f"unknown command type: {kind!r}")
 
     def resolve(run: Run, body: dict[str, Any]) -> dict[str, Any]:
@@ -417,6 +524,30 @@ def create_app(
                 f"{approval_id or 'that approval'} is not waiting. Open: {open_now}.",
             )
         return {"status": decision.value}
+
+    def steer(run: Run, body: dict[str, Any]) -> dict[str, Any]:
+        """Add to a run already going.
+
+        This used to be a 409 whose message explained that `AgentLoop.run` owned the
+        transcript and took no input channel. It takes one now: the words go into the
+        agent's inbox and are appended at the next turn boundary, which is the only point
+        where a transcript is provably free of unanswered tool calls.
+
+        So there is a delay, and it is honest to say what bounds it -- one model call and
+        its tools, which can be a minute. Anything that must stop the run *now* is `cancel`,
+        which is a different command because it is a different intent.
+        """
+        content = str(body.get("content") or "").strip()
+        if not content:
+            raise ApiError(400, "invalid_request", "content is required.")
+        conversation = runtime.conversations.get(run.thread_id)
+        if conversation is None:
+            raise ApiError(
+                409, "run_finished", "That run is no longer held by this process."
+            )
+        conversation.agent.inbox.post(Envelope(Source.PERSON, content))
+        run.publish("run.steered", {"content": content})
+        return {"status": "queued"}
 
     def answer(run: Run, body: dict[str, Any]) -> dict[str, Any]:
         question_id = str(body.get("question_id") or "")
@@ -439,6 +570,8 @@ def create_app(
         Route(f"{API}/health", health),
         Route(f"{API}/workspaces", list_workspaces),
         Route(f"{API}/workspaces", create_workspace, methods=["POST"]),
+        Route(f"{API}/folders", list_folders),
+        Route(f"{API}/folders", create_folder, methods=["POST"]),
         Route(f"{API}/threads", list_threads),
         Route(f"{API}/threads", create_thread, methods=["POST"]),
         Route(f"{API}/threads/{{thread_id}}", get_thread),
@@ -447,7 +580,10 @@ def create_app(
         Route(f"{API}/runs/{{run_id}}/events", events),
         Route(f"{API}/runs/{{run_id}}/commands", commands, methods=["POST"]),
         # Watching. The page is outside the API prefix because a person types it.
+        Route("/watch", threads_page),
         Route("/watch/{thread_id}", watch_page),
+        # The console: the same view, plus the means to drive it.
+        Route("/console", console_page),
         Route(f"{API}/watch/{{thread_id}}/events", watch_events),
     ]
 
@@ -488,8 +624,59 @@ async def watch_page(request: Request) -> Response:
     for -- a run id only exists once the work has started, and the point is to be watching
     before then.
     """
-    page = (Path(__file__).parent / "watch.html").read_text(encoding="utf-8")
-    return Response(page, media_type="text/html; charset=utf-8")
+    return Response(page("watch.html"), media_type="text/html; charset=utf-8")
+
+
+def complete_lines(text: str) -> list[str]:
+    """The lines of a file that is still being appended to, excluding a half-written one.
+
+    A tailer must never treat an unterminated final line as finished, and this one used to.
+    The transcript is written while it is read, and a reader that consumed the partial line
+    also advanced its cursor past it -- so the client got an unparseable row, dropped it in
+    its `catch`, and the completed row was never sent. One message, silently missing, until
+    the page was reloaded. Reported from the console and reproduced exactly. (2026-09-01)
+
+    `JsonlStore.append` claimed a single write was atomic. It is not: `handle.write` is
+    buffered text IO, and one turn carrying a 30k-character tool result is several times the
+    buffer, so it reaches the file in several syscalls.
+    """
+    lines = text.splitlines()
+    if lines and not text.endswith("\n"):
+        lines.pop()
+    return lines
+
+
+#: `<!-- include name -->`, resolved once, without recursion. The character class is the
+#: containment: a page cannot name `../config.toml`.
+INCLUDE = re.compile(r"<!--\s*include ([A-Za-z0-9_.-]+)\s*-->")
+
+
+def page(name: str) -> str:
+    """One self-contained document, composed at request time.
+
+    The two pages were 83% the same file, which is two copies of one rule and they drift.
+    The obvious fix -- serve `shared.css` and `shared.js` from their own routes and link
+    them -- is worse here for two reasons. A missing asset route takes *both* pages down
+    rather than one. And what made these pages pleasant is that the browser gets a single
+    file with no build step and no second fetch, which two `<link>` tags would end.
+
+    So the seam is the same one, resolved on this side of the wire. Still read from disk on
+    every request, so editing a page stays a refresh rather than a restart.
+    """
+    here = Path(__file__).parent / "pages"
+    text = (here / name).read_text(encoding="utf-8")
+    return INCLUDE.sub(
+        lambda found: (here / found.group(1)).read_text(encoding="utf-8"), text
+    )
+
+
+async def threads_page(_request: Request) -> Response:
+    """`/watch` with no thread: everything there is to watch, newest first."""
+    return Response(page("threads.html"), media_type="text/html; charset=utf-8")
+
+
+async def console_page(_request: Request) -> Response:
+    return Response(page("console.html"), media_type="text/html; charset=utf-8")
 
 
 async def watch_events(request: Request) -> Response:
@@ -503,20 +690,41 @@ async def watch_events(request: Request) -> Response:
     turn is recorded, not when the call begins.
     """
     thread_id = request.path_params["thread_id"]
-    store = request.app.state.runtime.store
+    runtime = request.app.state.runtime
+    store = runtime.store
     try:
         path = store.path_for(thread_id)
     except (StoreError, AttributeError) as exc:
         raise ApiError(404, "no_such_thread", str(exc)) from exc
 
+    window = getattr(runtime.provider, "context_window", 0)
+    threshold = runtime.settings.compaction.at
+
+    # Where a reconnecting browser left off. `EventSource` re-sends the last `id:` it saw as
+    # `Last-Event-ID` without being asked, so honouring it costs one header read and stops a
+    # dropped connection from replaying the whole transcript into a page that already has it.
+    # Backgrounding a tab on a phone drops the stream, so this is the ordinary case there,
+    # not an exotic one.
+    resume = request.headers.get("last-event-id", "")
+    start = int(resume) if resume.isdigit() else 0
+
     async def rows() -> AsyncIterator[str]:
-        seen, idle = 0, 0.0
+        # Ahead of the transcript, so the page can size its context meter against the window
+        # this deployment actually has instead of a number compiled into the page. A page
+        # served by a process started before this row existed simply never sees it and keeps
+        # its own default, which is why the client treats it as optional.
+        yield "data: " + json.dumps(
+            {"kind": "harness", "context_window": window, "compact_at": threshold}
+        ) + "\n\n"
+        seen, idle = start, 0.0
         while True:
             if path.exists():
-                lines = path.read_text(encoding="utf-8").splitlines()
-                for line in lines[seen:]:
+                lines = complete_lines(path.read_text(encoding="utf-8"))
+                # The id is how many lines the client has then consumed, so a reconnect
+                # resumes on the next one.
+                for offset, line in enumerate(lines[seen:], start=seen + 1):
                     if line.strip():
-                        yield f"data: {line}\n\n"
+                        yield f"id: {offset}\ndata: {line}\n\n"
                 if len(lines) > seen:
                     seen, idle = len(lines), 0.0
             await asyncio.sleep(0.5)

@@ -22,7 +22,7 @@ import asyncio
 import inspect
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 from harness.settings import Limits, Output
@@ -78,6 +78,12 @@ class AgentLoop:
     #: `limits` is: it is a number someone tunes, not a fact about the loop.
     output: Output = field(default_factory=Output)
     observers: list[Observer] = field(default_factory=list)
+    #: What arrived for this run since the last turn, already rendered. Injected as a plain
+    #: callable, like `complete` and `run_tool`, so the loop never learns that an inbox, a
+    #: person or a background process exists -- only that messages sometimes turn up.
+    #: Given the turn about to run, so an arrival can say when it landed rather than only
+    #: what it said -- which is what stops a pinned instruction reading as a new one.
+    pending: Callable[[int], Awaitable[Sequence[Message]]] | None = None
 
     async def run(self, transcript: Transcript) -> Outcome:
         turns = 0
@@ -101,6 +107,17 @@ class AgentLoop:
                     StopReason("error", f"transcript has unanswered tool calls: {names}"),
                     turns,
                 )
+
+            # Anything that turned up while the last turn ran. Here and nowhere else: the
+            # guard above has just proved the transcript has no unanswered tool call, which
+            # is exactly the condition that makes appending a message safe. Appending one
+            # between a call and its result is the request every provider rejects.
+            for arrived in (await self.pending(turns + 1)) if self.pending else ():
+                transcript.append(arrived)
+                # A person or a process intervening is the clearest sign that a stall may
+                # now be breakable, so the count of turns-where-everything-was-refused
+                # starts again rather than carrying on towards the cap.
+                consecutive_refusals = 0
 
             try:
                 assistant = await self.complete(transcript)

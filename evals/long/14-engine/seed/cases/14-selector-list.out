@@ -1,0 +1,7 @@
+BLOCK body 0,0 800x92
+  BLOCK h1 0,0 800x36
+    LINE 0,0 16x36 "a"
+  BLOCK h2 0,36 800x36
+    LINE 0,36 16x36 "b"
+  BLOCK p 0,72 800x20
+    LINE 0,72 8x20 "c"

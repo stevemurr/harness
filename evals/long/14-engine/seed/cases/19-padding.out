@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x40
+  BLOCK div 20,10 760x20
+    BLOCK p 20,10 760x20
+      LINE 20,10 24x20 "pad"

@@ -483,6 +483,8 @@ class Runtime:
         # subprocesses this process started, and nothing else will reap them.
         for conversation in self.conversations.values():
             await conversation.agent.indexes.aclose()
+            if conversation.agent.processes is not None:
+                await conversation.agent.processes.aclose()
         await self.provider.aclose()
 
     def for_thread(self, thread_id: str) -> list[Run]:

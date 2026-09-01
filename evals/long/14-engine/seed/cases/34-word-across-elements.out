@@ -1,0 +1,3 @@
+BLOCK body 0,0 800x20
+  BLOCK p 0,0 800x20
+    LINE 0,0 112x20 "abc and joined"

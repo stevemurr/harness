@@ -1,0 +1,35 @@
+[
+  {
+    "context_peak_chars": 34028,
+    "context_peak_tokens": 9144,
+    "context_total_chars": 246335,
+    "model_seconds": 43.0,
+    "model_calls": 10,
+    "verified_last": true,
+    "mutations": 3,
+    "recovered": 0,
+    "unrecovered": 0,
+    "rung": "12-conformance",
+    "tests": "Building to a written spec over a long horizon, with a rule stated once in the preamble that only the last cases exercise -- the probe for whether a compaction boundary loses what came before it.",
+    "commit": "8e3271c",
+    "arm": "code",
+    "passed": true,
+    "why": "",
+    "stop": "done",
+    "detail": "",
+    "turns": 10,
+    "seconds": 44.7,
+    "calls": 17,
+    "tools": {
+      "edit_file": 2,
+      "list_dir": 1,
+      "read_file": 11,
+      "run": 2,
+      "write_file": 1
+    },
+    "failed": {},
+    "refused": {},
+    "compactions": 0,
+    "attempt": 1
+  }
+]

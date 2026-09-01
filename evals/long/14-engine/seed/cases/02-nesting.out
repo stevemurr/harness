@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x60
+  BLOCK div 10,10 780x40
+    BLOCK div 20,20 760x20
+      LINE 20,20 40x20 "inner"

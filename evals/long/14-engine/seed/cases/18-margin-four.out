@@ -1,0 +1,5 @@
+BLOCK body 0,0 800x47
+  BLOCK p 4,1 794x20
+    LINE 4,1 8x20 "a"
+  BLOCK p 4,24 794x20
+    LINE 4,24 8x20 "b"

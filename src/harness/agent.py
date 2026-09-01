@@ -39,9 +39,11 @@ from harness.compaction import (
     view,
 )
 from harness.environment import describe
+from harness.inbox import Inbox, render
 from harness.loop import AgentLoop, Observer, Outcome, Turn, system, user
 from harness.mode import NORMAL, Mode, ModeState
 from harness.plan import Plan
+from harness.processes import Processes
 from harness.prompts import prompt
 from harness.providers.base import Provider
 from harness.runner import ToolRunner
@@ -82,6 +84,13 @@ class Agent:
     #: The code indexes this agent's tools share. Held so a front end can close them: they
     #: own subprocesses, and nothing else knows they exist.
     indexes: Indexes = field(default_factory=Indexes)
+    #: What has arrived for this agent from outside a turn -- a person steering, a
+    #: background command ending. Held here rather than on `ToolContext` for the reason
+    #: `Plan` is: the context stays the small set of things *every* tool may reach.
+    inbox: Inbox = field(default_factory=Inbox)
+    #: Background commands this agent started. Held beside `indexes` and closed the same
+    #: way: both own subprocesses nothing else knows about.
+    processes: Processes | None = None
     #: Told when a compaction happened, with the summary and what it saved. Optional and
     #: ordinary, like every other collaborator: the CLI prints a line, a server publishes an
     #: event, a script passes nothing.
@@ -147,8 +156,34 @@ class Agent:
             limits=self.settings.limits,
             output=self.settings.output,
             observers=[*self.observers, self._recorder(thread_id)],
+            pending=self._arrivals(thread_id),
         )
         return await loop.run(transcript)
+
+    def _arrivals(self, thread_id: str):
+        """Drain the inbox, render it, and write it down -- in that order.
+
+        A closure over the thread id, the shape `_recorder` and `_completer` already use,
+        and for the same reason `_compact` needs one: an arrival is not a `Turn`, so the
+        observer that persists turns will never see it. Something has to write it where it
+        is appended, or a resumed thread loses what the person said.
+
+        Rendering here rather than in the loop keeps the loop ignorant of what a `Source`
+        is. It receives messages; it does not learn where they came from.
+        """
+
+        async def arrived(turn: int) -> list[Message]:
+            messages = [render(envelope, turn) for envelope in self.inbox.drain()]
+            if messages:
+                # Awaited, not scheduled. This was `ensure_future` and nothing held the
+                # task: an un-referenced task can be collected before it runs, and its
+                # exceptions have nowhere to go. The cost is one small append at a point
+                # where a model call is about to happen anyway -- `_recorder` already pays
+                # the same price once per turn.
+                await self._write(thread_id, messages)
+            return messages
+
+        return arrived
 
     def _completer(self, thread_id: str, state: State):
         """The loop's model call, with compaction on the way out.
@@ -353,6 +388,7 @@ def default_registry(
     modes: ModeState | None = None,
     ask: Questioner | None = None,
     indexes: Indexes | None = None,
+    processes: Processes | None = None,
 ) -> tuple[Registry, Plan, ModeState]:
     """Every tool a coding agent gets by default, and the plan two of them share.
 
@@ -366,6 +402,7 @@ def default_registry(
     from harness.tools.mode import mode_tools
     from harness.tools.plan import plan_tools
     from harness.tools.shell import shell_tools
+    from harness.tools.web import web_tools
 
     planning, plan = plan_tools(plan)
     searching, _ = code_tools(indexes)
@@ -373,7 +410,8 @@ def default_registry(
     registry = Registry(
         [
             *file_tools(),
-            *shell_tools(),
+            *shell_tools(processes=processes),
+            *web_tools(),
             *planning,
             *searching,
             *mode_tools(modes),
@@ -407,7 +445,11 @@ def build(
 
     modes = ModeState(current=mode)
     indexes = for_workspace(root, settings.code)
-    registry, plan, modes = default_registry(modes=modes, ask=ask, indexes=indexes)
+    inbox = Inbox()
+    processes = Processes(inbox=inbox)
+    registry, plan, modes = default_registry(
+        modes=modes, ask=ask, indexes=indexes, processes=processes
+    )
     return Agent(
         workspace=Workspace.at(root, protected=protected),
         provider=provider,
@@ -419,4 +461,6 @@ def build(
         observers=observers or [],
         settings=settings,
         indexes=indexes,
+        inbox=inbox,
+        processes=processes,
     )

@@ -73,11 +73,13 @@ class JsonlStore:
         return self.root / thread_id
 
     async def create(self, workspace: Path, thread_id: str = "") -> str:
-        # Microseconds, not seconds. `threads()` orders by filename precisely so it does
-        # not have to open every file, which makes the id's precision the sort key -- and
-        # at second precision two threads in the same second fell back to sorting by the
-        # random suffix. Measured before the fix: 4 failures in 15 runs of the ordering
-        # test. The random suffix stays, for collision rather than for order. (2026-08-30)
+        # Microseconds, not seconds, and the random suffix for collisions. This used to be
+        # load-bearing for ordering -- `threads()` sorted by filename, so the id's precision
+        # WAS the sort key, and at second precision two threads made in the same second fell
+        # back to sorting by the random suffix (4 failures in 15 runs of the ordering test,
+        # 2026-08-30). `threads()` now sorts by mtime, because filename order broke the
+        # moment a second id shape appeared. The precision stays: it keeps ids unique and
+        # keeps a directory listing readable in the order things happened. (2026-09-01)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
         thread_id = thread_id or f"{stamp}-{uuid4().hex[:8]}"
         header = {
@@ -103,8 +105,12 @@ class JsonlStore:
         lines = "".join(json.dumps(encode(m)) + "\n" for m in messages)
 
         def _append() -> None:
-            # One open, one write, in append mode: the kernel keeps appends atomic for
-            # writes of this size, so a reader never sees half a line.
+            # One open, one write, in append mode. That is NOT enough to make a reader safe,
+            # and this comment used to say it was: `handle.write` is buffered text IO, so a
+            # turn carrying a 30k-character tool result leaves in several syscalls and a
+            # concurrent reader can see the last line half-written. Anything tailing this
+            # file has to ignore an unterminated final line -- `server.complete_lines` is
+            # where that is done, and why.
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(lines)
 
@@ -137,7 +143,19 @@ class JsonlStore:
     async def threads(self, limit: int = 50) -> list[ThreadInfo]:
         def _list() -> list[ThreadInfo]:
             found: list[ThreadInfo] = []
-            for path in sorted(self.root.glob("*/transcript.jsonl"), reverse=True)[:limit]:
+            # By mtime, not by name. Ids come in two shapes -- `20260901T...` minted here
+            # and `thr_<hex>` minted by the server -- and a descending *string* sort puts
+            # every `thr_` ahead of every `2026`, because "t" > "2". A listing asking for
+            # the newest ten got ten server threads and none of the timestamped ones, which
+            # hid a running eval behind threads a day older. mtime is also the truer answer
+            # to "newest": a thread being appended to right now is the one a picker wants
+            # first, whatever it is called.
+            paths = sorted(
+                self.root.glob("*/transcript.jsonl"),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+                reverse=True,
+            )
+            for path in paths[:limit]:
                 info = _describe(path)
                 if info is not None:
                     found.append(info)

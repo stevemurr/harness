@@ -8,7 +8,7 @@ have no idea a loop exists -- either can be tested without the other.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from harness.approval import Approvals, Request
@@ -39,8 +39,15 @@ class ToolRunner:
     context: ToolContext
     approvals: Approvals
     modes: ModeState | None = None
+    #: Calls that were refused, by their exact arguments, with the mode they were refused
+    #: in. A refusal cannot turn into an acceptance on its own, so asking again with the
+    #: same arguments is a loop rather than a retry -- see `_looping`.
+    _refused: dict[str, tuple[str, str]] = field(default_factory=dict, repr=False)
 
     async def run(self, call: ToolCall) -> ToolResult:
+        if (again := self._looping(call)) is not None:
+            return again
+
         tool = self.registry.get(call.name)
         if tool is None:
             known = ", ".join(sorted(self.registry.names())) or "none"
@@ -76,6 +83,56 @@ class ToolRunner:
             # A refusal is information the model should act on -- propose something else,
             # explain why it needed to -- so it is an ordinary failed result, not an
             # exception and not a run-ending condition.
-            return ToolResult(refusal, ok=False, refused=True)
+            return self._remember(call, ToolResult(refusal, ok=False, refused=True))
 
-        return await self.registry.run(call, self.context)
+        # A fresh context per call, differing only in whose call it is.
+        return self._remember(
+            call, await self.registry.run(call, replace(self.context, call_id=call.call_id))
+        )
+
+    # -- the same refusal, over and over ---------------------------------------------
+
+    def _fingerprint(self, call: ToolCall) -> str:
+        """A call's identity: its name and its arguments, order-independent."""
+        return json.dumps([call.name, call.arguments], sort_keys=True)
+
+    def _remember(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        if result.refused and self.modes is not None:
+            self._refused[self._fingerprint(call)] = (self.modes.current.name, result.content)
+        elif result.refused:
+            self._refused[self._fingerprint(call)] = ("", result.content)
+        return result
+
+    def _looping(self, call: ToolCall) -> ToolResult | None:
+        """Whether this exact call has already been refused, and nothing has changed.
+
+        Measured, and the reason this exists: a run mistyped one character of an absolute
+        path, was correctly told it resolved outside the workspace, and then made the
+        identical call **34 times** until the refusal cap ended it -- 56 turns, no edits,
+        0/45. Repeating the original refusal was not helping, because the model had already
+        read that sentence and kept going; what it never learned was that it was repeating
+        itself. So this names the loop rather than restating the cause, and still counts as
+        a refusal so a genuinely stuck run terminates as before. (2026-09-01)
+
+        Only refusals are remembered, never successes. After a compaction a tool result is
+        gone from the context and re-reading the same file is not a loop but the correct
+        recovery, and refusing it would break the thing compaction exists for.
+
+        The mode is part of the key, because one refusal *can* change on its own: a tool
+        withheld in plan mode becomes available the moment a plan is approved.
+        """
+        seen = self._refused.get(self._fingerprint(call))
+        if seen is None:
+            return None
+        mode, why = seen
+        now = self.modes.current.name if self.modes is not None else ""
+        if mode != now:
+            return None
+        return ToolResult(
+            f"You have already called {call.name} with exactly these arguments and it was "
+            f"refused: {why.rstrip('.')}. Nothing has changed since, so asking again cannot "
+            "give a different answer. Do something else: fix the arguments, use a relative "
+            "path, or try another approach.",
+            ok=False,
+            refused=True,
+        )

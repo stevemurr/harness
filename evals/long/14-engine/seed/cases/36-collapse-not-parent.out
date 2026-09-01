@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x120
+  BLOCK div 40,40 720x40
+    BLOCK p 50,50 700x20
+      LINE 50,50 40x20 "child"

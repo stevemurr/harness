@@ -7,9 +7,11 @@ MODE:
 One line, copied from here exactly: {mode}
 
 REQUEST:
-Every separate thing the user asked for, quoted in their own words, one per line, in the
-order they asked. Include earlier requests even if they are already finished. This is the
-one thing that must survive intact.
+One line for each separate thing the user asked for: a few words naming it, then whether it
+is done, partly done, or not started. Do not quote them. The user's own words -- the request
+they opened with, and anything they sent while you worked -- are carried into the new context
+verbatim and sit above this note, so quoting them here writes the same thing twice in two
+places that can drift apart. Say what became of each one; the words are already kept.
 
 CHANGED:
 Only what was actually altered: files written or edited, and commands that changed something
@@ -28,7 +30,8 @@ NEXT:
 One sentence naming the single next action.
 
 USER:
-Anything the user corrected, refused, or committed you to.
+Anything the user corrected, refused, or committed you to that is not already there in their
+own words above.
 
 Rules:
 

@@ -1,0 +1,3 @@
+BLOCK body 5,5 790x30
+  BLOCK p 10,10 780x20
+    LINE 10,10 32x20 "star"

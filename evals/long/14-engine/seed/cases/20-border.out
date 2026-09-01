@@ -1,0 +1,4 @@
+BLOCK body 0,0 800x30
+  BLOCK div 5,5 790x20
+    BLOCK p 5,5 790x20
+      LINE 5,5 64x20 "bordered"

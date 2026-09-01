@@ -149,6 +149,14 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
     does not work: the last thing a traced script does is its own `trap ... EXIT`, so every
     failure reported "kill 97784".
 
+    The trap prints only the *first* line of `$BASH_COMMAND`, which matters more than it
+    looks. For a heredoc, that variable holds the whole thing -- the `python3 - <<'EOF'`,
+    every line of the body, and the closing `EOF`. Echoed whole, those trailing lines do
+    not carry the marker, so they are read as things the script said, and the last of them
+    is always the word `EOF`. Every heredoc failure in this ladder therefore reported
+    `python3 - <<'EOF'  ||  EOF` and threw away the `AssertionError` that came before it.
+    `05-extend` failed that way three times across two runs before anyone could see why.
+
     Falls back to plain `sh` where bash is absent, and then says only what the script
     printed.
     """
@@ -157,7 +165,8 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
         command = [
             "bash",
             "-c",
-            f"trap 'echo \"__FAILED__ $BASH_COMMAND\" >&2' ERR; . {shlex.quote(script)}",
+            f"trap 'echo \"__FAILED__ $BASH_COMMAND\" | head -1 >&2' ERR; "
+            f". {shlex.quote(script)}",
         ]
     else:
         command = ["sh", script]
@@ -312,6 +321,11 @@ async def attempt(
 
     await model.aclose()
     await agent.indexes.aclose()
+    # Whatever it backgrounded dies with the attempt. An eval that leaves servers running
+    # accumulates them across 66 attempts, each holding a port -- measured once, at nine
+    # minutes and counting.
+    if agent.processes is not None:
+        await agent.processes.aclose()
 
     if keep is not None:
         messages = [] if stop == "harness-error" else outcome.transcript.messages
