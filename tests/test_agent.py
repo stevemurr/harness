@@ -274,13 +274,26 @@ def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
     import re
 
     from harness.agent import SYSTEM_PROMPT
+    from harness.board import MemoryBoard
+    from harness.exec.children import Children
+    from harness.inbox import Inbox
+    from harness.mode import ModeState
 
-    registered = {tool.spec.name for tool in Toolkit().tools()}
+    # Every tool any kit can offer: the plain kit, a parent's, and a child's.
+    children = Children(
+        inbox=Inbox(), spawner=lambda _t, _l: NotImplemented, approvals=Approvals(),
+        modes=ModeState(),
+    )
+    registered = {tool.spec.name for tool in Toolkit(board=MemoryBoard()).tools()}
+    registered |= {tool.spec.name for tool in Toolkit(children=children).tools()}
+    registered |= {
+        tool.spec.name for tool in Toolkit(lineage=children.lineage("agent_x", "c1")).tools()
+    }
     # Tool-shaped words: the naming convention every tool here follows.
     named = {
         word
         for word in re.findall(r"\b[a-z]+_[a-z_]+\b", SYSTEM_PROMPT)
-        if word.endswith(("_plan", "_file", "_user", "_mode", "_dir"))
+        if word.endswith(("_plan", "_file", "_user", "_mode", "_dir", "_agent", "_task"))
     }
 
     assert named, "the prompt should name the tools it tells the model to use"

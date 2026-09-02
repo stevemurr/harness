@@ -55,6 +55,12 @@ RUN, _READ, _STOP, MONITOR, *_ = (t.spec.description for t in shell_tools())
             "`&` is how you lose it",
             "`python3 server.py 18080 &` outlived its run by nine minutes holding a port.",
         ),
+        (
+            "delegate them before you read any of them",
+            "Six attempts on 15-delegate-services with `delegate` offered and the task "
+            + "naming the action: zero delegations. The prompt said nothing about other "
+            + "agents at all. Added 2026-09-02; measured on the same rung after.",
+        ),
     ],
 )
 def test_the_system_prompt_still_says_it(clause: str, why: str) -> None:
