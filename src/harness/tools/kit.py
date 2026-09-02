@@ -16,20 +16,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from harness.code import servers
-from harness.code.base import Indexes
 from harness.exec.processes import Processes
 from harness.inbox import Inbox
 from harness.mode import ModeState
 from harness.plan import Plan
 from harness.settings import Settings
+from harness.symbols import servers
+from harness.symbols.base import Indexes
 from harness.tools.ask import Questioner, ask_tools
 from harness.tools.base import Handler
-from harness.tools.code import code_tools
 from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
 from harness.tools.plan import plan_tools
 from harness.tools.shell import shell_tools
+from harness.tools.symbols import symbol_tools
 from harness.tools.web import web_tools
 
 
@@ -77,7 +77,7 @@ class Toolkit:
         return cls(
             modes=modes or ModeState(),
             inbox=inbox or Inbox(),
-            indexes=servers.for_workspace(root, settings.code),
+            indexes=servers.for_workspace(root, settings.symbols),
             ask=ask,
             settings=settings,
         )
@@ -89,7 +89,7 @@ class Toolkit:
             *shell_tools(self.settings.shell, self.processes),
             *web_tools(self.settings.web),
             *plan_tools(self.plan),
-            *code_tools(self.indexes),
+            *symbol_tools(self.indexes),
             *mode_tools(self.modes),
             *ask_tools(self.ask),
         ]

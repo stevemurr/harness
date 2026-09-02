@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from harness.code.lsp import LspIndex, Recipe
+from harness.symbols.lsp import LspIndex, Recipe
 
 
 @dataclass

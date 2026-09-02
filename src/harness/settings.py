@@ -145,7 +145,7 @@ class Web:
 
 
 @dataclass(frozen=True, slots=True)
-class Code:
+class Symbols:
     """The code-navigation backend. See `harness/code/`."""
 
     enabled: bool = True
@@ -183,4 +183,4 @@ class Settings:
     compaction: Compaction = field(default_factory=Compaction)
     shell: Shell = field(default_factory=Shell)
     web: Web = field(default_factory=Web)
-    code: Code = field(default_factory=Code)
+    symbols: Symbols = field(default_factory=Symbols)

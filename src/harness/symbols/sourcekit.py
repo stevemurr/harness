@@ -36,7 +36,7 @@ questions answer about very little.
 workspace-wide questions out of an index store that the *compiler* writes during a build
 (`.build/index/store` for SwiftPM). A project that has been checked out but never built has
 no store, so `find_definition` on a symbol in another file is thin until something has
-compiled it once. `Code.warmup` covers a cold start, not an absent index.
+compiled it once. `Symbols.warmup` covers a cold start, not an absent index.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import override
 
-from harness.code.base import Symbol
-from harness.code.lsp import LspIndex, Recipe
+from harness.symbols.base import Symbol
+from harness.symbols.lsp import LspIndex, Recipe
 
 
 @dataclass

@@ -8,7 +8,7 @@ same reason `Message` knows nothing about OpenAI's wire format.
 basedpyright, and then Go arrived: what differed was a command, two extensions and a
 language id, so `gopls.py` is fifteen lines. Two implementations is the point at which
 sharing is a fact. A backend that does not speak LSP at all -- an in-process library, say --
-satisfies `CodeIndex` directly and ignores this file, which is why the protocol is defined
+satisfies `SymbolIndex` directly and ignores this file, which is why the protocol is defined
 next door and not here.
 
 **The framing is written out rather than imported.** LSP over stdio is a `Content-Length`
@@ -29,8 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from harness.code.base import CodeIndexError, Location, Symbol, servers_bin
-from harness.settings import Code
+from harness.settings import Symbols
+from harness.symbols.base import Location, Symbol, SymbolIndexError, servers_bin
 from harness.types import JSON, as_dict, as_int, as_list, as_str
 
 log = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class LspIndex:
     """
 
     root: Path
-    settings: Code = field(default_factory=Code)
+    settings: Symbols = field(default_factory=Symbols)
 
     name: str = "lsp"
     #: Arguments after the binary. The binary itself comes from the harness's own bin
@@ -155,7 +155,7 @@ class LspIndex:
             except (FileNotFoundError, PermissionError) as exc:
                 # `available=False`: this will not become installed during the run, so the
                 # caller must stop asking rather than spend the budget re-discovering it.
-                raise CodeIndexError(
+                raise SymbolIndexError(
                     f"{self.recipe.binary} is not set up for the harness. "
                     + "Run `harness --install-servers` to provision it, "
                     + "or use grep and read_file instead.",
@@ -186,7 +186,7 @@ class LspIndex:
                 )
             except TimeoutError as exc:
                 await self.aclose()
-                raise CodeIndexError(
+                raise SymbolIndexError(
                     f"{self.name} did not finish starting in "
                     + f"{self.settings.startup_timeout:.0f}s"
                 ) from exc
@@ -251,20 +251,20 @@ class LspIndex:
             return  # a notification, a server request, or a reply nobody is waiting for
         if "error" in message:
             detail = as_str(as_dict(message.get("error")).get("message")) or "error"
-            waiting.set_exception(CodeIndexError(f"{self.name}: {detail}"))
+            waiting.set_exception(SymbolIndexError(f"{self.name}: {detail}"))
         else:
             waiting.set_result(message.get("result"))
 
     def _fail_all(self, reason: str) -> None:
         for waiting in self._pending.values():
             if not waiting.done():
-                waiting.set_exception(CodeIndexError(reason))
+                waiting.set_exception(SymbolIndexError(reason))
         self._pending.clear()
 
     def _send(self, payload: JSON) -> None:
         process = self._process
         if process is None or process.stdin is None:
-            raise CodeIndexError(f"{self.name} is not running")
+            raise SymbolIndexError(f"{self.name} is not running")
         body = json.dumps({"jsonrpc": "2.0", **payload}).encode()
         process.stdin.write(b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
 
@@ -285,7 +285,7 @@ class LspIndex:
                 self._request(method, params), timeout=self.settings.request_timeout
             )
         except TimeoutError as exc:
-            raise CodeIndexError(
+            raise SymbolIndexError(
                 f"{self.name} did not answer {method} in "
                 + f"{self.settings.request_timeout:.0f}s"
             ) from exc
@@ -323,7 +323,7 @@ class LspIndex:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            raise CodeIndexError(f"cannot read {path}: {exc}") from exc
+            raise SymbolIndexError(f"cannot read {path}: {exc}") from exc
         self._notify(
             "textDocument/didOpen",
             {
@@ -402,7 +402,7 @@ class LspIndex:
         # discover it is work nobody needed.
         column = _column_of(path, symbol.location.line, needle)
         if column is None:
-            raise CodeIndexError(
+            raise SymbolIndexError(
                 f"{needle!r} does not appear on {path.name}:{symbol.location.line}, "
                 + f"which reads: {_line_text(path, symbol.location.line).strip()[:80]!r}. "
                 + "Check the line, or call find_definition again if the file has changed."

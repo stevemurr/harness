@@ -30,9 +30,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness.code.base import Indexes, servers_bin
-from harness.code.lsp import LspIndex
-from harness.settings import Code
+from harness.settings import Symbols
+from harness.symbols.base import Indexes, servers_bin
+from harness.symbols.lsp import LspIndex
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +43,9 @@ def known() -> tuple[type[LspIndex], ...]:
     shape as `Toolkit.tools` naming its tools. Imported here rather than at module scope
     so `settings` and `base` stay free of language imports.
     """
-    from harness.code.gopls import Gopls
-    from harness.code.pyright import Pyright
-    from harness.code.sourcekit import SourceKit
+    from harness.symbols.gopls import Gopls
+    from harness.symbols.pyright import Pyright
+    from harness.symbols.sourcekit import SourceKit
 
     return (Pyright, Gopls, SourceKit)
 
@@ -59,7 +59,7 @@ class Outcome:
     ready: bool
 
 
-def for_workspace(root: Path, settings: Code | None = None) -> Indexes:
+def for_workspace(root: Path, settings: Symbols | None = None) -> Indexes:
     """The indexes worth having over one folder.
 
     Only languages the folder actually contains. A repository is almost always polyglot in
@@ -71,7 +71,7 @@ def for_workspace(root: Path, settings: Code | None = None) -> Indexes:
     Constructing an index starts nothing. The process waits for the first query, so a
     registered-but-unused language costs one object.
     """
-    settings = settings or Code()
+    settings = settings or Symbols()
     if not settings.enabled:
         return Indexes()
     present = _extensions_in(root)
@@ -113,13 +113,13 @@ def _extensions_in(root: Path, limit: int = 20_000) -> set[str]:
     return found
 
 
-async def provision(settings: Code | None = None) -> list[Outcome]:
+async def provision(settings: Symbols | None = None) -> list[Outcome]:
     """Set up every known server, and say what happened to each.
 
     Order matters and is the whole design: already provisioned, then adopt from `PATH`, then
     run the recipe, then explain. Each step is cheaper and less surprising than the next.
     """
-    settings = settings or Code()
+    settings = settings or Symbols()
     target = servers_bin()
     target.mkdir(parents=True, exist_ok=True)
     outcomes: list[Outcome] = []

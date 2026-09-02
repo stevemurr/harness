@@ -77,8 +77,9 @@ src/harness/
     spawn.py     a process has descendants, and killing one must kill them
     processes.py the table of what this run started
     monitor.py   reading a child's output as it appears
-  code/
-    base.py      the code-navigation contract: what a symbol is, and where it is used
+  symbols/
+    __init__.py  Symbol, Location, SymbolIndex, Indexes -- the contracts
+    base.py      what a symbol is, where it is defined, and where it is used
     lsp.py       one language server, over LSP on a pipe -- shared by every LSP backend
     pyright.py   Python, via basedpyright
     gopls.py     Go, via gopls
@@ -503,7 +504,7 @@ find_definition(symbol="run")                    -> 71 candidates, with file and
 find_references(symbol="run", path=..., line=...) -> the uses of that ONE definition
 ```
 
-`CodeIndex.references` takes a `Symbol`, never a string, because a bare name does not denote
+`SymbolIndex.references` takes a `Symbol`, never a string, because a bare name does not denote
 one thing. A dotted name (`Workspace.resolve`) narrows step one when the container happens to
 be unique, and it is not a substitute: two modules may each define a `Workspace`. A file and
 a line cannot collide.
@@ -547,7 +548,7 @@ language id, and a `Recipe` saying how to obtain it -- the install instructions 
 the language, because a recipe in a central table is a second place to edit and a second
 place to forget. Everything else is `lsp.py`, which was written for Python and
 then shared once Go proved what actually differed. A backend that does not speak LSP at all
-satisfies `CodeIndex` directly and ignores that file, which is why the protocol lives in
+satisfies `SymbolIndex` directly and ignores that file, which is why the protocol lives in
 `base.py` and not beside the transport.
 
 The conformance suite runs every implementation over one fixture project laid out the same

@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from harness.code.base import CodeIndex, CodeIndexError, Indexes, Location, Symbol
-from harness.code.gopls import Gopls
-from harness.code.pyright import Pyright
-from harness.code.servers import servers_bin
-from harness.settings import Code
+from harness.settings import Symbols
+from harness.symbols.base import Indexes, Location, Symbol, SymbolIndex, SymbolIndexError
+from harness.symbols.gopls import Gopls
+from harness.symbols.pyright import Pyright
+from harness.symbols.servers import servers_bin
 from harness.tools import ToolContext, new_registry
-from harness.tools.code import code_tools
+from harness.tools.symbols import symbol_tools
 from harness.types import ToolCall
 from harness.workspace import Workspace
 
@@ -150,7 +150,7 @@ def index(request: pytest.FixtureRequest, project: Path):
     runs, so the fake must not be easier to satisfy than the protocol -- everything below
     is asserted against all three.
     """
-    slow = Code(warmup=25.0, startup_timeout=60.0)
+    slow = Symbols(warmup=25.0, startup_timeout=60.0)
     if request.param == "fake":
         index = Fake(project)
     elif request.param == "pyright":
@@ -170,7 +170,7 @@ def index(request: pytest.FixtureRequest, project: Path):
 
 async def test_an_implementation_satisfies_the_protocol(index) -> None:
     """Structural, so a backend that never imports the protocol still satisfies it."""
-    assert isinstance(index, CodeIndex)
+    assert isinstance(index, SymbolIndex)
     assert index.name
     assert index.extensions and all(e.startswith(".") for e in index.extensions)
 
@@ -285,7 +285,7 @@ async def test_one_language_failing_does_not_hide_the_others(project: Path) -> N
 
     class Broken(Go):
         async def definitions(self, name, *, near=None):
-            raise CodeIndexError("gopls is not set up", available=False)
+            raise SymbolIndexError("gopls is not set up", available=False)
 
     both = Indexes([Fake(project), Broken(project)])
 
@@ -298,14 +298,14 @@ async def test_a_file_in_a_language_with_no_index_says_which_are_indexed(project
     """The trivial polyglot case: a shell script beside the code."""
     only_python = Indexes([Fake(project)])
 
-    with pytest.raises(CodeIndexError) as caught:
+    with pytest.raises(SymbolIndexError) as caught:
         await only_python.definitions("main", project / "deploy.sh")
 
     assert ".sh" in str(caught.value) and "grep" in str(caught.value)
 
 
 async def test_with_no_index_at_all_the_message_names_the_command(project: Path) -> None:
-    with pytest.raises(CodeIndexError) as caught:
+    with pytest.raises(SymbolIndexError) as caught:
         await Indexes().definitions("Widget")
 
     assert "--install-servers" in str(caught.value)
@@ -317,7 +317,7 @@ async def test_with_no_index_at_all_the_message_names_the_command(project: Path)
 @pytest.fixture
 def kit(project: Path):
     indexes = Indexes([Fake(project)])
-    tools = code_tools(indexes)
+    tools = symbol_tools(indexes)
     return new_registry(tools), ToolContext(paths=Workspace.at(project)), indexes
 
 
@@ -373,9 +373,9 @@ async def test_a_missing_backend_fails_rather_than_refuses(project: Path) -> Non
     """`failed`, not `refused`. The harness did not decline -- it tried and the world said
     no. It matters concretely: the loop's stall counter counts refusals only, so calling
     this a refusal would let a missing binary end a run that is otherwise working."""
-    nowhere = Code(commands={"basedpyright": ("definitely-not-a-language-server",)})
+    nowhere = Symbols(commands={"basedpyright": ("definitely-not-a-language-server",)})
     missing = Pyright(project, nowhere)
-    tools = code_tools(Indexes([missing]))
+    tools = symbol_tools(Indexes([missing]))
     registry = new_registry(tools)
     ctx = ToolContext(paths=Workspace.at(project))
 
@@ -387,7 +387,7 @@ async def test_a_missing_backend_fails_rather_than_refuses(project: Path) -> Non
 
 
 async def test_with_no_index_configured_the_tool_says_so(project: Path) -> None:
-    tools = code_tools(Indexes())
+    tools = symbol_tools(Indexes())
     registry = new_registry(tools)
     ctx = ToolContext(paths=Workspace.at(project))
 
@@ -399,10 +399,10 @@ async def test_with_no_index_configured_the_tool_says_so(project: Path) -> None:
 async def test_the_backend_is_unavailable_rather_than_merely_broken(project: Path) -> None:
     """The distinction `ProviderError.retryable` makes, in the other direction: a binary
     that is not installed will not become installed during this run."""
-    nowhere = Code(commands={"basedpyright": ("definitely-not-a-language-server",)})
+    nowhere = Symbols(commands={"basedpyright": ("definitely-not-a-language-server",)})
     missing = Pyright(project, nowhere)
 
-    with pytest.raises(CodeIndexError) as caught:
+    with pytest.raises(SymbolIndexError) as caught:
         await missing.definitions("Widget")
 
     assert caught.value.available is False
@@ -413,7 +413,7 @@ async def test_the_tools_are_offered_in_plan_mode(project: Path) -> None:
     worth the most, since the whole activity is reading before deciding."""
     from harness.mode import PLAN
 
-    tools = code_tools(Indexes([Fake(project)]))
+    tools = symbol_tools(Indexes([Fake(project)]))
 
     for tool in tools:
         assert PLAN.permits(tool.spec.name, tool.spec.mutates)
@@ -428,7 +428,7 @@ async def test_a_path_outside_the_workspace_is_refused_not_failed(project: Path)
     did not, until a model mistyped an absolute path in an eval run and the result came back
     labelled `failed`. (2026-08-31)
     """
-    registry = new_registry(code_tools(Indexes([Fake(project)])))
+    registry = new_registry(symbol_tools(Indexes([Fake(project)])))
     ctx = ToolContext(paths=Workspace.at(project))
 
     for call in (
@@ -477,9 +477,9 @@ async def test_a_wrong_line_says_what_is_there_rather_than_guessing(project: Pat
 
     Answered without starting a server: a wrong line is decidable from the file, and the
     command here does not exist, so this also proves nothing was launched."""
-    index = Pyright(project, Code(commands={"basedpyright": ("no-such-server",)}))
+    index = Pyright(project, Symbols(commands={"basedpyright": ("no-such-server",)}))
 
-    with pytest.raises(CodeIndexError) as caught:
+    with pytest.raises(SymbolIndexError) as caught:
         await index.references(
             Symbol("Widget", Location(project / "shop.py", 1))
         )
@@ -496,7 +496,7 @@ def test_swift_matches_a_bare_name_against_the_selector_it_heads() -> None:
     SwiftPM package: `balance`, `Ledger.balance` and `record` all returned nothing while
     `balance(for:)` returned the method -- a silence indistinguishable from "no such
     symbol" for the shape a model is most likely to ask about."""
-    from harness.code.sourcekit import SourceKit
+    from harness.symbols.sourcekit import SourceKit
 
     index = SourceKit(Path.cwd())
 
@@ -508,7 +508,7 @@ def test_swift_matches_a_bare_name_against_the_selector_it_heads() -> None:
 
 def test_swift_does_not_match_a_name_that_merely_starts_the_same() -> None:
     """`balanced` is not `balance`, and a prefix rule without the paren would say it is."""
-    from harness.code.sourcekit import SourceKit
+    from harness.symbols.sourcekit import SourceKit
 
     index = SourceKit(Path.cwd())
 
@@ -521,8 +521,8 @@ def test_swift_looks_for_what_is_actually_written_at_the_definition() -> None:
     """`func balance(for name: String)` contains `balance` and never contains
     `balance(for:)`. Without this the method would be found and then refuse to have its
     references traced, because the column search would not find its own symbol."""
-    from harness.code.base import Location, Symbol
-    from harness.code.sourcekit import SourceKit
+    from harness.symbols.base import Location, Symbol
+    from harness.symbols.sourcekit import SourceKit
 
     index = SourceKit(Path.cwd())
     method = Symbol(
@@ -539,7 +539,7 @@ def test_swift_looks_for_what_is_actually_written_at_the_definition() -> None:
 def test_every_other_backend_still_matches_exactly() -> None:
     """The hooks must be inert where they were not needed: Python and Go name a symbol by
     the identifier itself, and a loose match there would answer about the wrong thing."""
-    from harness.code.pyright import Pyright
+    from harness.symbols.pyright import Pyright
 
     index = Pyright(Path.cwd())
 
@@ -548,7 +548,7 @@ def test_every_other_backend_still_matches_exactly() -> None:
 
 
 def test_swift_is_offered_only_where_there_is_swift(tmp_path: Path) -> None:
-    from harness.code.servers import for_workspace
+    from harness.symbols.servers import for_workspace
 
     (tmp_path / "main.swift").write_text("print(1)")
     swift = {index.name for index in for_workspace(tmp_path).available}

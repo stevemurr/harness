@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from harness.code.base import CodeIndexError, Indexes, Location, Symbol
+from harness.symbols.base import Indexes, Location, Symbol, SymbolIndexError
 from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
 from harness.types import ToolResult, ToolSpec
 from harness.workspace import PathEscape, PathRefused, WorkspaceError
@@ -72,7 +72,7 @@ class FindDefinition:
                 + "remains the right tool for literal text, non-code files and regular "
                 + "expressions."
             ),
-            # Reading, so never asked about -- and see `code/base.py`: withholding this in
+            # Reading, so never asked about -- and see `symbols/base.py`: withholding this in
             # plan mode would take code search away from the mode that needs it most.
             mutates=False,
         )
@@ -88,7 +88,7 @@ class FindDefinition:
 
         try:
             found = await self.indexes.definitions(args.symbol, near)
-        except CodeIndexError as exc:
+        except SymbolIndexError as exc:
             return _broken(exc)
 
         if not found:
@@ -176,7 +176,7 @@ class FindReferences:
         symbol = Symbol(name=bare, location=Location(path, args.line))
         try:
             places = await self.indexes.references(symbol)
-        except CodeIndexError as exc:
+        except SymbolIndexError as exc:
             return _broken(exc)
 
         if not places:
@@ -195,7 +195,7 @@ class FindReferences:
         return ToolResult("\n".join(lines))
 
 
-def _broken(exc: CodeIndexError) -> ToolResult:
+def _broken(exc: SymbolIndexError) -> ToolResult:
     """A backend that could not answer.
 
     `failed`, not `refused`. The harness did not decline -- it tried, and the world said no,
@@ -207,7 +207,7 @@ def _broken(exc: CodeIndexError) -> ToolResult:
     return ToolResult(str(exc), ok=False)
 
 
-def code_tools(indexes: Indexes) -> list[Handler]:
+def symbol_tools(indexes: Indexes) -> list[Handler]:
     """The code tools, over the indexes the caller holds.
 
     Passed in rather than reached for, the same shape as `plan_tools`: the indexes are held

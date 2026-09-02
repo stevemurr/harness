@@ -72,7 +72,7 @@ class Symbol:
         return f"{self.container}.{self.name}" if self.container else self.name
 
 
-class CodeIndexError(Exception):
+class SymbolIndexError(Exception):
     """The index could not answer.
 
     `available` is the distinction worth getting right in both directions, the way
@@ -98,7 +98,7 @@ def servers_bin() -> Path:
 
 
 @runtime_checkable
-class CodeIndex(Protocol):
+class SymbolIndex(Protocol):
     """One language, over one folder, already rooted.
 
     Rooted at construction rather than per call: an index is a thing that has read a
@@ -158,9 +158,9 @@ class Indexes:
     do, is the wrong answer to a question that has a right one.
     """
 
-    available: list[CodeIndex] = field(default_factory=list)
+    available: list[SymbolIndex] = field(default_factory=list)
 
-    def by_extension(self, extension: str) -> CodeIndex | None:
+    def by_extension(self, extension: str) -> SymbolIndex | None:
         return next(
             (i for i in self.available if extension.lower() in i.extensions), None
         )
@@ -181,14 +181,14 @@ class Indexes:
         """
         chosen = self._asked(near)
         if not chosen:
-            raise CodeIndexError(self._nothing_for(near), available=False)
+            raise SymbolIndexError(self._nothing_for(near), available=False)
 
         found: list[Symbol] = []
-        failures: list[CodeIndexError] = []
+        failures: list[SymbolIndexError] = []
         for index in chosen:
             try:
                 found.extend(await index.definitions(name, near=near))
-            except CodeIndexError as exc:
+            except SymbolIndexError as exc:
                 failures.append(exc)
         if failures and not found and len(failures) == len(chosen):
             raise failures[0]
@@ -198,12 +198,12 @@ class Indexes:
         """Uses of one symbol. Never ambiguous: a symbol always carries its file."""
         index = self.by_extension(symbol.location.path.suffix)
         if index is None:
-            raise CodeIndexError(
+            raise SymbolIndexError(
                 self._nothing_for(symbol.location.path), available=False
             )
         return await index.references(symbol)
 
-    def _asked(self, near: Path | None) -> list[CodeIndex]:
+    def _asked(self, near: Path | None) -> list[SymbolIndex]:
         if near is not None:
             index = self.by_extension(near.suffix)
             return [index] if index is not None else []

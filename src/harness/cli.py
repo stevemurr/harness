@@ -446,8 +446,8 @@ async def _install_servers() -> int:
     download inside a tool call would blow the request timeout and fail where a model can
     only report it as a broken tool.
     """
-    from harness.code.base import servers_bin
-    from harness.code.servers import provision
+    from harness.symbols.base import servers_bin
+    from harness.symbols.servers import provision
 
     print(dim(f"language servers in {servers_bin()}"))
     outcomes = await provision()

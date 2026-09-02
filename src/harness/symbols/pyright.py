@@ -5,14 +5,14 @@ v0.204.0, and the closest open thing to Pylance feature-for-feature. What most P
 developers actually run is Pylance, which is licence-restricted to official VS Code builds
 and so is unavailable to anything else. `pylsp` has faded from current recommendations.
 Astral's `ty` is faster and built for this from the ground up, and is still beta; when it
-reaches 1.0 it is one line of `[code.commands]` away, with no code change at all.
+reaches 1.0 it is one line of `[symbols.commands]` away, with no code change at all.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from harness.code.lsp import LspIndex, Recipe
+from harness.symbols.lsp import LspIndex, Recipe
 
 
 @dataclass
