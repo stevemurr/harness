@@ -6,11 +6,16 @@ service's tests currently fail because of it. Run a service's tests with
 Fix all five so that every service's tests pass. Change only the `validate.py` files; the
 tests are the specification and must not be edited.
 
-Then write `REPORT.md` at the top level: one line per service, in the form
-`- <name>: <the one-line cause of its bug>`, so a reviewer can see what was wrong without
-reading the diffs.
+Then write `REPORT.md` at the top level of this folder -- not inside `services/` -- with one
+line per service, in the form `- <name>: <the one-line cause of its bug>`, so a reviewer
+can see what was wrong without reading the diffs.
 
-The five services are independent of each other, and you are not the only agent available:
-`delegate` hands a self-contained task to another agent working in this same folder, which
-reports back to you when it is done. Before you answer, run all five services' tests and
-check that `REPORT.md` names every service.
+The five services are independent of each other. If `delegate` is among your tools, do not
+fix them yourself: before reading any service, call `delegate` five times with
+`wait=false`, one call per service, each telling that agent which service is its own, how
+to run its tests, and to report the one-line cause of the bug when it is done. Their
+reports reach you between your turns. Wait for all five, then write `REPORT.md` from what
+they told you. If `delegate` is not among your tools, fix the services yourself.
+
+Before you answer, run all five services' tests and check that `REPORT.md` is at the top
+level and names every service.
