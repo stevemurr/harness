@@ -15,12 +15,23 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import cast
 
 import httpx
 
 from harness.providers.base import Completion, ProviderError
-from harness.types import Message, Role, ToolCall, ToolSpec, Transcript, parse_arguments
+from harness.types import (
+    JSON,
+    Message,
+    Role,
+    ToolCall,
+    ToolSpec,
+    Transcript,
+    as_dict,
+    as_list,
+    as_str,
+    parse_arguments,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +78,7 @@ class OpenAICompatible:
     #: Merged under the fields this class sets, so it can add dialect but cannot quietly
     #: rewrite `messages`, `tools` or `model` and leave the harness describing a request it
     #: did not send.
-    extra_body: dict[str, Any] = field(default_factory=dict)
+    extra_body: JSON = field(default_factory=dict)
     _client: httpx.AsyncClient | None = field(default=None, repr=False)
 
     @property
@@ -92,7 +103,7 @@ class OpenAICompatible:
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
     ) -> Completion:
-        body: dict[str, Any] = {
+        body: JSON = {
             **self.extra_body,
             "model": self.model,
             "messages": [encode_message(m) for m in transcript.messages],
@@ -115,12 +126,12 @@ class OpenAICompatible:
                 last = exc
                 if not exc.retryable or attempt == self.max_retries - 1:
                     raise
-                delay = 2**attempt
+                delay = float(1 << attempt)
                 log.warning("provider retry %d after %s (%.0fs)", attempt + 1, exc, delay)
                 await asyncio.sleep(delay)
         raise last or ProviderError("no attempt was made")
 
-    async def _once(self, body: dict[str, Any]) -> Completion:
+    async def _once(self, body: JSON) -> Completion:
         try:
             response = await self._http().post("/chat/completions", json=body)
         except httpx.TimeoutException as exc:
@@ -136,27 +147,26 @@ class OpenAICompatible:
             )
 
         try:
-            payload = response.json()
+            payload = as_dict(cast("object", response.json()))
         except json.JSONDecodeError as exc:
             raise ProviderError(f"response was not JSON: {response.text[:200]}") from exc
 
-        choices = payload.get("choices") or []
+        choices = as_list(payload.get("choices"))
         if not choices:
             raise ProviderError(f"response carried no choices: {json.dumps(payload)[:300]}")
 
         # The endpoint has already counted the tokens this request cost. Nothing else here
         # can count them as well -- a tokeniser would be this model's only by coincidence --
         # so the field is the measurement, and it is free.
-        usage = payload.get("usage") or {}
-        prompt_tokens = usage.get("prompt_tokens")
+        prompt_tokens = as_dict(payload.get("usage")).get("prompt_tokens")
         return Completion(
-            decode_message(choices[0].get("message") or {}),
+            decode_message(as_dict(as_dict(choices[0]).get("message"))),
             prompt_tokens if isinstance(prompt_tokens, int) else None,
             _body_size(body),
         )
 
 
-def _body_size(body: dict[str, Any]) -> int:
+def _body_size(body: JSON) -> int:
     """Characters actually serialised, tool schemas included.
 
     Counted here because this is the only place that knows the request's shape, and the
@@ -171,7 +181,7 @@ def _body_size(body: dict[str, Any]) -> int:
 # --- wire encoding ----------------------------------------------------------------------
 
 
-def encode_tool(spec: ToolSpec) -> dict[str, Any]:
+def encode_tool(spec: ToolSpec) -> JSON:
     return {
         "type": "function",
         "function": {
@@ -182,7 +192,7 @@ def encode_tool(spec: ToolSpec) -> dict[str, Any]:
     }
 
 
-def encode_message(message: Message) -> dict[str, Any]:
+def encode_message(message: Message) -> JSON:
     if message.role is Role.TOOL:
         return {
             "role": "tool",
@@ -193,7 +203,7 @@ def encode_message(message: Message) -> dict[str, Any]:
     # framing `inbox.render` put in the text is what tells the model who it is really from,
     # because `system | user | assistant | tool` has nowhere else to put that.
     role = "user" if message.role is Role.ARRIVAL else message.role.value
-    body: dict[str, Any] = {"role": role, "content": message.content}
+    body: JSON = {"role": role, "content": message.content}
     if message.tool_calls:
         body["tool_calls"] = [
             {
@@ -211,16 +221,17 @@ def encode_message(message: Message) -> dict[str, Any]:
     return body
 
 
-def decode_message(raw: dict[str, Any]) -> Message:
+def decode_message(raw: JSON) -> Message:
     """One provider message, as ours.
 
     `content` is `None` rather than `""` whenever a model returns only tool calls, which is
-    the common case for a working agent -- so the `or ""` is load-bearing.
+    the common case for a working agent -- so reading it as empty is load-bearing.
     """
     calls: list[ToolCall] = []
-    for entry in raw.get("tool_calls") or []:
-        function = entry.get("function") or {}
-        name = function.get("name") or ""
+    for item in as_list(raw.get("tool_calls")):
+        entry = as_dict(item)
+        function = as_dict(entry.get("function"))
+        name = as_str(function.get("name"))
         if not name:
             # Unanswerable and undispatchable: it would leave a call the transcript can
             # never close, which the loop then refuses to send.
@@ -228,40 +239,47 @@ def decode_message(raw: dict[str, Any]) -> Message:
             continue
         calls.append(
             ToolCall(
-                call_id=entry.get("id") or f"call_{len(calls)}",
+                call_id=as_str(entry.get("id")) or f"call_{len(calls)}",
                 name=name,
-                arguments=parse_arguments(function.get("arguments") or ""),
+                arguments=parse_arguments(as_str(function.get("arguments"))),
             )
         )
-    return Message(Role.ASSISTANT, raw.get("content") or "", tuple(calls))
+    return Message(Role.ASSISTANT, as_str(raw.get("content")), tuple(calls))
 
 
-def merge_tool_call_deltas(deltas: list[dict[str, Any]]) -> list[ToolCall]:
+@dataclass
+class _Building:
+    """One streamed tool call, as far as it has arrived."""
+
+    id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
+def merge_tool_call_deltas(deltas: list[JSON]) -> list[ToolCall]:
     """Reassemble streamed tool calls.
 
     Keyed by `index`, the only field every delta carries. `id` and `name` arrive once on a
     call's first delta; `arguments` arrives as string shards that must be concatenated in
     order. Keying by `id` loses every shard after the first, because they do not repeat it.
     """
-    building: dict[int, dict[str, Any]] = {}
+    building: dict[int, _Building] = {}
     for delta in deltas:
-        for entry in delta.get("tool_calls") or []:
+        for item in as_list(delta.get("tool_calls")):
+            entry = as_dict(item)
             index = entry.get("index", 0)
-            slot = building.setdefault(index, {"id": "", "name": "", "arguments": ""})
-            if entry.get("id"):
-                slot["id"] = entry["id"]
-            function = entry.get("function") or {}
-            if function.get("name"):
-                slot["name"] = function["name"]
-            if function.get("arguments"):
-                slot["arguments"] += function["arguments"]
+            slot = building.setdefault(index if isinstance(index, int) else 0, _Building())
+            slot.id = as_str(entry.get("id")) or slot.id
+            function = as_dict(entry.get("function"))
+            slot.name = as_str(function.get("name")) or slot.name
+            slot.arguments += as_str(function.get("arguments"))
 
     return [
         ToolCall(
-            call_id=slot["id"] or f"call_{index}",
-            name=slot["name"],
-            arguments=parse_arguments(slot["arguments"]),
+            call_id=slot.id or f"call_{index}",
+            name=slot.name,
+            arguments=parse_arguments(slot.arguments),
         )
         for index, slot in sorted(building.items())
-        if slot["name"]
+        if slot.name
     ]

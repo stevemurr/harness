@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
 
 
 class Role(StrEnum):
@@ -246,7 +246,27 @@ class StopReason:
         return self.kind == "done"
 
 
-def parse_arguments(raw: str) -> dict[str, object]:
+#: JSON as it arrives: an object keyed by strings, values unknown until looked at. `object`
+#: rather than `Any`, so a reader has to say what it expects before it can use a value.
+JSON = dict[str, object]
+
+
+def as_dict(value: object) -> JSON:
+    """The value as a JSON object, or empty. A wire field that is missing, null or the
+    wrong shape reads the same as one that is absent, which is the only honest reading a
+    caller can act on."""
+    return cast("JSON", value) if isinstance(value, dict) else {}
+
+
+def as_list(value: object) -> list[object]:
+    return cast("list[object]", value) if isinstance(value, list) else []
+
+
+def as_str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def parse_arguments(raw: str) -> JSON:
     """Provider tool arguments, which arrive as a JSON string and are not always valid.
 
     Here rather than in the loop because it is about the wire shape of a call, and the
@@ -258,7 +278,7 @@ def parse_arguments(raw: str) -> dict[str, object]:
     if not raw.strip():
         return {}
     try:
-        parsed = json.loads(raw)
+        parsed = cast("object", json.loads(raw))
     except json.JSONDecodeError:
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return as_dict(parsed)

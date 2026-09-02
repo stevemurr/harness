@@ -20,11 +20,11 @@ import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import blake2s
-from typing import Any
 from uuid import uuid4
 
 from harness.agent.approval import Decision, Policy, Request
 from harness.server.events import EventLog, Visibility
+from harness.types import JSON
 
 #: The decision names a client may send, and what each one means here. `approve_bash_always`
 #: is the terminal client's own vocabulary for a persistent grant -- it binds it to its own
@@ -86,7 +86,7 @@ class CommandRefused(Exception):
     """
 
 
-def progress_id(turn: int, name: str, arguments: dict[str, Any]) -> str:
+def progress_id(turn: int, name: str, arguments: JSON) -> str:
     """The `update_id` of the activity row for one tool call.
 
     A tool is handed its arguments and a context, never the provider's `call_id`, so the
@@ -139,7 +139,7 @@ class Run:
     #: Command ids already acted on, and what was answered. A client retries a POST whose
     #: connection failed before the response arrived, so acting twice is the default
     #: failure unless the identity it sends is remembered.
-    _commands: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _commands: dict[str, JSON] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._running.set()
@@ -149,11 +149,11 @@ class Run:
     def publish(
         self,
         type: str,
-        payload: dict[str, Any] | None = None,
+        payload: JSON | None = None,
         *,
         visibility: Visibility = Visibility.USER,
     ) -> None:
-        self.events.publish(type, payload, visibility=visibility)
+        _ = self.events.publish(type, payload, visibility=visibility)
 
     def progress(self, update_id: str, text: str, status: str) -> None:
         self.publish(
@@ -183,10 +183,10 @@ class Run:
 
     # -- what a client can do to a run in flight -----------------------------------------
 
-    def remembered(self, command_id: str) -> dict[str, Any] | None:
+    def remembered(self, command_id: str) -> JSON | None:
         return self._commands.get(command_id)
 
-    def remember(self, command_id: str, response: dict[str, Any]) -> None:
+    def remember(self, command_id: str, response: JSON) -> None:
         self._commands[command_id] = response
 
     async def gate(self) -> None:
@@ -197,7 +197,7 @@ class Run:
         finishes, and a tool already running runs to completion. An approval already on
         screen is answered first, because the runner asks before it dispatches.
         """
-        await self._running.wait()
+        _ = await self._running.wait()
 
     def pause(self) -> None:
         if not self._running.is_set():
@@ -217,7 +217,7 @@ class Run:
 
     def cancel(self) -> None:
         if self.task is not None:
-            self.task.cancel()
+            _ = self.task.cancel()
         self._running.set()
 
     def resolve_approval(self, approval_id: str, decision: Decision) -> bool:
@@ -261,7 +261,7 @@ class Run:
         try:
             answer = await waiting
         finally:
-            self._questions.pop(question_id, None)
+            _ = self._questions.pop(question_id, None)
 
         # Same conditional restore as an approval: a pause that arrived while the question
         # was on screen must not be thrown away here.
@@ -283,7 +283,7 @@ class Run:
 
         title, detail = _split_summary(request.summary)
         shell = request.tool == "run"
-        arguments: dict[str, Any] = dict(request.arguments)
+        arguments: JSON = dict(request.arguments)
         if shell:
             # The command line as it will actually be run. `shlex.split` then rejoin looks
             # tidier and lies: `a && b` comes back as `a '&&' b`, which is a different
@@ -306,7 +306,7 @@ class Run:
         try:
             decision = await waiting
         finally:
-            self._pending.pop(approval_id, None)
+            _ = self._pending.pop(approval_id, None)
 
         # Not an unconditional restore: a pause that arrived while the modal was on screen
         # would otherwise be thrown away here, and a client polling `GET /runs` would be

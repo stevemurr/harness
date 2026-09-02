@@ -17,7 +17,8 @@ import asyncio
 from dataclasses import dataclass, field
 from hashlib import blake2s
 from pathlib import Path
-from typing import Any
+
+from harness.types import JSON
 
 
 class WorkspaceTaken(Exception):
@@ -36,7 +37,7 @@ class WorkspaceRecord:
     vcs: str
     repo_identity: str = ""
 
-    def wire(self) -> dict[str, Any]:
+    def wire(self) -> JSON:
         return {
             "workspace_id": self.workspace_id,
             "name": self.name,

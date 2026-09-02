@@ -50,6 +50,20 @@ class StoreError(Exception):
 
 
 @runtime_checkable
+class OnDisk(Protocol):
+    """A store whose transcripts are files something else can read while they are written.
+
+    Separate from `Store` because it is a separate promise: `MemoryStore` keeps every
+    other one and cannot keep this. The server's watch page tails the file -- so an eval
+    in another process is watchable -- and asks `isinstance` rather than assuming.
+    """
+
+    def path_for(self, thread_id: str) -> Path:
+        """The transcript file. Raises `StoreError` for an id that is not one."""
+        ...
+
+
+@runtime_checkable
 class Store(Protocol):
     """Durable transcripts."""
 

@@ -19,11 +19,11 @@ import json
 import logging
 import os
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import cast
 from uuid import uuid4
 
 from starlette.applications import Starlette
@@ -31,6 +31,7 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from harness.config import (
     DEFAULT_BASE_URL,
@@ -43,9 +44,9 @@ from harness.config import (
 )
 from harness.config import Provider as ProviderSettings
 from harness.config import Server as ServerSettings
-from harness.inbox import Envelope, Source
+from harness.inbox import Envelope
 from harness.providers.base import Provider
-from harness.server.conversations import Runtime
+from harness.server.conversations import Conversation, Runtime
 from harness.server.runs import DECISIONS, CommandRefused, Run
 from harness.server.stream import HEARTBEAT, event_stream
 from harness.server.workspaces import (
@@ -55,7 +56,8 @@ from harness.server.workspaces import (
     workspace_id_for,
 )
 from harness.settings import Settings
-from harness.store.base import Store, StoreError
+from harness.store.base import OnDisk, Store, StoreError
+from harness.types import JSON, Source
 from harness.workspace import WorkspaceError
 
 log = logging.getLogger(__name__)
@@ -83,9 +85,9 @@ class ApiError(Exception):
 
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
-        self.status = status
-        self.code = code
-        self.message = message
+        self.status: int = status
+        self.code: str = code
+        self.message: str = message
 
 
 def error_response(status: int, code: str, message: str) -> JSONResponse:
@@ -124,7 +126,7 @@ def create_app(
     # Run identities already accepted, by the key the client sent. A client retries a POST
     # whose connection failed before the response arrived, so without this the same message
     # starts two runs.
-    accepted: dict[str, dict[str, Any]] = {}
+    accepted: dict[str, JSON] = {}
     # Titles read out of the store when a thread was opened from it. A cache of a fact the
     # transcript owns, never a second copy of it.
     titles: dict[str, str] = {}
@@ -190,7 +192,7 @@ def create_app(
         if not root.is_dir():
             raise ApiError(400, "no_such_folder", f"{root} is not a directory.")
 
-        entries = []
+        entries: list[JSON] = []
         try:
             for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
                 if child.name.startswith("."):
@@ -258,10 +260,10 @@ def create_app(
         # The title is not stored. `JsonlStore` already derives one from the first user
         # message, which is exactly what the client sends as a title, and a second copy is a
         # second thing that can disagree with the transcript about what was asked.
-        open_conversation(thread_id, record)
+        _ = open_conversation(thread_id, record)
         return JSONResponse({"thread_id": thread_id}, status_code=201)
 
-    def open_conversation(thread_id: str, record: WorkspaceRecord):
+    def open_conversation(thread_id: str, record: WorkspaceRecord) -> Conversation:
         """Every conversation is opened here, so a folder that has gone is one answer.
 
         `Workspace.at` refuses a root that is not a directory, and a registration outlives
@@ -279,7 +281,7 @@ def create_app(
     async def list_threads(request: Request) -> Response:
         wanted = request.query_params.get("workspace_id") or ""
         limit = read_int(request, "limit", 50) or 50
-        rows: list[dict[str, Any]] = []
+        rows: list[JSON] = []
 
         bound = {c.thread_id for c in runtime.conversations.values()}
         # Newest first, which is the order a picker wants and the order the store already
@@ -319,15 +321,17 @@ def create_app(
         is not in `runtime.runs` either, so the only evidence that survives a process
         boundary is the transcript's own mtime.
         """
+        if not isinstance(store, OnDisk):
+            return ""
         try:
             when = store.path_for(thread_id).stat().st_mtime
-        except (StoreError, OSError, AttributeError):
+        except (StoreError, OSError):
             return ""
         return datetime.fromtimestamp(when, tz=UTC).isoformat()
 
     def thread_row(
         thread_id: str, title: str, updated_at: str = "", root: Path | None = None
-    ) -> dict[str, Any]:
+    ) -> JSON:
         runs = runtime.for_thread(thread_id)
         updated_at = updated_at or last_written(thread_id)
         return {
@@ -343,14 +347,14 @@ def create_app(
             "root_path": str(root) if root else "",
         }
 
-    def conversation_title(conversation: Any) -> str:
+    def conversation_title(conversation: Conversation) -> str:
         first = next((r.message for r in conversation.runs), "")
         if first.strip():
             return first.strip().splitlines()[0][:80]
         return titles.get(conversation.thread_id, "")
 
     async def get_thread(request: Request) -> Response:
-        conversation = await open_thread(request.path_params["thread_id"])
+        conversation = await open_thread(cast("str", request.path_params["thread_id"]))
         return JSONResponse(
             {
                 "thread_id": conversation.thread_id,
@@ -359,7 +363,7 @@ def create_app(
             }
         )
 
-    async def open_thread(thread_id: str, workspace_id: str = ""):
+    async def open_thread(thread_id: str, workspace_id: str = "") -> Conversation:
         """The conversation for a thread id, opening it from the store when it has one.
 
         Three cases, and none of them is an error: this process is already holding it; it is
@@ -405,7 +409,8 @@ def create_app(
             return JSONResponse(remembered, status_code=202)
 
         workspace_id = str(body.get("workspace_id") or "")
-        conversation = await open_thread(request.path_params["thread_id"], workspace_id)
+        thread_id = cast("str", request.path_params["thread_id"])
+        conversation = await open_thread(thread_id, workspace_id)
         if workspace_id and workspace_id != conversation.workspace_id:
             raise ApiError(
                 409,
@@ -424,7 +429,7 @@ def create_app(
             raise ApiError(
                 400, "invalid_request", "message must be an object with a content field."
             )
-        message = str((offered or {}).get("content") or "").strip()
+        message = str(cast("JSON", offered or {}).get("content") or "").strip()
         if not message:
             raise ApiError(400, "invalid_request", "message.content is required.")
 
@@ -438,7 +443,7 @@ def create_app(
         except CommandRefused as exc:
             raise ApiError(409, "run_in_flight", str(exc)) from exc
 
-        answer = {"run_id": run.run_id, "thread_id": conversation.thread_id}
+        answer: JSON = {"run_id": run.run_id, "thread_id": conversation.thread_id}
         if key:
             accepted[key] = answer
         return JSONResponse(answer, status_code=202)
@@ -452,7 +457,7 @@ def create_app(
         )
 
     def require_run(request: Request) -> Run:
-        run = runtime.runs.get(request.path_params["run_id"])
+        run = runtime.runs.get(cast("str", request.path_params["run_id"]))
         if run is None:
             raise ApiError(404, "no_such_run", f"no run {request.path_params['run_id']}.")
         return run
@@ -485,7 +490,7 @@ def create_app(
             run.remember(command_id, answer)
         return JSONResponse(answer)
 
-    def apply_command(run: Run, kind: str, body: dict[str, Any]) -> dict[str, Any]:
+    def apply_command(run: Run, kind: str, body: JSON) -> JSON:
         if run.status.value in {"completed", "failed", "cancelled"} and kind != "cancel":
             raise ApiError(409, "run_finished", f"That run already {run.status.value}.")
 
@@ -506,7 +511,7 @@ def create_app(
             return steer(run, body)
         raise ApiError(400, "unknown_command", f"unknown command type: {kind!r}")
 
-    def resolve(run: Run, body: dict[str, Any]) -> dict[str, Any]:
+    def resolve(run: Run, body: JSON) -> JSON:
         approval_id = str(body.get("approval_id") or "")
         decision = DECISIONS.get(str(body.get("decision") or ""))
         if decision is None:
@@ -525,7 +530,7 @@ def create_app(
             )
         return {"status": decision.value}
 
-    def steer(run: Run, body: dict[str, Any]) -> dict[str, Any]:
+    def steer(run: Run, body: JSON) -> JSON:
         """Add to a run already going.
 
         This used to be a 409 whose message explained that `AgentLoop.run` owned the
@@ -549,7 +554,7 @@ def create_app(
         run.publish("run.steered", {"content": content})
         return {"status": "queued"}
 
-    def answer(run: Run, body: dict[str, Any]) -> dict[str, Any]:
+    def answer(run: Run, body: JSON) -> JSON:
         question_id = str(body.get("question_id") or "")
         content = str(body.get("content") or "")
         if not run.resolve_question(question_id, content):
@@ -562,6 +567,69 @@ def create_app(
         # An empty answer is accepted rather than refused: "I am not answering" is a real
         # reply, and `ask_user` reports it to the model as one instead of asking again.
         return {"status": "answered"}
+
+    async def watch_events(request: Request) -> Response:
+        """A thread's transcript as it is written, as SSE.
+
+        Tailing the stored transcript rather than subscribing to a run's event log, and the
+        reason is which runs are watchable. The event log lives in memory and only exists for
+        work this process started; the transcript is on disk and is written by anything holding
+        a `Store` -- including an eval running in another process entirely, which is what this
+        was built for. It costs the per-call liveness the event log has: a row appears when its
+        turn is recorded, not when the call begins.
+        """
+        thread_id = cast("str", request.path_params["thread_id"])
+        if not isinstance(store, OnDisk):
+            raise ApiError(404, "no_such_thread", "this store keeps no files to watch.")
+        try:
+            path = store.path_for(thread_id)
+        except StoreError as exc:
+            raise ApiError(404, "no_such_thread", str(exc)) from exc
+
+        window = provider.context_window
+        threshold = runtime.settings.compaction.at
+
+        # Where a reconnecting browser left off. `EventSource` re-sends the last `id:` it saw as
+        # `Last-Event-ID` without being asked, so honouring it costs one header read and stops a
+        # dropped connection from replaying the whole transcript into a page that already
+        # has it.
+        # Backgrounding a tab on a phone drops the stream, so this is the ordinary case there,
+        # not an exotic one.
+        resume = request.headers.get("last-event-id", "")
+        start = int(resume) if resume.isdigit() else 0
+
+        async def rows() -> AsyncIterator[str]:
+            # Ahead of the transcript, so the page can size its context meter against the window
+            # this deployment actually has instead of a number compiled into the page. A page
+            # served by a process started before this row existed simply never sees it and keeps
+            # its own default, which is why the client treats it as optional.
+            yield "data: " + json.dumps(
+                {"kind": "harness", "context_window": window, "compact_at": threshold}
+            ) + "\n\n"
+            seen, idle = start, 0.0
+            while True:
+                if path.exists():
+                    lines = complete_lines(path.read_text(encoding="utf-8"))
+                    # The id is how many lines the client has then consumed, so a reconnect
+                    # resumes on the next one.
+                    for offset, line in enumerate(lines[seen:], start=seen + 1):
+                        if line.strip():
+                            yield f"id: {offset}\ndata: {line}\n\n"
+                    if len(lines) > seen:
+                        seen, idle = len(lines), 0.0
+                await asyncio.sleep(0.5)
+                idle += 0.5
+                # A comment keeps an idle connection alive; `stream.py` explains why silence
+                # kills one.
+                if idle >= 10:
+                    idle = 0.0
+                    yield ": still here\n\n"
+
+        return StreamingResponse(
+            rows(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # -- wiring ----------------------------------------------------------------------------
 
@@ -588,7 +656,7 @@ def create_app(
     ]
 
     @asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
         """Where a shutdown signal arrives, and the only place it needs to.
 
         `uvicorn` turns SIGINT and SIGTERM into the ASGI lifespan shutdown, so this is the
@@ -617,7 +685,7 @@ def create_app(
     return app
 
 
-async def watch_page(request: Request) -> Response:
+async def watch_page(_request: Request) -> Response:
     """The page. One file, no build step, no dependency.
 
     Keyed by thread rather than by run, because a thread is the thing a person has a name
@@ -642,7 +710,7 @@ def complete_lines(text: str) -> list[str]:
     """
     lines = text.splitlines()
     if lines and not text.endswith("\n"):
-        lines.pop()
+        _ = lines.pop()
     return lines
 
 
@@ -679,69 +747,6 @@ async def console_page(_request: Request) -> Response:
     return Response(page("console.html"), media_type="text/html; charset=utf-8")
 
 
-async def watch_events(request: Request) -> Response:
-    """A thread's transcript as it is written, as SSE.
-
-    Tailing the stored transcript rather than subscribing to a run's event log, and the
-    reason is which runs are watchable. The event log lives in memory and only exists for
-    work this process started; the transcript is on disk and is written by anything holding
-    a `Store` -- including an eval running in another process entirely, which is what this
-    was built for. It costs the per-call liveness the event log has: a row appears when its
-    turn is recorded, not when the call begins.
-    """
-    thread_id = request.path_params["thread_id"]
-    runtime = request.app.state.runtime
-    store = runtime.store
-    try:
-        path = store.path_for(thread_id)
-    except (StoreError, AttributeError) as exc:
-        raise ApiError(404, "no_such_thread", str(exc)) from exc
-
-    window = getattr(runtime.provider, "context_window", 0)
-    threshold = runtime.settings.compaction.at
-
-    # Where a reconnecting browser left off. `EventSource` re-sends the last `id:` it saw as
-    # `Last-Event-ID` without being asked, so honouring it costs one header read and stops a
-    # dropped connection from replaying the whole transcript into a page that already has it.
-    # Backgrounding a tab on a phone drops the stream, so this is the ordinary case there,
-    # not an exotic one.
-    resume = request.headers.get("last-event-id", "")
-    start = int(resume) if resume.isdigit() else 0
-
-    async def rows() -> AsyncIterator[str]:
-        # Ahead of the transcript, so the page can size its context meter against the window
-        # this deployment actually has instead of a number compiled into the page. A page
-        # served by a process started before this row existed simply never sees it and keeps
-        # its own default, which is why the client treats it as optional.
-        yield "data: " + json.dumps(
-            {"kind": "harness", "context_window": window, "compact_at": threshold}
-        ) + "\n\n"
-        seen, idle = start, 0.0
-        while True:
-            if path.exists():
-                lines = complete_lines(path.read_text(encoding="utf-8"))
-                # The id is how many lines the client has then consumed, so a reconnect
-                # resumes on the next one.
-                for offset, line in enumerate(lines[seen:], start=seen + 1):
-                    if line.strip():
-                        yield f"id: {offset}\ndata: {line}\n\n"
-                if len(lines) > seen:
-                    seen, idle = len(lines), 0.0
-            await asyncio.sleep(0.5)
-            idle += 0.5
-            # A comment keeps an idle connection alive; `stream.py` explains why silence
-            # kills one.
-            if idle >= 10:
-                idle = 0.0
-                yield ": still here\n\n"
-
-    return StreamingResponse(
-        rows(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 async def named_failure(_request: Request, exc: Exception) -> Response:
     failure = exc if isinstance(exc, ApiError) else ApiError(500, "error", str(exc))
     return error_response(failure.status, failure.code, failure.message)
@@ -759,16 +764,17 @@ class BearerToken:
     streaming response through a queue and the event stream must not be buffered.
     """
 
-    def __init__(self, app: Any, token: str) -> None:
-        self.app = app
-        self.expected = f"Bearer {token}"
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app: ASGIApp = app
+        self.expected: str = f"Bearer {token}"
 
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         offered = ""
-        for name, value in scope.get("headers", ()):
+        headers = cast("list[tuple[bytes, bytes]]", scope.get("headers", []))
+        for name, value in headers:
             if name.lower() == b"authorization":
                 offered = value.decode("latin-1")
         if offered != self.expected:
@@ -781,15 +787,15 @@ class BearerToken:
 # -- request reading ---------------------------------------------------------------------
 
 
-async def read_json(request: Request) -> dict[str, Any]:
+async def read_json(request: Request) -> JSON:
     """A JSON object body, or a named refusal. Never a traceback."""
     try:
-        body = await request.json()
+        body = cast("object", await request.json())
     except (ValueError, UnicodeDecodeError) as exc:
         raise ApiError(400, "invalid_json", f"the body is not JSON: {exc}") from exc
     if not isinstance(body, dict):
         raise ApiError(400, "invalid_request", "the body must be a JSON object.")
-    return body
+    return cast("JSON", body)
 
 
 def read_int(request: Request, name: str, default: int) -> int:
@@ -833,7 +839,7 @@ def build_app(args: argparse.Namespace) -> Starlette:
     )
 
 
-def _extra_body(raw: str) -> dict[str, Any]:
+def _extra_body(raw: str) -> JSON:
     """Provider dialect from a flag or the environment, or nothing.
 
     The terminal front end grew this and the server did not, so a deployment that needs it --
@@ -844,12 +850,23 @@ def _extra_body(raw: str) -> dict[str, Any]:
     if not raw.strip():
         return {}
     try:
-        parsed = json.loads(raw)
+        parsed = cast("object", json.loads(raw))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"--extra-body is not JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise SystemExit("--extra-body must be a JSON object")
-    return parsed
+    return cast("JSON", parsed)
+
+
+def _flag(args: argparse.Namespace, name: str) -> str:
+    """One string flag. `Namespace` is untyped, and this is the one place it is read."""
+    value = cast("object", getattr(args, name, ""))
+    return value if isinstance(value, str) else ""
+
+
+def _int_flag(args: argparse.Namespace, name: str) -> int:
+    value = cast("object", getattr(args, name, 0))
+    return value if isinstance(value, int) else 0
 
 
 def resolve(args: argparse.Namespace) -> Config:
@@ -859,27 +876,28 @@ def resolve(args: argparse.Namespace) -> Config:
     chances to get the order subtly different, and a precedence that varies per setting is
     one nobody can hold in their head.
     """
-    stored = load(Path(args.config).expanduser() if args.config else None)
+    config = _flag(args, "config")
+    stored = load(Path(config).expanduser() if config else None)
     environment = os.environ
-    extra = _extra_body(args.extra_body) or _extra_body(
+    extra = _extra_body(_flag(args, "extra_body")) or _extra_body(
         environment.get("HARNESS_EXTRA_BODY", "")
     )
     return Config(
         provider=ProviderSettings(
             base_url=settle(
-                args.base_url,
+                _flag(args, "base_url"),
                 environment.get("HARNESS_BASE_URL", ""),
                 stored.provider.base_url,
                 DEFAULT_BASE_URL,
             ),
             model=settle(
-                args.model,
+                _flag(args, "model"),
                 environment.get("HARNESS_MODEL", ""),
                 stored.provider.model,
                 DEFAULT_MODEL,
             ),
             api_key=settle(
-                args.api_key,
+                _flag(args, "api_key"),
                 environment.get("HARNESS_API_KEY", ""),
                 stored.provider.api_key,
                 "",
@@ -888,19 +906,22 @@ def resolve(args: argparse.Namespace) -> Config:
         ),
         server=ServerSettings(
             host=settle(
-                args.host,
+                _flag(args, "host"),
                 environment.get("HARNESS_HOST", ""),
                 stored.server.host,
                 DEFAULT_HOST,
             ),
             port=int(
-                args.port
+                _int_flag(args, "port")
                 or environment.get("HARNESS_PORT", "")
                 or stored.server.port
                 or DEFAULT_PORT
             ),
             token=settle(
-                args.token, environment.get("HARNESS_TOKEN", ""), stored.server.token, ""
+                _flag(args, "token"),
+                environment.get("HARNESS_TOKEN", ""),
+                stored.server.token,
+                "",
             ),
         ),
         path=stored.path,
@@ -913,13 +934,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="harness-serve", description="Serve the harness over HTTP."
     )
-    parser.add_argument("--host", default="")
-    parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--model", default="")
-    parser.add_argument("--config", default="", help="Path to config.toml.")
-    parser.add_argument("--base-url", default="")
-    parser.add_argument("--api-key", default="")
-    parser.add_argument(
+    _ = parser.add_argument("--host", default="")
+    _ = parser.add_argument("--port", type=int, default=0)
+    _ = parser.add_argument("--model", default="")
+    _ = parser.add_argument("--config", default="", help="Path to config.toml.")
+    _ = parser.add_argument("--base-url", default="")
+    _ = parser.add_argument("--api-key", default="")
+    _ = parser.add_argument(
         "--extra-body",
         default="",
         help=(
@@ -928,7 +949,7 @@ def main(argv: list[str] | None = None) -> int:
             + "without it. (env: HARNESS_EXTRA_BODY)"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--token",
         default="",
         help="Require this bearer token. No token means no authentication.",

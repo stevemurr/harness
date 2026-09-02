@@ -28,9 +28,8 @@ import fnmatch
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 
-from harness.types import ToolSpec
+from harness.types import JSON, ToolSpec
 
 
 class Decision(StrEnum):
@@ -52,7 +51,7 @@ class Request:
 
     tool: str
     summary: str
-    arguments: dict[str, Any]
+    arguments: JSON
     #: What a session grant would cover, if the person says "don't ask again". For a shell
     #: command this is the program, not the whole command line, so approving `git status`
     #: once does not silently approve `git push --force`.

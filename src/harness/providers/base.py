@@ -63,15 +63,22 @@ class ProviderError(Exception):
 
     def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
-        self.retryable = retryable
+        self.retryable: bool = retryable
 
 
 @runtime_checkable
 class Provider(Protocol):
     """One configured model, reachable."""
 
-    #: Human-readable, for logs and for telling the user what they are talking to.
-    name: str
+    @property
+    def name(self) -> str:
+        """Human-readable, for logs and for telling the user what they are talking to."""
+        ...
+
+    #: How much context the model has, in tokens, for compaction to size against. A fact
+    #: about the model, so it lives here rather than in a settings object; zero means
+    #: unknown, and compaction then never fires.
+    context_window: int
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()

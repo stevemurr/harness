@@ -35,8 +35,9 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 from uuid import uuid4
+
+from harness.types import JSON
 
 log = logging.getLogger(__name__)
 
@@ -66,10 +67,10 @@ class Event:
     seq: int
     event_id: str
     type: str
-    payload: dict[str, Any]
+    payload: JSON
     visibility: Visibility = Visibility.USER
 
-    def wire(self) -> dict[str, Any]:
+    def wire(self) -> JSON:
         """The row as `data:` carries it."""
         return {
             "event_id": self.event_id,
@@ -96,7 +97,7 @@ class EventLog:
     def publish(
         self,
         type: str,
-        payload: dict[str, Any] | None = None,
+        payload: JSON | None = None,
         *,
         visibility: Visibility = Visibility.USER,
     ) -> Event | None:

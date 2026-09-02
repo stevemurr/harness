@@ -79,6 +79,8 @@ class Broken:
 
     name = "broken"
 
+    context_window: int = 0
+
     def __init__(self, error: Exception) -> None:
         self._error = error
 

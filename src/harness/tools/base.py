@@ -49,11 +49,8 @@ from typing import Annotated, Protocol, Self, cast, runtime_checkable
 
 import jsonschema
 
-from harness.types import ToolCall, ToolResult, ToolSpec
+from harness.types import JSON, ToolCall, ToolResult, ToolSpec
 from harness.workspace import Workspace
-
-#: What arrives on the wire after validation: JSON, keyed by the schema's property names.
-JSON = dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)

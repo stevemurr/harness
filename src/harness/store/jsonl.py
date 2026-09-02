@@ -31,11 +31,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from harness.store.base import StoreError, ThreadInfo
 from harness.store.codec import decode, encode
-from harness.types import Message, Transcript
+from harness.types import Message, Transcript, as_dict, as_str
 
 
 @dataclass
@@ -91,7 +92,7 @@ class JsonlStore:
         def _begin() -> None:
             path = self.path_for(thread_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(header) + "\n")
+            _ = path.write_text(json.dumps(header) + "\n")
 
         await asyncio.to_thread(_begin)
         return thread_id
@@ -112,7 +113,7 @@ class JsonlStore:
             # file has to ignore an unterminated final line -- `server.complete_lines` is
             # where that is done, and why.
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(lines)
+                _ = handle.write(lines)
 
         await asyncio.to_thread(_append)
 
@@ -127,7 +128,7 @@ class JsonlStore:
                 if not line.strip():
                     continue
                 try:
-                    row = json.loads(line)
+                    row = as_dict(cast("object", json.loads(line)))
                 except json.JSONDecodeError:
                     # A torn final line is what a crash mid-append looks like. Everything
                     # before it is intact, and losing the last turn is the correct outcome
@@ -171,25 +172,25 @@ def _describe(path: Path) -> ThreadInfo | None:
             header_line = handle.readline()
             if not header_line.strip():
                 return None
-            header = json.loads(header_line)
+            header = as_dict(cast("object", json.loads(header_line)))
             title, count = "", 0
             for line in handle:
                 if not line.strip():
                     continue
                 try:
-                    row = json.loads(line)
+                    row = as_dict(cast("object", json.loads(line)))
                 except json.JSONDecodeError:
                     continue
                 count += 1
                 if not title and row.get("role") == "user":
-                    title = (row.get("content") or "").strip().splitlines()[0][:80]
+                    title = as_str(row.get("content")).strip().splitlines()[0][:80]
     except (OSError, json.JSONDecodeError):
         return None
 
     return ThreadInfo(
-        thread_id=header.get("thread_id") or path.parent.name,
-        created_at=_time(header.get("created_at")),
-        workspace=Path(header.get("workspace") or "."),
+        thread_id=as_str(header.get("thread_id")) or path.parent.name,
+        created_at=_time(as_str(header.get("created_at"))),
+        workspace=Path(as_str(header.get("workspace")) or "."),
         title=title,
         message_count=count,
     )

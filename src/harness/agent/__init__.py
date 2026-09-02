@@ -225,7 +225,7 @@ class _Agent:
         """
 
         async def complete(transcript: Transcript) -> Message:
-            window = getattr(self.provider, "context_window", 0)
+            window = self.provider.context_window
             rendered = view(transcript)
 
             if state.should_compact(
@@ -332,7 +332,7 @@ class _Agent:
             # The summary came back longer than what it replaced. Keeping the boundary would
             # cost context rather than save it, and would do so permanently -- every later
             # render reads through it. Drop it, and stop trying.
-            transcript.messages.pop()
+            _ = transcript.messages.pop()
             state.exhausted = True
             return False
 

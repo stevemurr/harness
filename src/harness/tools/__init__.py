@@ -11,7 +11,6 @@ import every tool.
 """
 
 from harness.tools.base import (
-    JSON,
     Arguments,
     Handler,
     Minimum,
@@ -26,6 +25,7 @@ from harness.tools.base import (
     new_registry,
     spec_for,
 )
+from harness.types import JSON
 
 __all__ = [
     "JSON",

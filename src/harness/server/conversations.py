@@ -472,7 +472,7 @@ class Runtime:
             run.cancel()
         tasks = [run.task for run in live if run.task is not None]
         if tasks:
-            await asyncio.wait(tasks, timeout=timeout)
+            _ = await asyncio.wait(tasks, timeout=timeout)
         # Language servers before the provider, and both before returning: they are
         # subprocesses this process started, and nothing else will reap them.
         for conversation in self.conversations.values():

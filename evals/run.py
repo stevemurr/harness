@@ -254,7 +254,7 @@ class Recording:
     def __init__(self, inner) -> None:
         self.inner = inner
         self.name = inner.name
-        self.context_window = getattr(inner, "context_window", 0)
+        self.context_window = inner.context_window
         self.calls: list[dict] = []
 
     async def complete(self, transcript, tools=()):

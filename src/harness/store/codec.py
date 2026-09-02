@@ -12,13 +12,11 @@ messages out differently -- columns, say -- is free to.
 
 from __future__ import annotations
 
-from typing import Any
-
-from harness.types import Message, Role, Source, ToolCall
+from harness.types import JSON, Message, Role, Source, ToolCall, as_dict, as_list, as_str
 
 
-def encode(message: Message) -> dict[str, Any]:
-    body: dict[str, Any] = {"role": message.role.value, "content": message.content}
+def encode(message: Message) -> JSON:
+    body: JSON = {"role": message.role.value, "content": message.content}
     if message.tool_calls:
         body["tool_calls"] = [
             {"call_id": c.call_id, "name": c.name, "arguments": c.arguments}
@@ -33,7 +31,7 @@ def encode(message: Message) -> dict[str, Any]:
     return body
 
 
-def decode(raw: dict[str, Any]) -> Message:
+def decode(raw: JSON) -> Message:
     """Rebuild a message from a stored row.
 
     Tolerant of an unknown role, because a transcript written by a newer version should not
@@ -41,27 +39,29 @@ def decode(raw: dict[str, Any]) -> Message:
     which is legible in a transcript dump and harmless in a replay.
     """
     try:
-        role = Role(raw.get("role", ""))
+        role = Role(as_str(raw.get("role")))
     except ValueError:
         role = Role.USER
+    call_id = raw.get("call_id")
     return Message(
         role=role,
-        content=raw.get("content") or "",
-        tool_calls=tuple(
-            ToolCall(
-                call_id=entry.get("call_id") or "",
-                name=entry.get("name") or "",
-                arguments=entry.get("arguments") or {},
-            )
-            for entry in raw.get("tool_calls") or []
-        ),
-        call_id=raw.get("call_id"),
-        keep_from=raw.get("keep_from") or "",
+        content=as_str(raw.get("content")),
+        tool_calls=tuple(_call(as_dict(entry)) for entry in as_list(raw.get("tool_calls"))),
+        call_id=call_id if isinstance(call_id, str) else None,
+        keep_from=as_str(raw.get("keep_from")),
         source=_source(raw.get("source")),
     )
 
 
-def _source(raw: Any) -> Source | None:
+def _call(entry: JSON) -> ToolCall:
+    return ToolCall(
+        call_id=as_str(entry.get("call_id")),
+        name=as_str(entry.get("name")),
+        arguments=as_dict(entry.get("arguments")),
+    )
+
+
+def _source(raw: object) -> Source | None:
     """An arrival's provenance, tolerantly.
 
     Unknown for the same reason `decode` tolerates an unknown role: a transcript written by
@@ -69,6 +69,6 @@ def _source(raw: Any) -> Source | None:
     becomes none at all, which renders and pins as nothing rather than as a person.
     """
     try:
-        return Source(raw)
+        return Source(as_str(raw))
     except ValueError:
         return None
