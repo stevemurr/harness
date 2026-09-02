@@ -32,8 +32,8 @@ from evals.report import table
 from evals.rungs import HERE, REPO, Rung, discover, stage, unsolved
 from evals.verify import verify
 from harness.agent import new_agent
-from harness.agent.approval import Approvals, Policy
 from harness.agent.loop import Turn
+from harness.approval import Approvals, Policy
 from harness.config import bool_flag, flag, int_flag, load
 from harness.providers.base import Completion
 from harness.providers.openai import OpenAICompatible

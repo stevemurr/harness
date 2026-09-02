@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from harness.exec.children import Children, Lineage
 from harness.exec.processes import Processes
 from harness.inbox import Inbox
 from harness.mode import ModeState
@@ -23,6 +24,7 @@ from harness.plan import Plan
 from harness.settings import Settings
 from harness.symbols import servers
 from harness.symbols.base import Indexes
+from harness.tools.agents import agent_tools, report_tools
 from harness.tools.ask import Questioner, ask_tools
 from harness.tools.base import Handler
 from harness.tools.files import file_tools
@@ -57,10 +59,18 @@ class Toolkit:
     processes: Processes | None = None
     ask: Questioner | None = None
     settings: Settings = field(default_factory=Settings)
+    #: Set on a parent: the agents it may delegate to. A kit with children gets `delegate`.
+    children: Children | None = None
+    #: Set on a child: where it came from. A kit with a lineage gets `report` and not
+    #: `delegate` -- depth one, by construction -- and not `exit_plan_mode`, because only a
+    #: person unlocks and the person talks to the parent.
+    lineage: Lineage | None = None
 
     def __post_init__(self) -> None:
         if self.processes is None:
             self.processes = Processes(inbox=self.inbox)
+        if self.children is not None and self.lineage is not None:
+            raise ValueError("a kit is a parent's or a child's, not both")
 
     @classmethod
     def for_workspace(
@@ -71,6 +81,8 @@ class Toolkit:
         modes: ModeState | None = None,
         inbox: Inbox | None = None,
         ask: Questioner | None = None,
+        children: Children | None = None,
+        lineage: Lineage | None = None,
     ) -> Toolkit:
         """A kit whose code tools can answer for the languages in `root`."""
         settings = settings or Settings()
@@ -80,6 +92,8 @@ class Toolkit:
             indexes=servers.for_workspace(root, settings.symbols),
             ask=ask,
             settings=settings,
+            children=children,
+            lineage=lineage,
         )
 
     def tools(self) -> list[Handler]:
@@ -90,8 +104,10 @@ class Toolkit:
             *web_tools(self.settings.web),
             *plan_tools(self.plan),
             *symbol_tools(self.indexes),
-            *mode_tools(self.modes),
+            *(mode_tools(self.modes) if self.lineage is None else []),
             *ask_tools(self.ask),
+            *(agent_tools(self.children) if self.children is not None else []),
+            *(report_tools(self.lineage) if self.lineage is not None else []),
         ]
 
     async def aclose(self) -> None:
@@ -103,3 +119,5 @@ class Toolkit:
         await self.indexes.aclose()
         if self.processes is not None:
             await self.processes.aclose()
+        if self.children is not None:
+            await self.children.aclose()

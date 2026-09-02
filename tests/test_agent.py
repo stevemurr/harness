@@ -12,7 +12,7 @@ import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
 from harness.agent import Agent, new_agent
-from harness.agent.approval import Approvals, Policy, deny_all
+from harness.approval import Approvals, Policy, deny_all
 from harness.providers.base import ProviderError
 from harness.store import MemoryStore
 from harness.tools.kit import Toolkit

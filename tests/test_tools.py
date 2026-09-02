@@ -8,8 +8,8 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from harness.agent.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
 from harness.agent.runner import ToolRunner
+from harness.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
 from harness.providers.openai import decode_message, merge_tool_call_deltas
 from harness.settings import Output
 from harness.tools import Registry, ToolContext, bind, new_registry

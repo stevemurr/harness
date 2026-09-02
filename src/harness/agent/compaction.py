@@ -140,7 +140,7 @@ def view(transcript: Transcript) -> Transcript:
         message
         for message in messages[1:start]
         if message.role is Role.USER
-        or (message.role is Role.ARRIVAL and message.source == Source.PERSON)
+        or (message.role is Role.ARRIVAL and message.source in (Source.PERSON, Source.PARENT))
     ]
     rendered = [
         messages[0],

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 
-from harness.agent.approval import Approvals, Request
+from harness.approval import Approvals, Request
 from harness.mode import ModeState
 from harness.tools import Registry, ToolContext
 from harness.types import ToolCall, ToolResult

@@ -22,7 +22,7 @@ from enum import StrEnum
 from hashlib import blake2s
 from uuid import uuid4
 
-from harness.agent.approval import Decision, Policy, Request
+from harness.approval import Decision, Policy, Request
 from harness.server.events import EventLog, Visibility
 from harness.types import JSON
 

@@ -7,7 +7,7 @@ distinguishable after they have all been flattened into the one row the wire has
 
 from __future__ import annotations
 
-from harness.inbox import Envelope, Inbox, Source, render
+from harness.inbox import FRAMING, Envelope, Inbox, Source, render
 from harness.providers.openai import encode_message
 from harness.types import Role
 
@@ -51,7 +51,13 @@ def test_a_process_never_speaks_through_the_inbox() -> None:
     not a tool result, the model did not say it, and no person did either. Only the harness
     and the user may put words here; a process's output is fetched with `read_process` and
     comes back as a real tool result."""
-    assert [s.value for s in Source] == ["person", "harness", "monitor"]
+    # The property, not the member list -- that list was asserted here and went stale twice.
+    # A process has no source of its own: what it prints is fetched as a tool result.
+    assert "process" not in {s.value for s in Source}
+    # The two that read as instructions are a person and, to a child, its parent. Every
+    # other source is framed as evidence.
+    instructions = {s for s in Source if "instruction" not in FRAMING[s]}
+    assert instructions == {Source.PERSON, Source.PARENT}
 
 
 def test_a_notice_points_at_the_call_that_started_it() -> None:

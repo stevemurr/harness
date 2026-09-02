@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Protocol
 
 from harness.exec.spawn import Child
-from harness.inbox import Envelope, Inbox
-from harness.types import Source
+from harness.inbox import Inbox
+from harness.types import Envelope, Source
 
 
 class Monitored(Protocol):

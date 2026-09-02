@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness.agent.approval import Approvals, Policy
 from harness.agent.loop import AgentLoop, Turn, assistant_with_calls, share, system, user
+from harness.approval import Approvals, Policy
 from harness.settings import Limits, Output
 from harness.types import Message, Role, ToolCall, ToolResult, Transcript, parse_arguments
 

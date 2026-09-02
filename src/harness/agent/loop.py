@@ -28,6 +28,7 @@ from harness.settings import Limits, Output
 from harness.types import (
     JSON,
     Message,
+    Outcome,
     Role,
     StopReason,
     ToolCall,
@@ -43,13 +44,6 @@ class Turn:
 
     assistant: Message
     results: tuple[tuple[ToolCall, ToolResult], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class Outcome:
-    transcript: Transcript
-    stop: StopReason
-    turns: int
 
 
 ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]

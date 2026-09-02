@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal, cast
+from typing import Literal, Protocol, cast, runtime_checkable
 
 
 class Role(StrEnum):
@@ -39,14 +39,14 @@ class Role(StrEnum):
 class Source(StrEnum):
     """Who an arrival is from, which decides how much weight it should carry.
 
-    Three, and deliberately not four. There was a `PROCESS` source here that carried a
-    background process's *output*, and it was wrong: see the module note on attribution.
-    `MONITOR` is the one that may carry content, and it earns that by being asked for --
-    the model wrote the filter and said to be told.
+    The rule, rather than a count: a source may carry content only if the model asked for
+    it. There was a `PROCESS` source here that carried a background process's *output*
+    unasked, and it was wrong -- see the inbox module note on attribution. `MONITOR`
+    carries lines because the model wrote the filter; `AGENT` carries a child's words
+    because the delegation was the ask. `PERSON` and `PARENT` are the two that are read as
+    instructions, and the framing says which is which.
 
-    (This said "two, and deliberately not three" until 2026-09-01, having been written
-    before `WATCH` was added and never updated. A docstring counting its own members is a
-    tally, and this repository's own method note says to assert properties instead.)
+    (A docstring here used to count its members, and was wrong twice.)
     """
 
     #: A person, typing while the run was working. The one case where the `user` slot on
@@ -62,6 +62,13 @@ class Source(StrEnum):
     #: text arrives here or as the result of `read_monitor` -- only the attribution differs. So
     #: the framing carries it, the way `open_url` fences a fetched page.
     MONITOR = "monitor"
+    #: A child agent this one delegated to, reporting or finishing. Carries content, and
+    #: earns it the way `MONITOR` does: the delegation was the ask. Framed as a report,
+    #: never as an instruction -- another model's words are evidence, not orders.
+    AGENT = "agent"
+    #: The parent of this agent, speaking to it mid-run. To a child, the parent is the
+    #: user, so this is framed as `PERSON` is and pinned across compaction as `PERSON` is.
+    PARENT = "parent"
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
@@ -286,3 +293,62 @@ def parse_arguments(raw: str) -> JSON:
     except json.JSONDecodeError:
         return {}
     return as_dict(parsed)
+
+
+@dataclass(frozen=True, slots=True)
+class Envelope:
+    """One arrival: who it is from, and what it says.
+
+    No recipient field. An envelope's address is the inbox it is sitting in, and a second
+    copy of that fact is a second thing that can disagree with the first.
+    """
+
+    source: Source
+    text: str
+    #: Which process, watch or agent this is about, when it is about one. `None` for a
+    #: person.
+    sender: str | None = None
+    #: The tool call that started whatever this is about. Carried for tracing only -- it is
+    #: deliberately NOT delivered as a `tool` message answering that call, because the call
+    #: was already answered when it returned the handle. Claude Code's notifications carry
+    #: the same back-reference for the same reason: point at the call, do not impersonate
+    #: its result.
+    call_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    """How a run ended: the transcript it left, why it stopped, and how many turns it took."""
+
+    transcript: Transcript
+    stop: StopReason
+    turns: int
+
+    @property
+    def answer(self) -> str:
+        """The last thing the model said. Empty if it never said anything."""
+        for message in reversed(self.transcript.messages):
+            if message.role is Role.ASSISTANT and message.content.strip():
+                return message.content.strip()
+        return ""
+
+
+@runtime_checkable
+class Agent(Protocol):
+    """What a front end drives, and what a parent holds of a child. Four methods."""
+
+    async def open_thread(self, thread_id: str | None = None) -> str:
+        """Resolve or create the thread, and return its id -- before any work happens."""
+        ...
+
+    async def run(self, prompt: str, thread_id: str | None = None) -> Outcome:
+        """Do one exchange, in the thread given or a fresh one."""
+        ...
+
+    def tell(self, envelope: Envelope) -> None:
+        """Say something to a run in flight. Read before the next model call."""
+        ...
+
+    async def aclose(self) -> None:
+        """Stop whatever was started on this agent's behalf. Idempotent."""
+        ...

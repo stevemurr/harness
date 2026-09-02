@@ -33,9 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from harness.agent import Agent, new_agent
-from harness.agent.approval import Approvals
+from harness.agent import new_agent
 from harness.agent.loop import Observer, Turn
+from harness.approval import Approvals
 from harness.inbox import Inbox
 from harness.mode import NORMAL, PLAN, ModeState
 from harness.plan import Plan
@@ -54,7 +54,7 @@ from harness.store.base import Store
 from harness.tools import JSON, Handler, ToolContext
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
-from harness.types import Message, Role, StopReason, ToolResult, ToolSpec
+from harness.types import Agent, Message, Role, StopReason, ToolResult, ToolSpec
 
 log = logging.getLogger(__name__)
 

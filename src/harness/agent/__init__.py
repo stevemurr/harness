@@ -31,9 +31,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
-from harness.agent.approval import Approvals
 from harness.agent.compaction import (
     State,
     anchor_for,
@@ -43,9 +41,11 @@ from harness.agent.compaction import (
     view,
 )
 from harness.agent.environment import describe
-from harness.agent.loop import AgentLoop, Observer, Outcome, Turn, system, user
+from harness.agent.loop import AgentLoop, Observer, Turn, system, user
 from harness.agent.runner import ToolRunner
-from harness.inbox import Envelope, Inbox, render
+from harness.approval import Approvals
+from harness.exec.children import Children, Lineage, Spawner
+from harness.inbox import Inbox, render
 from harness.mode import ModeState
 from harness.prompts import prompt
 from harness.providers.base import Provider
@@ -54,7 +54,7 @@ from harness.store.base import Store
 from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
-from harness.types import Message, Role, ToolSpec, Transcript
+from harness.types import Agent, Envelope, Message, Outcome, Role, ToolSpec, Transcript
 from harness.workspace import Workspace
 
 log = logging.getLogger(__name__)
@@ -66,27 +66,6 @@ SYSTEM_PROMPT = prompt("system")
 #: ordinary, like every other collaborator: the CLI prints a line, a server publishes an
 #: event, a script passes nothing.
 CompactionObserver = Callable[[str, int, int], Awaitable[None] | None]
-
-
-@runtime_checkable
-class Agent(Protocol):
-    """What a front end drives. Four methods, and nothing to reach into."""
-
-    async def open_thread(self, thread_id: str | None = None) -> str:
-        """Resolve or create the thread, and return its id -- before any work happens."""
-        ...
-
-    async def run(self, prompt: str, thread_id: str | None = None) -> Outcome:
-        """Do one exchange, in the thread given or a fresh one."""
-        ...
-
-    def tell(self, envelope: Envelope) -> None:
-        """Say something to a run in flight. Read before the next model call."""
-        ...
-
-    async def aclose(self) -> None:
-        """Stop whatever `new_agent` started on this agent's behalf. Idempotent."""
-        ...
 
 
 @dataclass
@@ -433,6 +412,8 @@ def new_agent(
     approvals: Approvals | None = None,
     observers: Sequence[Observer] = (),
     ask: Questioner | None = None,
+    spawner: Spawner | None = None,
+    lineage: Lineage | None = None,
     settings: Settings | None = None,
     system_prompt: str = SYSTEM_PROMPT,
     on_compaction: CompactionObserver | None = None,
@@ -449,29 +430,48 @@ def new_agent(
     settings = settings or Settings()
     closers: list[Callable[[], Awaitable[None]]] = []
 
+    # A child inherits its approvals and its mode from its lineage, so the spawner passes
+    # the lineage and nothing else has to remember to. `Approvals()` for a child would be
+    # one that asks nobody, the opposite of what a person delegating expects.
+    if lineage is not None:
+        approvals = approvals or lineage.approvals
+        modes = modes or ModeState(current=lineage.mode)
+    approvals = approvals or Approvals()
+
     if tools is None:
+        modes = modes or ModeState()
+        inbox = inbox or Inbox()
+        children = (
+            Children(inbox=inbox, spawner=spawner, approvals=approvals, modes=modes)
+            if spawner is not None
+            else None
+        )
         kit = Toolkit.for_workspace(
             root,
             settings=settings,
-            modes=modes or ModeState(),
-            inbox=inbox or Inbox(),
+            modes=modes,
+            inbox=inbox,
             ask=ask,
+            children=children,
+            lineage=lineage,
         )
-        modes, inbox, tools = kit.modes, kit.inbox, kit.tools()
+        tools = kit.tools()
         closers.append(kit.aclose)
     elif modes is None or inbox is None:
         raise ValueError(
             "tools were supplied without the modes and inbox they share; "
             + "pass the Toolkit's modes= and inbox= as well"
         )
-    elif ask is not None:
-        raise ValueError("ask= applies to the default toolkit; give it to the Toolkit instead")
+    elif ask is not None or spawner is not None:
+        raise ValueError(
+            "ask= and spawner= apply to the default toolkit; give them to the Toolkit instead"
+        )
 
     return _Agent(
         workspace=Workspace.at(root, protected=protected_in(root)),
         provider=provider,
         registry=new_registry(tools),
-        approvals=approvals or Approvals(),
+        approvals=approvals,
         modes=modes,
         inbox=inbox,
         store=store,

@@ -46,7 +46,6 @@ from harness.config import (
 )
 from harness.config import Provider as ProviderSettings
 from harness.config import Server as ServerSettings
-from harness.inbox import Envelope
 from harness.providers.base import Provider
 from harness.server.conversations import Conversation, Runtime
 from harness.server.runs import DECISIONS, CommandRefused, Run
@@ -59,7 +58,7 @@ from harness.server.workspaces import (
 )
 from harness.settings import Settings
 from harness.store.base import OnDisk, Store, StoreError
-from harness.types import JSON, Source
+from harness.types import JSON, Envelope, Source
 from harness.workspace import WorkspaceError
 
 log = logging.getLogger(__name__)

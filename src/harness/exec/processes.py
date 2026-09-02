@@ -56,8 +56,8 @@ from uuid import uuid4
 
 from harness.exec.monitor import Monitor
 from harness.exec.spawn import OWN_SESSION, Child, Stopping
-from harness.inbox import Envelope, Inbox
-from harness.types import Source
+from harness.inbox import Inbox
+from harness.types import Envelope, Source
 
 log = logging.getLogger(__name__)
 

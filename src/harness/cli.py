@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import cast
 
 from harness.agent import new_agent
-from harness.agent.approval import Approvals, Decision, Policy, Request
 from harness.agent.loop import Turn
+from harness.approval import Approvals, Decision, Policy, Request
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,

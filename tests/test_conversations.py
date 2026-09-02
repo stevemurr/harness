@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
-from harness.agent.approval import Decision
+from harness.approval import Decision
 from harness.server.conversations import TERMINAL_STATUSES as TERMINAL
 from harness.server.conversations import Runtime
 from harness.server.events import Visibility
