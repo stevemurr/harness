@@ -222,14 +222,6 @@ class Flags:
 
 
 async def main_async(args: Flags) -> int:
-    if not args.api_key and not args.base_url.startswith("http://localhost"):
-        print(
-            red("no API key.") + " Set HARNESS_API_KEY or pass --api-key "
-            + "(not needed for a local endpoint).",
-            file=sys.stderr,
-        )
-        return 2
-
     extra: JSON = {}
     if args.extra_body:
         try:
@@ -269,6 +261,17 @@ async def main_async(args: Flags) -> int:
         ),
         extra_body=extra or stored.provider.extra_body,
     )
+    # Checked after settling, not before: until 2026-09-02 this read the flag and the
+    # environment only, so a key in config.toml -- the file the server and the evals read --
+    # was refused here with "no API key" before the file was opened.
+    local = settled.base_url.startswith(("http://localhost", "http://127.0.0.1"))
+    if not settled.api_key and not local:
+        print(
+            red("no API key.") + " Set provider.api_key in config.toml, HARNESS_API_KEY, or "
+            + "--api-key (not needed for a local endpoint).",
+            file=sys.stderr,
+        )
+        return 2
     provider = OpenAICompatible.from_settings(settled, max_tokens=args.max_tokens)
     approvals = Approvals(
         policy=Policy(approve_everything=args.yes),

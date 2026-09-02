@@ -3,6 +3,34 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-02: the first multi-agent rung, and a model that would not delegate
+
+`15-delegate-services`: five independent services, one planted bug each, a report naming
+every cause. The code arm has `delegate` and the board; the base arm has neither.
+`results/2026-09-02-delegation` and `results/2026-09-02-delegation-named`, n=2 per arm.
+
+**With the tool merely present and the task saying the services are independent, the
+parent never delegated.** Four attempts, zero `delegate` calls; it fixed the five services
+itself in both arms. That is the property-versus-action finding again, so the task was
+rewritten to name the action at the moment: before reading any service, call `delegate`
+five times with `wait=false`, one per service, wait for the reports, then write the report.
+
+**With the action named, the parent still never delegated.** Two more code-arm attempts,
+26 tools offered against 16 in the base arm, and the model's first words were "let me
+start by understanding the project structure and then fix all five services." It read the
+instruction -- a base-arm parent said it would check whether `delegate` was available --
+and chose the work itself. Pass rates were the same in both arms, 1/2 each, and both
+failures were the turn limit at 4/5 with `update_plan` called after every edit, a turn
+each. So the rung measured nothing about delegation yet, and something about plan thrash.
+
+**The path itself works.** Driven through the CLI with a prompt whose only possible action
+was to delegate, the parent called `delegate` once, the child ran in its own thread with
+the parent in its header, wrote the file, answered, and the parent relayed the answer.
+Nothing in the harness stood between a model that wanted to delegate and doing so; the
+model did not want to. Whether a system-prompt clause changes that is the next thing to
+measure, and this file's own rule says to expect nothing from a clause that describes a
+property.
+
 ## 2026-09-02: the shakedown after the rewrite, n=1
 
 Run to find harness defects after the agent, tools, server and evals were reworked, not to
