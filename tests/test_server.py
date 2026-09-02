@@ -18,7 +18,8 @@ import httpx
 import pytest
 
 from conftest import ScriptedModel, calls, says
-from harness.server import complete_lines, create_app, is_id, workspace_id_for
+from harness.server import create_app
+from harness.server.app import complete_lines, is_id, workspace_id_for
 from harness.store import JsonlStore
 from harness.types import Role
 
@@ -456,8 +457,8 @@ async def test_a_stream_reports_a_run_that_ended_without_a_terminal_event() -> N
     reachable whenever a run's task ends by a route that publishes no ending -- a
     `BaseException` past both `except` arms in `_execute`, say.
     """
-    from harness.runs import Run
-    from harness.stream import frames
+    from harness.server.runs import Run
+    from harness.server.stream import frames
 
     run = Run(run_id="run_x", thread_id="thr_x", message="go", mode="auto", policy="safe")
     run.publish("run.created", {"message": "go"})

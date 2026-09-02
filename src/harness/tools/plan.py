@@ -92,12 +92,12 @@ class UpdatePlan:
         return ToolResult(body)
 
 
-def plan_tools(plan: Plan | None = None) -> tuple[list[Any], Plan]:
-    """The plan tool and the plan it writes.
+def plan_tools(plan: Plan) -> list[Any]:
+    """The plan tool, over the plan the caller holds.
 
     The plan is held by the tool rather than put on `ToolContext`, so the context stays the
     small set of things *every* tool may reach. A context that grew a field per stateful
-    tool would hand every tool everything, which is the opposite of confining them.
+    tool would hand every tool everything, which is the opposite of confining them. The
+    caller makes the plan because the caller is who has to render it -- see `tools/kit.py`.
     """
-    plan = plan or Plan()
-    return [UpdatePlan(plan)], plan
+    return [UpdatePlan(plan)]

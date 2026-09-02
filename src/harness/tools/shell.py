@@ -18,16 +18,15 @@ either never match again, or -- worse, if it matched loosely -- approve things n
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import re
 import shlex
-import signal
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from harness.processes import Processes, _own_group
+from harness.exec.processes import Processes
+from harness.exec.spawn import scoped
 from harness.settings import Shell as ShellSettings
 from harness.tools.base import ToolContext, ToolSpec, schema
 from harness.types import ToolResult
@@ -54,7 +53,7 @@ class Shell:
             "so do not run anything destructive or anything outside the workspace without "
             "saying why first. Returns combined stdout and stderr with the exit code. Set "
             "background for a command that does not return on its own -- a server, a "
-            "watcher, a long build: it answers immediately with an id instead of waiting, "
+            "file monitor, a long build: it answers immediately with an id instead of waiting, "
             "you are told when it ends, and read_process shows what it has printed. Do not "
             "put `&` in the command, with or without background: `&` detaches the work from "
             "the shell this call is holding, so the harness ends up watching a wrapper that "
@@ -128,7 +127,12 @@ class Shell:
                 f"to end it."
             )
 
-        process = await asyncio.create_subprocess_shell(
+        # `scoped` gives the command its own process group and stops that whole group on
+        # the way out -- whether this returns, times out, raises, or is cancelled at the
+        # keyboard. Both of the bugs `exec/spawn.py` exists for happened in this function:
+        # a timeout that killed the shell and left a `curl` holding the pipe for 2748s, and
+        # a Ctrl-C that left the command running with no parent at all.
+        async with scoped(
             command,
             cwd=ctx.paths.root,
             stdout=asyncio.subprocess.PIPE,
@@ -138,36 +142,14 @@ class Shell:
             # behaviour between runs. The entries kept are the ones whose absence breaks
             # ordinary tools.
             env=_environment(),
-            # Its own process group, so the timeout below can kill everything the command
-            # started rather than only the shell that started it. Without this there is no
-            # group to signal, and `killpg` would reach the harness itself.
-            start_new_session=True,
-        )
-
-        try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
-        except asyncio.CancelledError:
-            # Ctrl-C, or any other cancellation. `start_new_session` above took this command
-            # out of the harness's process group, which is what lets the timeout kill it --
-            # and also what stops the terminal's SIGINT from reaching it. Nothing else would
-            # kill it either: the CLI's shutdown closes the provider and nothing more. So a
-            # command interrupted at the keyboard would keep running with no parent, which
-            # is the `&` failure the harness already refuses commands for.
-            _terminate(process)
-            raise
-        except TimeoutError:
-            # Kill the whole group, not just the shell: `sh -c "a | b"` leaves children
-            # behind that keep the pipe open and the harness waiting on a dead command.
-            _terminate(process)
-            # Bounded, because this is the wait the timeout was supposed to end. An
-            # unbounded `process.wait()` here is what turned a 120s timeout into 2748s: the
-            # shell was dead and a surviving `curl` still held the pipe, so the reap waited
-            # on an EOF that could not come until that grandchild died of its own accord.
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(process.wait(), 5)
-            return ToolResult(
-                f"command timed out after {timeout}s and was killed: {command}", ok=False
-            )
+        ) as child:
+            try:
+                stdout, _ = await asyncio.wait_for(child.communicate(), timeout)
+            except TimeoutError:
+                return ToolResult(
+                    f"command timed out after {timeout}s and was killed: {command}", ok=False
+                )
+            code = child.returncode or 0
 
         # Not truncated here. The loop cuts every tool result to the turn's budget and
         # keeps both ends while doing it, and a head-only cut applied first would win --
@@ -176,7 +158,6 @@ class Shell:
         # output is already wholly in memory by now, so cutting here saved nothing anyway.
         text = stdout.decode("utf-8", errors="replace")
 
-        code = process.returncode or 0
         body = text.rstrip() or "(no output)"
         if code == 0:
             return ToolResult(body)
@@ -260,30 +241,6 @@ def _program(command: str) -> str:
     return command
 
 
-def _terminate(process: asyncio.subprocess.Process) -> None:
-    """Kill the command and everything it started.
-
-    `process.kill()` signals the shell and nothing else, which is why the comment at the
-    call site has always said "the whole group" while the code killed one process. The
-    difference is invisible until a command leaves a child behind that holds the stdout
-    pipe -- and then the harness waits on that child, not on the timeout it promised.
-
-    Falls back to the single process where the group is gone or cannot be signalled, which
-    is the case where there is nothing left to kill anyway.
-
-    Never signals our own group. A child started without `start_new_session` shares the
-    harness's process group, and `killpg` on that kills the harness -- which is exactly what
-    happened the first time this was written: `watch` spawned without a new session, and the
-    test runner died with SIGKILL and no output at all.
-    """
-    if _own_group(process.pid) is False:
-        with contextlib.suppress(OSError, ProcessLookupError):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            return
-    with contextlib.suppress(ProcessLookupError):
-        process.kill()
-
-
 @dataclass(frozen=True, slots=True)
 class ReadProcess:
     """What a background command has printed.
@@ -319,14 +276,14 @@ class ReadProcess:
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.processes is None:
             return ToolResult("no background commands here", ok=False, refused=True)
-        text = self.processes.read(args["process_id"])
-        if text is None:
-            known = ", ".join(self.processes.started) or "none"
+        process = self.processes.get(args["process_id"])
+        if process is None or process.monitor is not None:
+            known = ", ".join(self.processes.ids(monitored=False)) or "none"
             return ToolResult(
                 f"no process {args['process_id']!r}. Running: {known}", ok=False, refused=True
             )
-        process = self.processes.get(args["process_id"])
-        state = "still running" if process and process.running else f"exited {process.code}"
+        text = self.processes.read(args["process_id"]) or ""
+        state = "still running" if process.running else f"exited {process.code}"
         if not text.strip():
             return ToolResult(f"[{state}, no output yet]")
         return ToolResult(f"[{state}]\n{text.rstrip()}")
@@ -360,9 +317,14 @@ class StopProcess:
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.processes is None:
             return ToolResult("no background commands here", ok=False, refused=True)
-        what = await self.processes.stop(args["process_id"])
+        found = self.processes.get(args["process_id"])
+        what = (
+            await self.processes.stop(args["process_id"])
+            if found is not None and found.monitor is None
+            else None
+        )
         if what is None:
-            known = ", ".join(self.processes.started) or "none"
+            known = ", ".join(self.processes.ids(monitored=False)) or "none"
             return ToolResult(
                 f"no process {args['process_id']!r}. Started here: {known}",
                 ok=False, refused=True,
@@ -371,12 +333,12 @@ class StopProcess:
 
 
 @dataclass(frozen=True, slots=True)
-class WatchProcess:
-    """Watch a command's output as it appears."""
+class MonitorProcess:
+    """Monitor a command's output as it appears."""
 
     processes: Processes | None = None
     spec: ToolSpec = field(default=ToolSpec(
-        name="watch",
+        name="monitor",
         description=(
             "Be told about a command's output MORE THAN ONCE, as it arrives -- every error "
             "in a log, every file change. Batches of lines reach you between turns, so you "
@@ -384,13 +346,13 @@ class WatchProcess:
             "If you only need to be told ONCE that something is ready, this is the wrong "
             "tool. Use run with background=true and a command that EXITS when the condition "
             "holds: `until grep -q Ready app.log; do sleep 0.5; done`. You get a single "
-            "notice when it exits. A watch on `tail -f` never ends by itself, so it stays "
+            "notice when it exits. A monitor on `tail -f` never ends by itself, so it stays "
             "armed long after the thing you were waiting for happened.\n"
-            "Filter tightly, and filter for failure too: a watch matching only the happy "
+            "Filter tightly, and filter for failure too: a monitor matching only the happy "
             "path stays silent through a crash, and silence looks exactly like still "
             "working. Prefer `grep -E --line-buffered 'done|Error|Traceback|FAILED'` over "
             "matching success alone -- and note that every stage of a pipe must flush per "
-            "line, so grep needs --line-buffered and awk needs fflush(). A watch that sends "
+            "line, so grep needs --line-buffered and awk needs fflush(). A monitor that sends "
             "too much is stopped for you."
         ),
         parameters=schema(
@@ -402,8 +364,8 @@ class WatchProcess:
                 "description": {
                     "type": "string",
                     "description": (
-                        "What you are watching, in a few words. It is shown with every "
-                        "notice, so 'errors in deploy.log' beats 'watching logs'."
+                        "What you are monitoring, in a few words. It is shown with every "
+                        "notice, so 'errors in deploy.log' beats 'monitoring logs'."
                     ),
                 },
             },
@@ -413,78 +375,90 @@ class WatchProcess:
     ))
 
     def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"watch: {args.get('command', '')}", f"watch:{_program(args.get('command', ''))}"
+        return (
+            f"monitor: {args.get('command', '')}",
+            f"monitor:{_program(args.get('command', ''))}",
+        )
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.processes is None:
-            return ToolResult("watching is not available here", ok=False, refused=True)
-        watch = await self.processes.watch(
+            return ToolResult("monitoring is not available here", ok=False, refused=True)
+        watched = await self.processes.monitor(
             args["command"], args["description"],
             cwd=ctx.paths.root, env=_environment(), call_id=ctx.call_id,
         )
         return ToolResult(
-            f"{watch.watch_id} watching (pid {watch.handle.pid}). Its lines will reach you "
-            f"between turns. Call read_watch with {watch.watch_id} for everything it has "
-            f"printed, or stop_watch to end it."
+            f"{watched.process_id} monitoring (pid {watched.pid}). Its lines will reach you "
+            f"between turns. Call read_monitor with {watched.process_id} for everything "
+            f"it has printed, or stop_monitor to end it."
         )
 
 
 @dataclass(frozen=True, slots=True)
-class ReadWatch:
+class ReadMonitor:
     processes: Processes | None = None
     spec: ToolSpec = field(default=ToolSpec(
-        name="read_watch",
-        description="Everything a watch has printed, including lines already reported.",
+        name="read_monitor",
+        description="Everything a monitor has printed, including lines already reported.",
         parameters=schema(
-            {"watch_id": {"type": "string", "description": "The id `watch` gave you."}},
-            required=["watch_id"],
+            {"monitor_id": {"type": "string", "description": "The id `monitor` gave you."}},
+            required=["monitor_id"],
         ),
     ))
 
     def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"read {args.get('watch_id', '')}", "read_watch"
+        return f"read {args.get('monitor_id', '')}", "read_monitor"
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.processes is None:
-            return ToolResult("watching is not available here", ok=False, refused=True)
-        text = self.processes.read_watch(args["watch_id"])
-        if text is None:
-            known = ", ".join(self.processes.watching) or "none"
+            return ToolResult("monitoring is not available here", ok=False, refused=True)
+        # A process id is not a monitor id even though one table now holds both: the model was
+        # given two vocabularies and gets the refusal it would have got before.
+        watched = self.processes.get(args["monitor_id"])
+        if watched is None or watched.monitor is None:
+            known = ", ".join(self.processes.ids(monitored=True)) or "none"
             return ToolResult(
-                f"no watch {args['watch_id']!r}. Started here: {known}", ok=False, refused=True
+                f"no monitor {args['monitor_id']!r}. Started here: {known}",
+                ok=False, refused=True,
             )
-        watch = self.processes.watching[args["watch_id"]]
-        state = "still watching" if watch.running else f"ended {watch.code}"
+        text = self.processes.read(args["monitor_id"]) or ""
+        state = "still monitoring" if watched.running else f"ended {watched.code}"
         if not text.strip():
             return ToolResult(f"[{state}, nothing printed yet]")
-        return ToolResult(f"[{state}, {watch.lines} lines]\n{text.rstrip()}")
+        return ToolResult(f"[{state}, {watched.monitor.seen} lines]\n{text.rstrip()}")
 
 
 @dataclass(frozen=True, slots=True)
-class StopWatch:
+class StopMonitor:
     processes: Processes | None = None
     spec: ToolSpec = field(default=ToolSpec(
-        name="stop_watch",
-        description="Stop a watch you started. Only reaches watches from this run.",
+        name="stop_monitor",
+        description="Stop a monitor you started. Only reaches monitors from this run.",
         parameters=schema(
-            {"watch_id": {"type": "string", "description": "The id `watch` gave you."}},
-            required=["watch_id"],
+            {"monitor_id": {"type": "string", "description": "The id `monitor` gave you."}},
+            required=["monitor_id"],
         ),
     ))
 
     def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"stop {args.get('watch_id', '')}", "stop_watch"
+        return f"stop {args.get('monitor_id', '')}", "stop_monitor"
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.processes is None:
-            return ToolResult("watching is not available here", ok=False, refused=True)
-        what = await self.processes.stop_watch(args["watch_id"])
+            return ToolResult("monitoring is not available here", ok=False, refused=True)
+        found = self.processes.get(args["monitor_id"])
+        what = (
+            await self.processes.stop(args["monitor_id"])
+            if found is not None and found.monitor is not None
+            else None
+        )
         if what is None:
-            known = ", ".join(self.processes.watching) or "none"
+            known = ", ".join(self.processes.ids(monitored=True)) or "none"
             return ToolResult(
-                f"no watch {args['watch_id']!r}. Started here: {known}", ok=False, refused=True
+                f"no monitor {args['monitor_id']!r}. Started here: {known}",
+                ok=False, refused=True,
             )
-        return ToolResult(f"{args['watch_id']} {what}")
+        return ToolResult(f"{args['monitor_id']} {what}")
 
 
 def shell_tools(
@@ -494,7 +468,7 @@ def shell_tools(
         Shell(settings or ShellSettings(), processes),
         ReadProcess(processes),
         StopProcess(processes),
-        WatchProcess(processes),
-        ReadWatch(processes),
-        StopWatch(processes),
+        MonitorProcess(processes),
+        ReadMonitor(processes),
+        StopMonitor(processes),
     ]

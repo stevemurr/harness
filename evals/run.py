@@ -27,14 +27,15 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from harness.agent import build
-from harness.approval import Approvals, Policy
+from harness.agent import new_agent
+from harness.agent.approval import Approvals, Policy
 from harness.config import load
+from harness.exec.spawn import scoped_sync
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
 from harness.store import JsonlStore
 from harness.store.codec import encode
-from harness.tools.base import Registry
+from harness.tools.kit import Toolkit
 
 #: Where transcripts go. The harness's own folder by default, so `harness-serve` can watch
 #: a run it did not start and `harness --threads` lists it -- a long rung is something you
@@ -171,11 +172,8 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
     else:
         command = ["sh", script]
 
-    try:
-        done = subprocess.run(
-            command, cwd=work, capture_output=True, text=True, timeout=timeout
-        )
-    except subprocess.TimeoutExpired:
+    done = _run_group(command, work, timeout)
+    if done is None:
         return False, "verify timed out"
     score = _score(done.stdout)
     if done.returncode == 0:
@@ -195,6 +193,36 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
     said = spoke[-1] if spoke else ""
     detail = (f"{where}  ||  {said}" if where and said else where or said)[:240]
     return False, f"{score} {detail}".strip() if score else detail
+
+
+def _run_group(
+    command: list[str], cwd: Path, timeout: int
+) -> subprocess.CompletedProcess | None:
+    """Run a rung's checks in their own process group, and kill the group if they overrun.
+
+    `subprocess.run(..., timeout=...)` kills the shell it started and then waits for that one
+    process. On POSIX it does not drain the pipes and does not touch anything the shell
+    started, so a `verify.sh` that backgrounds a server leaves the server running -- holding
+    its port, outliving the attempt it belonged to.
+
+    That is not hypothetical. `07-service/code.3` timed out on 2026-09-01, its server
+    survived with `PPID=1`, and the next attempt failed on
+    `test "$(curl -sf http://127.0.0.1:8741/health)" = "ok"` with `Errno 48: Address already
+    in use` -- a red row that measured nothing about the model. `verify.sh` has a
+    `trap ... EXIT` to clean up and it cannot help: the trap belongs to the shell being
+    killed. The fix has to be outside the script, and it is the same one `shell._terminate`
+    needed for the same reason.
+
+    Answers `None` when the checks overran.
+    """
+    with scoped_sync(
+        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ) as process:
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        return subprocess.CompletedProcess(command, process.returncode, out, err)
 
 
 def _score(output: str) -> str:
@@ -268,20 +296,15 @@ async def attempt(
     # can be watched with `tail -f`, and a run that is killed keeps everything up to the
     # turn it died on. Without it a long run that is interrupted loses the lot.
     threads = THREADS
-    agent = build(
-        work, model,
-        store=JsonlStore(threads),
-        approvals=Approvals(policy=Policy(approve_everything=True)),
-        settings=Settings(limits=Limits(max_turns=max_turns)),
+    settings = Settings(limits=Limits(max_turns=max_turns))
+    # Without code tools, no language server is probed or started either: a kit that is
+    # not built `for_workspace` has empty indexes, and the two tools are dropped below.
+    kit = (
+        Toolkit.for_workspace(work, settings=settings)
+        if with_code
+        else Toolkit(settings=settings)
     )
-    if not with_code:
-        agent.registry = Registry(
-            [
-                tool
-                for name in agent.registry.names()
-                if (tool := agent.registry.get(name)) and name not in CODE_TOOLS
-            ]
-        )
+    tools = [t for t in kit.tools() if with_code or t.spec.name not in CODE_TOOLS]
 
     used: Counter[str] = Counter()
     failed: Counter[str] = Counter()
@@ -300,13 +323,22 @@ async def attempt(
             elif not result.ok:
                 failed[call.name] += 1
 
-    agent.observers.append(watch)
-
     def compacted(summary: str, before: int, after: int) -> None:
         nonlocal compactions
         compactions += 1
 
-    agent.on_compaction = compacted
+    agent = new_agent(
+        work,
+        model,
+        tools=tools,
+        modes=kit.modes,
+        inbox=kit.inbox,
+        store=JsonlStore(threads),
+        approvals=Approvals(policy=Policy(approve_everything=True)),
+        settings=settings,
+        observers=[watch],
+        on_compaction=compacted,
+    )
 
     started = time.monotonic()
     thread = await agent.open_thread()
@@ -320,12 +352,10 @@ async def attempt(
     elapsed = time.monotonic() - started
 
     await model.aclose()
-    await agent.indexes.aclose()
     # Whatever it backgrounded dies with the attempt. An eval that leaves servers running
     # accumulates them across 66 attempts, each holding a port -- measured once, at nine
     # minutes and counting.
-    if agent.processes is not None:
-        await agent.processes.aclose()
+    await kit.aclose()
 
     if keep is not None:
         messages = [] if stop == "harness-error" else outcome.transcript.messages

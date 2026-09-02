@@ -23,7 +23,7 @@ from harness.code.gopls import Gopls
 from harness.code.pyright import Pyright
 from harness.code.servers import servers_bin
 from harness.settings import Code
-from harness.tools.base import Registry, ToolContext
+from harness.tools import ToolContext, new_registry
 from harness.tools.code import code_tools
 from harness.types import ToolCall
 from harness.workspace import Workspace
@@ -316,8 +316,9 @@ async def test_with_no_index_at_all_the_message_names_the_command(project: Path)
 
 @pytest.fixture
 def kit(project: Path):
-    tools, indexes = code_tools(Indexes([Fake(project)]))
-    return Registry(tools), ToolContext(paths=Workspace.at(project)), indexes
+    indexes = Indexes([Fake(project)])
+    tools = code_tools(indexes)
+    return new_registry(tools), ToolContext(paths=Workspace.at(project)), indexes
 
 
 async def test_references_without_a_definition_site_is_refused_by_the_schema(kit) -> None:
@@ -374,8 +375,8 @@ async def test_a_missing_backend_fails_rather_than_refuses(project: Path) -> Non
     this a refusal would let a missing binary end a run that is otherwise working."""
     nowhere = Code(commands={"basedpyright": ("definitely-not-a-language-server",)})
     missing = Pyright(project, nowhere)
-    tools, _ = code_tools(Indexes([missing]))
-    registry = Registry(tools)
+    tools = code_tools(Indexes([missing]))
+    registry = new_registry(tools)
     ctx = ToolContext(paths=Workspace.at(project))
 
     result = await registry.run(ToolCall("c", "find_definition", {"symbol": "Widget"}), ctx)
@@ -386,8 +387,8 @@ async def test_a_missing_backend_fails_rather_than_refuses(project: Path) -> Non
 
 
 async def test_with_no_index_configured_the_tool_says_so(project: Path) -> None:
-    tools, _ = code_tools(Indexes())
-    registry = Registry(tools)
+    tools = code_tools(Indexes())
+    registry = new_registry(tools)
     ctx = ToolContext(paths=Workspace.at(project))
 
     result = await registry.run(ToolCall("c", "find_definition", {"symbol": "Widget"}), ctx)
@@ -412,7 +413,7 @@ async def test_the_tools_are_offered_in_plan_mode(project: Path) -> None:
     worth the most, since the whole activity is reading before deciding."""
     from harness.mode import PLAN
 
-    tools, _ = code_tools(Indexes([Fake(project)]))
+    tools = code_tools(Indexes([Fake(project)]))
 
     for tool in tools:
         assert PLAN.permits(tool.spec.name, tool.spec.mutates)
@@ -427,7 +428,7 @@ async def test_a_path_outside_the_workspace_is_refused_not_failed(project: Path)
     did not, until a model mistyped an absolute path in an eval run and the result came back
     labelled `failed`. (2026-08-31)
     """
-    registry = Registry(code_tools(Indexes([Fake(project)]))[0])
+    registry = new_registry(code_tools(Indexes([Fake(project)])))
     ctx = ToolContext(paths=Workspace.at(project))
 
     for call in (

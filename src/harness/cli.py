@@ -18,8 +18,9 @@ import os
 import sys
 from pathlib import Path
 
-from harness.agent import build
-from harness.approval import Approvals, Decision, Policy, Request
+from harness.agent import new_agent
+from harness.agent.approval import Approvals, Decision, Policy, Request
+from harness.agent.loop import Turn
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
@@ -29,8 +30,7 @@ from harness.config import (
     settle,
     write_example,
 )
-from harness.loop import Turn
-from harness.mode import NORMAL, PLAN
+from harness.mode import NORMAL, PLAN, ModeState
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Compaction
 from harness.store import JsonlStore
@@ -196,22 +196,23 @@ async def main_async(args: argparse.Namespace) -> int:
         policy=Policy(approve_everything=args.yes),
         ask=approve,
     )
-    agent = build(
-        args.folder,
+    folder = Path(args.folder).expanduser().resolve()
+    agent = new_agent(
+        folder,
         provider,
         store=JsonlStore(THREADS),
         approvals=approvals,
         observers=[render],
-        mode=PLAN if args.plan else NORMAL,
+        modes=ModeState(current=PLAN if args.plan else NORMAL),
         # Only when a person is actually there. Piped or redirected, `input` would block on a
         # stdin nobody is typing into, and the tool's own refusal ("there is nobody to ask")
         # is a better answer than a hang.
         ask=ask_user if sys.stdin.isatty() else None,
+        settings=stored.settings,
+        on_compaction=report_compaction,
     )
-    agent.settings = stored.settings
-    agent.on_compaction = report_compaction
 
-    print(dim(f"harness · {provider.name} · {agent.workspace.root}"))
+    print(dim(f"harness · {provider.name} · {folder}"))
     if args.plan:
         print(dim("plan mode: read-only until you approve a plan."))
     if args.yes:
@@ -237,6 +238,10 @@ async def main_async(args: argparse.Namespace) -> int:
         print(dim("\ninterrupted."))
         return 130
     finally:
+        # The agent first: it owns language servers and background commands, and a
+        # provider connection is the one thing here that closes itself when the process
+        # ends.
+        await agent.aclose()
         await provider.aclose()
 
     print(dim(f"\n{outcome.turns} turns · {outcome.stop.kind} · thread {thread_id}"))
@@ -333,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.init_agents:
-        from harness.environment import write_conventions
+        from harness.agent.environment import write_conventions
 
         folder = Path(args.folder).expanduser().resolve()
         written = write_conventions(folder)

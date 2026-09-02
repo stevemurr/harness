@@ -95,7 +95,7 @@ class Config:
     provider: Provider = field(default_factory=Provider)
     server: Server = field(default_factory=Server)
     #: The runtime's own settings type, not a copy of it. There was a copy: `cli.py` and
-    #: `server.py` each rebuilt `Compaction` field by field out of a config-local twin, in
+    #: `server/app.py` each rebuilt `Compaction` field by field out of a config-local twin, in
     #: two places that had to be kept in step by hand -- which is the bug this module opens
     #: by describing. One type, read here, handed to `Agent` whole.
     settings: Settings = field(default_factory=Settings)

@@ -95,8 +95,8 @@ class Workspace:
         for entry in self.protected:
             if resolved == entry or resolved.is_relative_to(entry):
                 raise PathRefused(
-                    f"refusing to write {path!r}: {entry} holds this harness's own record "
-                    "of the run and is not writable from inside it"
+                    f"refusing to write {path!r}: {entry} is this harness's own directory "
+                    "and is not writable from inside a run"
                 )
         return resolved
 

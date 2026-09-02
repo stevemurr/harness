@@ -1,15 +1,15 @@
 """Every number worth tuning, in one file.
 
-These were scattered as module constants across `loop.py`, `types.py`, `compaction.py` and
-`tools/shell.py`, which is where a tunable goes when nobody has yet had to tune it. Two
-things went wrong once there was more than one:
+These were scattered as module constants across `agent/loop.py`, `types.py`,
+`agent/compaction.py` and `tools/shell.py`, which is where a tunable goes when nobody has yet
+had to tune it. Two things went wrong once there was more than one:
 
   * `shell.py` grew its own `OUTPUT_LIMIT = 30_000` beside the loop's `TOOL_OUTPUT_LIMIT =
     30_000`, and the two were not the same rule. The shell cut its output head-only before
     the loop ever saw it, so when the loop learned to keep both ends -- so that `pytest`'s
     "5 failed" at the tail survives -- shell output was the one case it could not fix. Two
     copies of a number are two rules, and they drift.
-  * `cli.py` and `server.py` each copied the same three compaction fields out of the config
+  * `cli.py` and `server/app.py` each copied the same three compaction fields out of the config
     into the runtime type, in two places that had to be kept in step by hand. That is the
     failure `config.py` opens by describing.
 

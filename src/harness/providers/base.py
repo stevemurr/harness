@@ -82,18 +82,3 @@ class Provider(Protocol):
     async def aclose(self) -> None:
         """Release connections. Safe to call more than once."""
         ...
-
-
-def bind(provider: Provider, tools: Sequence[ToolSpec]):
-    """Adapt a provider to what `AgentLoop` wants: transcript in, message out.
-
-    The loop takes a plain callable rather than a `Provider` so it can be tested with a
-    scripted function and never needs to know this protocol exists. `Agent` does not use
-    this -- it has its own adapter, because it also has to measure and compact -- so this
-    is for a caller driving the loop directly.
-    """
-
-    async def complete(transcript: Transcript) -> Message:
-        return (await provider.complete(transcript, tools)).message
-
-    return complete

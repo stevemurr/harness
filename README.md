@@ -14,7 +14,7 @@ while True:
         transcript.append(await run(call))
 ```
 
-That is `loop.py`, and it is the entire control flow. Everything else in this repository is
+That is `agent/loop.py`, and it is the entire control flow. Everything else in this repository is
 a tool, a provider client, or persistence.
 
 ## The one commitment
@@ -52,23 +52,37 @@ not as a topology.
 ```
 src/harness/
   types.py       transcript, messages, tool calls -- the state
-  loop.py        the agent loop
   workspace.py   path resolution and containment; tools never resolve their own
-  approval.py    what may proceed without asking
   settings.py    every number worth tuning, in one place
-  compaction.py  the render, and when a long run hands off to a smaller context
+  config.py      ~/.harness/config.toml, read by both front ends
+  plan.py        the checklist one tool writes and a front end renders
+  mode.py        what a run may do; data, not an interface
+  inbox.py       what arrived for a run from outside a turn
+  prompts/       the system prompt and its pieces, with attribution
+  agent/
+    __init__.py  Agent, the interface; new_agent, the composition root
+    loop.py      the agent loop
+    runner.py    joins the registry to approvals
+    approval.py  what may proceed without asking
+    compaction.py  the render, and when a long run hands off to a smaller context
+    environment.py  what the model is told about the folder it is in
+  tools/
+    __init__.py  Tool, Registry, new_registry -- the contracts, owned by the package
+    base.py      the tool contract, and the one registry
+    kit.py       Toolkit: the default set of tools, and the state they share
+    files.py     read, write, edit, list, glob, grep
+    plan.py      write_plan / update_plan
+    shell.py     run a command (see the warning below)
+  exec/
+    spawn.py     a process has descendants, and killing one must kill them
+    processes.py the table of what this run started
+    monitor.py   reading a child's output as it appears
   code/
     base.py      the code-navigation contract: what a symbol is, and where it is used
     lsp.py       one language server, over LSP on a pipe -- shared by every LSP backend
     pyright.py   Python, via basedpyright
     gopls.py     Go, via gopls
     servers.py   ~/.harness/servers/bin, provisioning, and which languages a folder holds
-  runner.py      joins the registry to approvals
-  tools/
-    base.py      the tool contract: ToolSpec, ToolContext, Registry
-    files.py     read, write, edit, list, glob, grep
-    plan.py      write_plan / update_plan
-    shell.py     run a command (see the warning below)
   providers/
     base.py      the model contract
     openai.py    OpenAI-compatible endpoints
@@ -76,14 +90,15 @@ src/harness/
     base.py      the persistence contract
     jsonl.py     one append-only file per session
     memory.py    for tests
-  agent.py       the composition root
+  server/
+    app.py       the HTTP front end: routes, and the one error shape
+    conversations.py  what a server front end passes `new_agent`, and why it is four things
+    runs.py      one run, and what a client can do to it in flight
+    events.py    one run's event log, and the cursor guarantee
+    stream.py    the event stream, and the three things that hang a client
+    workspaces.py  a registered folder, and how one is identified
+    pages/       the browser client
   cli.py         the terminal front end
-  events.py      one run's event log, and the cursor guarantee
-  runs.py        one run, and what a client can do to it in flight
-  conversations.py  what a server front end passes `Agent`, and why it is four things
-  workspaces.py  a registered folder, and how one is identified
-  stream.py      the event stream, and the three things that hang a client
-  server.py      the HTTP front end: routes, and the one error shape
 ```
 
 ## Running it
@@ -136,8 +151,8 @@ and refuses to load a key from one that others can read.
 ## Views
 
 A view is a front end. Two exist and they share an unmodified core: the terminal CLI (216
-lines) and the HTTP server orca talks to (1,358). Nothing in `loop.py`, `types.py`,
-`runner.py`, `workspace.py`, `approval.py`, `mode.py`, `plan.py` or any tool imports either
+lines) and the HTTP server orca talks to (1,358). Nothing in `agent/loop.py`, `types.py`,
+`agent/runner.py`, `workspace.py`, `agent/approval.py`, `mode.py`, `plan.py` or any tool imports either
 of them, and adding the server changed none of those files.
 
 **To build a view, supply four things.** They are ordinary callables and protocols, so a
@@ -159,19 +174,35 @@ add a concept to save one constructor argument.
 The count was two until an HTTP server was actually written against it. That kind of claim
 is only ever checked by someone building on it.
 
-## The entry point is not an interface
+## The agent is an interface; the root is not
 
-`Agent` is the composition root, and a composition root is the one thing that must be
-concrete -- behind an interface, something above it would choose which root, and that would
-be the real root. What varies between front ends is two of its collaborators, and both are
-already interfaces:
+`Agent` is a protocol of four methods -- `open_thread`, `run`, `tell`, `aclose` -- because
+that is everything a CLI, an HTTP run driver or an eval ever calls. `new_agent` is the
+composition root, and a composition root is the one thing that must be concrete: behind an
+interface, something above it would choose which root, and that would be the real root. The
+class between the two is private, and nothing but `new_agent` makes one.
+
+Until 2026-09-02 the class was public, was called the root, and the argument above was the
+reason it was not an interface. The argument was right about the root and aimed at the wrong
+thing: the class never chose an implementation of anything, `build` did. Splitting them cost
+nothing and removed five fields that were on the class only so a front end could reach in.
+
+What varies between front ends is what they hand `new_agent`:
 
   * a CLI passes an asker that prompts and an observer that renders
-  * a server passes an asker that suspends until a client answers, and an observer that
-    publishes events
+  * a server passes an asker that suspends until a client answers, an observer that
+    publishes events, and every tool wrapped so its activity is visible while it runs
   * a script passes `approve_all` and no observer
 
-Same `Agent`, three front ends, no new abstractions.
+Same agent, three front ends, no new abstractions.
+
+**What a front end needs to reach, it makes.** The plan it renders, the mode a person
+changes, the language servers and background commands somebody has to close -- none of that
+is on the agent. It is on the `Toolkit` (`tools/kit.py`) the front end built and passed in
+as `tools=`, together with the `modes=` and `inbox=` those tools share. A front end that
+passes nothing gets the default kit and the agent closes it; a front end that passes its own
+closes its own. The server has lived by this rule since it was written, keeping the plan
+beside the agent rather than on it.
 
 Persistence is one of those observers, so the loop never learns that storage exists and a
 run with no store takes the same path. Observers may be async precisely for this: a store
@@ -189,7 +220,7 @@ the two that were missed are missed for reasons worth knowing:
     told the conversation's identity when the run is *accepted*.
 
 Both are interfaces that already existed and both are swapped at the composition root, which
-is the part of the claim that mattered. `src/harness/runs.py` says it at length.
+is the part of the claim that mattered. `server/runs.py` says it at length.
 
 ## Serving it
 
@@ -198,8 +229,8 @@ harness-serve --port 8080          # HARNESS_TOKEN=... to require a bearer token
 ```
 
 The same `Agent` behind HTTP, which is what the `orca` terminal client drives. A run is a
-background task with an append-only event log (`runs.py`, `events.py`); what a server passes
-`Agent` is in `conversations.py`; the rest is transport.
+background task with an append-only event log (`server/runs.py`, `server/events.py`); what a server passes
+`Agent` is in `server/conversations.py`; the rest is transport.
 
 **Stopping the server is not dropping the work.** `uvicorn` turns SIGINT and SIGTERM into
 the ASGI lifespan shutdown, which reaches `Runtime.aclose`: every run still going is
@@ -220,7 +251,7 @@ correctness after every reconnect rests on that and nothing else. The log is an 
 list and sequences are its indices, which is the whole implementation.
 
 **Three things silently hang a following client**, each found by a hang rather than by
-reading, and all three written out in `server.py` rather than left to a helper:
+reading, and all three written out in `server/app.py` rather than left to a helper:
 
   1. `stream.end` must carry an SSE `event:` line. As a `type` inside `data` it reads as an
      ordinary event of an unknown kind, and the follow reconnects from its cursor, gets the
@@ -318,7 +349,7 @@ objection is the one `plan.py` makes -- compaction is control state, and a model
 compact away an instruction it disliked would be a failure with no detection.
 
 The boundary points at its kept tail **by digest, not by index**. An index looks obviously
-right, by analogy with `events.py`, and is wrong: `EventLog` is in memory and never drops a
+right, by analogy with `server/events.py`, and is wrong: `EventLog` is in memory and never drops a
 row, while `JsonlStore.load` deliberately drops lines it cannot parse, which is how it
 survives a crash mid-append. A torn final line concatenated with the next run's first
 append is one unparseable line where two messages were, and every index after it shifts.
@@ -421,7 +452,7 @@ can went wrong first. `shell.py` grew its own `OUTPUT_LIMIT = 30_000` beside the
 `TOOL_OUTPUT_LIMIT = 30_000`, and they were not the same rule: the shell cut head-only
 before the loop saw the output, so when the loop learned to keep both ends -- so `pytest`'s
 "5 failed" at the tail survives -- shell output was the one case it could not fix. And
-`cli.py` and `server.py` each rebuilt the compaction settings field by field out of a
+`cli.py` and `server/app.py` each rebuilt the compaction settings field by field out of a
 config-local twin, in two places kept in step by hand, which is the bug `config.py` opens by
 describing. One type now, read from the file and handed over whole.
 

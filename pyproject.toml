@@ -29,6 +29,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    "mypy>=1.11",
+    # `jsonschema` ships no inline types, and the one place it is used is the boundary
+    # where a model's arguments are validated -- the last place worth checking blind.
+    "types-jsonschema",
 ]
 
 [project.scripts]
@@ -45,6 +49,20 @@ packages = ["src/harness"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+# The package only. Tests and eval seeds are deliberately outside: a fixture that builds a
+# deliberately wrong call is the point of the test, and a rung's seed is written to be
+# broken.
+files = ["src/harness"]
+python_version = "3.12"
+# Not strict, and not yet. The first run found fifteen errors in six files, including a
+# `None` dereference on a live path and three Protocols whose implementations do not
+# satisfy them. Those are worth fixing before the bar is raised; a checker that starts red
+# and stays red teaches people to ignore it.
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
 
 [tool.ruff]
 line-length = 96

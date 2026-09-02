@@ -38,7 +38,7 @@ def test_each_source_says_who_it_is_before_it_says_anything_else() -> None:
 def test_watched_output_is_fenced_as_someone_else_s_words() -> None:
     """The one source carrying third-party content, so the framing has to do the work the
     role cannot: name who wrote it, and say it is not an instruction."""
-    fenced = render(Envelope(Source.WATCH, "ERROR: disk full", sender="watch_a1")).content
+    fenced = render(Envelope(Source.MONITOR, "ERROR: disk full", sender="watch_a1")).content
 
     assert fenced.index("watch_a1") < fenced.index("ERROR")
     assert "not by the user" in fenced
@@ -51,7 +51,7 @@ def test_a_process_never_speaks_through_the_inbox() -> None:
     not a tool result, the model did not say it, and no person did either. Only the harness
     and the user may put words here; a process's output is fetched with `read_process` and
     comes back as a real tool result."""
-    assert [s.value for s in Source] == ["person", "harness", "watch"]
+    assert [s.value for s in Source] == ["person", "harness", "monitor"]
 
 
 def test_a_notice_points_at_the_call_that_started_it() -> None:

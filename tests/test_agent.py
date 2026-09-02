@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from conftest import Broken, ScriptedModel, calls
-from harness.agent import Agent, build, default_registry
-from harness.approval import Approvals, Policy, deny_all
+from conftest import Broken, ScriptedModel, calls, says
+from harness.agent import Agent, new_agent
+from harness.agent.approval import Approvals, Policy, deny_all
 from harness.providers.base import ProviderError
 from harness.store import MemoryStore
+from harness.tools.kit import Toolkit
 from harness.types import Message, Role
-from harness.workspace import Workspace
 
 
 @pytest.fixture
@@ -26,10 +26,13 @@ def folder(tmp_path: Path) -> Path:
 
 
 def agent_over(folder: Path, model, **kw) -> Agent:
-    return Agent(
-        workspace=Workspace.at(folder),
-        provider=model,
-        registry=default_registry()[0],
+    kit = Toolkit()
+    return new_agent(
+        folder,
+        model,
+        tools=kit.tools(),
+        modes=kit.modes,
+        inbox=kit.inbox,
         approvals=kw.pop("approvals", Approvals(policy=Policy(approve_everything=True))),
         **kw,
     )
@@ -208,32 +211,55 @@ async def test_a_run_without_a_store_takes_the_same_path(folder: Path) -> None:
 # --- the built defaults -------------------------------------------------------------------
 
 
-def test_build_protects_the_thread_directory_when_it_is_inside_the_folder(
+REWRITE = calls(
+    ("c1", "write_file", {"path": ".harness/threads/t/transcript.jsonl", "content": ""})
+)
+
+
+async def test_new_agent_refuses_to_rewrite_the_harness_directory_inside_the_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A run that can rewrite the record of what it did makes every other record
-    unreliable."""
+    unreliable. Tested through the tool rather than by reading a field off the agent,
+    because the agent no longer has fields -- and the refusal is the property anyway."""
     home = tmp_path / "home"
     (home / ".harness" / "threads").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    model = ScriptedModel(REWRITE, says("x"))
+    agent = new_agent(
+        home, model, approvals=Approvals(policy=Policy(approve_everything=True))
+    )
 
-    agent = build(home, ScriptedModel(Message(Role.ASSISTANT, "x")))
+    outcome = await agent.run("rewrite the record")
+    await agent.aclose()
 
-    assert agent.workspace.protected == ((home / ".harness" / "threads").resolve(),)
+    result = outcome.transcript.messages[-2]
+    assert result.role is Role.TOOL
+    assert result.content.startswith("refusing to write")
+    assert not (home / ".harness" / "threads" / "t").exists()
 
 
-def test_build_protects_nothing_when_threads_live_elsewhere(
+async def test_new_agent_protects_nothing_when_the_harness_lives_elsewhere(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The same path under a different root is an ordinary path."""
     home = tmp_path / "home"
     (home / ".harness" / "threads").mkdir(parents=True)
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    model = ScriptedModel(REWRITE, says("x"))
+    agent = new_agent(
+        project, model, approvals=Approvals(policy=Policy(approve_everything=True))
+    )
 
-    agent = build(project, ScriptedModel(Message(Role.ASSISTANT, "x")))
+    outcome = await agent.run("write it")
+    await agent.aclose()
 
-    assert agent.workspace.protected == ()
+    result = outcome.transcript.messages[-2]
+    assert result.role is Role.TOOL
+    assert result.content.startswith("wrote")
+    assert (project / ".harness" / "threads" / "t" / "transcript.jsonl").exists()
 
 
 def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
@@ -247,10 +273,9 @@ def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
     """
     import re
 
-    from harness.agent import SYSTEM_PROMPT, default_registry
+    from harness.agent import SYSTEM_PROMPT
 
-    registry, _plan, _modes = default_registry()
-    registered = set(registry.names())
+    registered = {tool.spec.name for tool in Toolkit().tools()}
     # Tool-shaped words: the naming convention every tool here follows.
     named = {
         word

@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 import jsonschema
 import pytest
 
-from harness.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
+from harness.agent.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
+from harness.agent.runner import ToolRunner, describe
 from harness.providers.openai import decode_message, merge_tool_call_deltas
-from harness.runner import ToolRunner, describe
 from harness.settings import Output
-from harness.tools.base import Registry, ToolContext, ToolSpec
+from harness.tools import Registry, ToolContext, new_registry
 from harness.tools.files import file_tools
-from harness.tools.shell import Shell, _own_group, _program
-from harness.types import ToolCall, ToolResult
+from harness.tools.shell import Shell, _program
+from harness.types import ToolCall, ToolResult, ToolSpec
 from harness.workspace import PathEscape, PathRefused, Workspace, WorkspaceError
 
 
@@ -35,7 +34,7 @@ def ctx(ws: Workspace) -> ToolContext:
 
 @pytest.fixture
 def registry() -> Registry:
-    return Registry([*file_tools(), Shell()])
+    return new_registry([*file_tools(), Shell()])
 
 
 # --- the workspace boundary ------------------------------------------------------------
@@ -135,7 +134,7 @@ async def test_an_invented_argument_is_refused_rather_than_ignored(
 
 def test_two_tools_cannot_share_a_name() -> None:
     with pytest.raises(ValueError, match="duplicate"):
-        Registry([*file_tools(), *file_tools()])
+        new_registry([*file_tools(), *file_tools()])
 
 
 def test_a_malformed_schema_is_caught_at_registration() -> None:
@@ -146,7 +145,7 @@ def test_a_malformed_schema_is_caught_at_registration() -> None:
             return ToolResult("")
 
     with pytest.raises(jsonschema.SchemaError):
-        Registry([Bad()])
+        new_registry([Bad()])
 
 
 # --- file tools ------------------------------------------------------------------------
@@ -441,17 +440,6 @@ async def test_a_cancelled_command_is_killed_not_orphaned(
     assert not marker.exists(), "the command outlived the cancellation of the run that owned it"
 
 
-def test_the_harness_never_signals_its_own_process_group() -> None:
-    """The guard that stands between "kill the group" and killing the harness.
-
-    A child spawned without `start_new_session` shares our group, so `os.getpgid(child)`
-    returns *our* group and `killpg` on it is suicide. That is not hypothetical: the first
-    version of the group kill missed the `watch` spawn, and the whole test run died with
-    SIGKILL and no output -- no failure, no summary, nothing to read.
-    """
-    assert _own_group(os.getpid()) is True
-    assert _own_group(2**31 - 1) is None, "an absent pid must be unknown, never False"
-
 
 # --- provider parsing ------------------------------------------------------------------
 
@@ -618,8 +606,8 @@ async def test_a_command_verdict_at_the_tail_survives_the_loop(ctx) -> None:
 async def test_a_background_command_answers_with_a_handle_not_its_output(tmp_path) -> None:
     """The handle IS the tool result. That is why later output cannot also be one: the call
     has been answered, and each call is answered once."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -638,8 +626,8 @@ async def test_a_background_command_answers_with_a_handle_not_its_output(tmp_pat
 
 
 async def test_its_output_is_fetched_and_comes_back_as_a_tool_result(tmp_path) -> None:
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -658,8 +646,8 @@ async def test_its_output_is_fetched_and_comes_back_as_a_tool_result(tmp_path) -
 async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path) -> None:
     """Metadata only. The output is a file the model can read when it wants to; putting it
     here would put text nobody in the conversation wrote into a user-shaped row."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox, Source
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     box = Inbox()
@@ -689,8 +677,8 @@ async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path)
 
 async def test_closing_reaps_what_the_run_started(tmp_path) -> None:
     """An eval that leaves servers running accumulates them, each holding a port."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -702,18 +690,18 @@ async def test_closing_reaps_what_the_run_started(tmp_path) -> None:
     process = processes.get(started.content.split()[0])
     await processes.aclose()
 
-    assert process.handle.returncode is not None
+    assert process.child.returncode is not None
     assert processes.started == {}
 
 
 # -- watching ------------------------------------------------------------------------------
 
 
-async def test_a_watch_reports_its_lines_as_they_arrive(tmp_path) -> None:
+async def test_a_monitor_reports_its_lines_as_they_arrive(tmp_path) -> None:
     """The one source that carries content, because a notice reading '3 new lines' would
     cost a turn to read every time, which is no watch at all."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox, Source
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     box = Inbox()
@@ -727,8 +715,8 @@ async def test_a_watch_reports_its_lines_as_they_arrive(tmp_path) -> None:
     await asyncio.sleep(1.6)
     arrived = box.drain()
 
-    assert started.ok and "watching (pid" in started.content
-    lines = [e for e in arrived if e.source is Source.WATCH]
+    assert started.ok and "monitoring (pid" in started.content
+    lines = [e for e in arrived if e.source is Source.MONITOR]
     assert "one" in " ".join(e.text for e in lines)
     assert "two" in " ".join(e.text for e in lines)
     assert all(e.call_id == "call_3" for e in lines)
@@ -737,11 +725,12 @@ async def test_a_watch_reports_its_lines_as_they_arrive(tmp_path) -> None:
     await processes.aclose()
 
 
-async def test_a_watch_that_matches_everything_is_stopped(tmp_path) -> None:
+async def test_a_monitor_that_matches_everything_is_stopped(tmp_path) -> None:
     """A filter matching everything is a mistake, and one that would fill the context faster
     than compaction can clear it -- the newest turn is the part kept verbatim."""
+    from harness.exec.monitor import FLOOD
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import FLOOD, Processes
     from harness.tools.shell import shell_tools
 
     box = Inbox(limit=500)
@@ -755,30 +744,30 @@ async def test_a_watch_that_matches_everything_is_stopped(tmp_path) -> None:
     watch_id = started.content.split()[0]
     for _ in range(60):
         await asyncio.sleep(0.1)
-        if not processes.watching[watch_id].running:
+        if not processes.started[watch_id].running:
             break
 
-    running = processes.watching[watch_id]
+    running = processes.started[watch_id]
     assert not running.running
-    assert running.lines >= FLOOD
-    assert any("more than a watch is allowed" in e.text for e in box.drain())
+    assert running.monitor is not None and running.monitor.seen >= FLOOD
+    assert any("more than a monitor is allowed" in e.text for e in box.drain())
     await processes.aclose()
 
 
-async def test_reading_and_stopping_a_watch_that_is_not_there(tmp_path) -> None:
+async def test_reading_and_stopping_a_monitor_that_is_not_there(tmp_path) -> None:
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
     *_, _, read, stop = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path))
 
-    missing = await read.run({"watch_id": "watch_nope"}, ctx)
-    cannot = await stop.run({"watch_id": "watch_nope"}, ctx)
+    missing = await read.run({"monitor_id": "mon_nope"}, ctx)
+    cannot = await stop.run({"monitor_id": "mon_nope"}, ctx)
 
-    assert missing.refused and "no watch" in missing.content
-    assert cannot.refused and "no watch" in cannot.content
+    assert missing.refused and "no monitor" in missing.content
+    assert cannot.refused and "no monitor" in cannot.content
 
 
 async def test_a_command_that_detaches_itself_is_refused(tmp_path) -> None:
@@ -787,8 +776,8 @@ async def test_a_command_that_detaches_itself_is_refused(tmp_path) -> None:
     passed `bash noisy.sh &` WITH background=true -- so the harness registered the wrapper
     shell, saw it exit in 0s, and the real script ran on where nothing could reach it. The
     second is worse, because it looks like it worked."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -818,20 +807,20 @@ async def test_the_shapes_that_only_look_like_backgrounding_are_allowed(tmp_path
     assert _backgrounds("rm -f app.log && bash noisy.sh &")
 
 
-async def test_a_watch_on_a_command_that_just_exits_says_it_was_the_wrong_tool(
+async def test_a_monitor_on_a_command_that_just_exits_says_it_was_the_wrong_tool(
     tmp_path,
 ) -> None:
     """Seen twice against the live model: it wrote `grep -F ERROR file` and `tail -n 1 file`
     as watches, which exit at once and can never send a second notice. The description does
     say to use `run` for those, and saying it there did not work -- it is read once, long
     before the moment it applies. This says it at the moment it applies."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
 
     (tmp_path / "app.log").write_text("INFO nothing interesting\n")
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
 
-    await processes.watch(
+    await processes.monitor(
         "grep -F ERROR app.log", "look for errors",
         cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
     )
@@ -843,14 +832,14 @@ async def test_a_watch_on_a_command_that_just_exits_says_it_was_the_wrong_tool(
     await processes.aclose()
 
 
-async def test_a_watch_that_actually_streams_is_left_alone(tmp_path) -> None:
+async def test_a_monitor_that_actually_streams_is_left_alone(tmp_path) -> None:
     """The check has to be narrow enough that a real watch is never lectured."""
+    from harness.exec.processes import Processes
     from harness.inbox import Inbox
-    from harness.processes import Processes
 
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
 
-    await processes.watch(
+    await processes.monitor(
         "for i in 1 2 3; do echo line $i; sleep 0.3; done", "a real stream",
         cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
     )

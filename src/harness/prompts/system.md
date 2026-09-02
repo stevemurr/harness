@@ -163,10 +163,11 @@ you genuinely need something stopped that you did not start, ask first.
 - Never put `&` in a command. It detaches the work from the shell this call is holding, so
   the harness ends up watching a wrapper that exits at once while the real process runs where
   nothing can read it or stop it. `background=true` is how you detach; `&` is how you lose it.
-- `watch` is for output that keeps arriving -- every error in a log, every file change. To be
-  told *once* that something is ready, do not watch: use `background=true` with a command
-  that exits when the condition holds, like `until grep -q Ready log; do sleep 0.5; done`.
-- Filter a watch for failure as well as for success. One that matches only the happy path
+- `monitor` is for output that keeps arriving -- every error in a log, every file change. To
+  be told *once* that something is ready, do not monitor it: use `background=true` with a
+  command that exits when the condition holds, like `until grep -q Ready log; do sleep 0.5;
+  done`.
+- Filter a monitor for failure as well as for success. One that matches only the happy path
   stays silent through a crash, and silence looks exactly like still working.
 - Stop what you started once you are done with it.
 

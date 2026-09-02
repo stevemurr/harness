@@ -17,17 +17,17 @@ from pathlib import Path
 
 import pytest
 
-from harness.agent import Agent, default_registry
-from harness.approval import Approvals, Policy
-from harness.compaction import MODE_NOTES, Meter, State, anchor_for, digest, view
-from harness.conversations import _ending
+from harness.agent import Agent, new_agent
+from harness.agent.approval import Approvals, Policy
+from harness.agent.compaction import MODE_NOTES, Meter, State, anchor_for, digest, view
+from harness.agent.loop import system, user
 from harness.inbox import Envelope, Source, render
-from harness.loop import system, user
 from harness.providers.base import Completion, ProviderError
+from harness.server.conversations import _ending
 from harness.settings import Compaction, Settings
 from harness.store import JsonlStore, MemoryStore
+from harness.tools.kit import Toolkit
 from harness.types import Message, Role, StopReason, ToolCall, Transcript
-from harness.workspace import Workspace
 
 
 class Model:
@@ -115,14 +115,14 @@ def reads(call_id: str | None = None) -> Message:
 
 
 def agent_over(folder: Path, model, **kw) -> Agent:
-    registry, plan, modes = default_registry()
-    return Agent(
-        workspace=Workspace.at(folder),
-        provider=model,
-        registry=registry,
+    kit = Toolkit()
+    return new_agent(
+        folder,
+        model,
+        tools=kit.tools(),
+        modes=kit.modes,
+        inbox=kit.inbox,
         approvals=Approvals(policy=Policy(approve_everything=True)),
-        plan=plan,
-        modes=modes,
         **kw,
     )
 
@@ -671,7 +671,7 @@ def test_a_watch_s_output_is_not_pinned() -> None:
     future boundary is how a run that compacted to make room ends up larger than it was
     before it compacted.
     """
-    noise = render(Envelope(Source.WATCH, "connection reset by peer", sender="proc_a1"))
+    noise = render(Envelope(Source.MONITOR, "connection reset by peer", sender="proc_a1"))
     messages = [system("s"), user("do it"), noise, *history()[2:]]
 
     rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))

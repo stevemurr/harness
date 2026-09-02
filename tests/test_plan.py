@@ -12,10 +12,11 @@ from pathlib import Path
 import pytest
 
 from conftest import ScriptedModel
-from harness.agent import Agent, default_registry
-from harness.approval import Approvals, Policy
+from harness.agent import Agent, new_agent
+from harness.agent.approval import Approvals, Policy
 from harness.plan import Plan, Status, Step
-from harness.tools.base import Registry, ToolContext
+from harness.tools import Registry, ToolContext, new_registry
+from harness.tools.kit import Toolkit
 from harness.tools.plan import plan_tools
 from harness.types import Message, Role, ToolCall
 from harness.workspace import Workspace
@@ -28,8 +29,8 @@ def ctx(tmp_path: Path) -> ToolContext:
 
 @pytest.fixture
 def kit(ctx: ToolContext):
-    tools, plan = plan_tools()
-    return Registry(tools), plan, ctx
+    plan = Plan()
+    return new_registry(plan_tools(plan)), plan, ctx
 
 
 async def call(registry: Registry, ctx: ToolContext, **args):
@@ -143,14 +144,14 @@ async def test_a_run_ends_identically_whether_a_plan_was_written_or_not(
     """THE property. Nothing in the loop reads the plan, so it cannot change an outcome."""
 
     def agent_for(*replies: Message) -> Agent:
-        registry, plan, modes = default_registry()
-        return Agent(
-            workspace=Workspace.at(tmp_path),
-            provider=ScriptedModel(*replies),
-            registry=registry,
+        kit = Toolkit()
+        return new_agent(
+            tmp_path,
+            ScriptedModel(*replies),
+            tools=kit.tools(),
+            modes=kit.modes,
+            inbox=kit.inbox,
             approvals=Approvals(policy=Policy(approve_everything=True)),
-            plan=plan,
-            modes=modes,
         )
 
     without = await agent_for(Message(Role.ASSISTANT, "done")).run("do it")

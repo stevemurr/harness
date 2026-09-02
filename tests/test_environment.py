@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness.environment import describe
+from harness.agent.environment import describe
 
 
 def test_it_names_the_actual_folder(tmp_path: Path) -> None:

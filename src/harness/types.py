@@ -13,6 +13,7 @@ the simple thing instead, and `--resume` is transcript replay in both.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
@@ -38,8 +39,14 @@ class Role(StrEnum):
 class Source(StrEnum):
     """Who an arrival is from, which decides how much weight it should carry.
 
-    Two, and deliberately not three. There was a `PROCESS` source here that carried a
-    watched process's *output*, and it was wrong: see the module note on attribution.
+    Three, and deliberately not four. There was a `PROCESS` source here that carried a
+    background process's *output*, and it was wrong: see the module note on attribution.
+    `MONITOR` is the one that may carry content, and it earns that by being asked for --
+    the model wrote the filter and said to be told.
+
+    (This said "two, and deliberately not three" until 2026-09-01, having been written
+    before `WATCH` was added and never updated. A docstring counting its own members is a
+    tally, and this repository's own method note says to assert properties instead.)
     """
 
     #: A person, typing while the run was working. The one case where the `user` slot on
@@ -48,13 +55,13 @@ class Source(StrEnum):
     #: The harness, reporting something that happened: a background command ended, a watch
     #: was stopped. **Metadata only** -- never what a process printed.
     HARNESS = "harness"
-    #: Lines from something the model asked to watch. This one *does* carry content, and
-    #: the rule above bends here for a reason rather than by accident: a watch whose notice
-    #: says only "3 new lines" costs a turn to read every time, which is no watch at all.
-    #: The model chose the filter and asked to be told, and the injection risk is the same
-    #: whether the text arrives here or as the result of `read_watch` -- only the attribution
-    #: differs. So the framing carries it, the way `open_url` fences a fetched page.
-    WATCH = "watch"
+    #: Lines from a process the model asked to be read. This one *does* carry content, and
+    #: the rule above bends here for a reason rather than by accident: a notice saying only
+    #: "3 new lines" costs a turn to read every time, which is no monitor at all. The model
+    #: chose the filter and asked to be told, and the injection risk is the same whether the
+    #: text arrives here or as the result of `read_monitor` -- only the attribution differs. So
+    #: the framing carries it, the way `open_url` fences a fetched page.
+    MONITOR = "monitor"
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
@@ -95,7 +102,7 @@ class Message:
     #: enough for the harness: `compaction.view` keeps a person's words across a boundary
     #: and lets a watch's output go, and telling those apart by matching the framing string
     #: would make that wording load-bearing in a second place -- editable in `inbox.py`,
-    #: silently breaking something in `compaction.py`.
+    #: silently breaking something in `agent/compaction.py`.
     source: Source | None = None
 
 
@@ -134,7 +141,7 @@ class ToolResult:
         """Cut to `limit` characters, keeping both ends.
 
         Head-only was the first shape, and it drops exactly the line that matters most
-        often. `loop.py` justifies truncating by saying the signal is at the head -- an
+        often. `agent/loop.py` justifies truncating by saying the signal is at the head -- an
         error, the first failing test -- and that is true of a stack trace and false of a
         test run. `pytest` puts "5 failed, 200 passed" at the *end*, `go test` puts `FAIL`
         there, a compiler puts its error count there. Cutting the tail off a 30k-character
@@ -237,3 +244,21 @@ class StopReason:
     @property
     def ok(self) -> bool:
         return self.kind == "done"
+
+
+def parse_arguments(raw: str) -> dict:
+    """Provider tool arguments, which arrive as a JSON string and are not always valid.
+
+    Here rather than in the loop because it is about the wire shape of a call, and the
+    provider that decodes the wire should not have to import the loop to do it.
+
+    A model that emits malformed JSON should see that as a tool failure it can retry, not
+    as a crash in the harness, so this never raises.
+    """
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

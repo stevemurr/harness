@@ -1,7 +1,7 @@
 """The tool contract.
 
-Adding a tool is: write one class with a `spec` and a `run`, and register it. Nothing else
-in the harness changes -- not the loop, not the provider client, not a dispatch table
+Adding a tool is: write one class with a `spec` and a `run`, and list it in `kit.py`. Nothing
+else in the harness changes -- not the loop, not the provider client, not a dispatch table
 somewhere else that has to learn the new name.
 
 Two things are deliberately taken away from tool authors, because they are the two that
@@ -22,6 +22,7 @@ is the only way to turn a caller's string into a real path.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -72,25 +73,52 @@ def schema(
     }
 
 
-class Registry:
-    """The tools one run may call, and the only thing that dispatches to them."""
+@runtime_checkable
+class Registry(Protocol):
+    """The tools one run may call, and the only thing that dispatches to them.
 
-    def __init__(self, tools: list[Tool] | None = None) -> None:
-        self._tools: dict[str, Tool] = {}
-        for tool in tools or []:
-            self.register(tool)
-
-    def register(self, tool: Tool) -> None:
-        name = tool.spec.name
-        if name in self._tools:
-            # Two tools under one name means the model's choice is decided by registration
-            # order, which is not a thing anyone should have to know.
-            raise ValueError(f"duplicate tool name: {name}")
-        jsonschema.Draft202012Validator.check_schema(tool.spec.parameters)
-        self._tools[name] = tool
+    A protocol for the same reason `Tool`, `Provider` and `Store` are: it is a contract the
+    loop side depends on, and the contracts are the surface. `new_registry` is the only
+    implementation and nothing needs a second one; the protocol says what a second one
+    would owe.
+    """
 
     def specs(self) -> tuple[ToolSpec, ...]:
         """The tools, in harness terms. Each provider renders these its own way."""
+        ...
+
+    def names(self) -> tuple[str, ...]: ...
+
+    def get(self, name: str) -> Tool | None: ...
+
+    async def run(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        """Dispatch one call. Never raises for anything the model can cause."""
+        ...
+
+
+def new_registry(tools: Iterable[Tool]) -> Registry:
+    """A registry over exactly these tools.
+
+    Every schema is checked and every name must be unique, here and not later: a tool the
+    model cannot call correctly, or two tools whose choice is decided by registration
+    order, are defects of the assembly and should fail where the assembly happens.
+    """
+    return _Registry(tools)
+
+
+class _Registry:
+    def __init__(self, tools: Iterable[Tool]) -> None:
+        self._tools: dict[str, Tool] = {}
+        for tool in tools:
+            name = tool.spec.name
+            if name in self._tools:
+                # Two tools under one name means the model's choice is decided by
+                # registration order, which is not a thing anyone should have to know.
+                raise ValueError(f"duplicate tool name: {name}")
+            jsonschema.Draft202012Validator.check_schema(tool.spec.parameters)
+            self._tools[name] = tool
+
+    def specs(self) -> tuple[ToolSpec, ...]:
         return tuple(tool.spec for tool in self._tools.values())
 
     def names(self) -> tuple[str, ...]:
@@ -100,11 +128,9 @@ class Registry:
         return self._tools.get(name)
 
     async def run(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
-        """Dispatch one call. Never raises for anything the model can cause.
-
-        An unknown name, a bad argument and a tool that throws are all things a model can
-        provoke, and all three have to come back as text it can act on. Only a bug in the
-        harness itself should escape, and the loop catches that too.
+        """An unknown name, a bad argument and a tool that throws are all things a model
+        can provoke, and all three have to come back as text it can act on. Only a bug in
+        the harness itself should escape, and the loop catches that too.
         """
         tool = self._tools.get(call.name)
         if tool is None:

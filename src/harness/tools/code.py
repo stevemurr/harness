@@ -220,12 +220,12 @@ def _broken(exc: CodeIndexError) -> ToolResult:
     return ToolResult(str(exc), ok=False)
 
 
-def code_tools(indexes: Indexes | None = None) -> tuple[list[Any], Indexes]:
-    """The code tools and the indexes they share.
+def code_tools(indexes: Indexes) -> list[Any]:
+    """The code tools, over the indexes the caller holds.
 
-    Returned rather than reached for, the same shape as `plan_tools`: the indexes are held
+    Passed in rather than reached for, the same shape as `plan_tools`: the indexes are held
     by the tools that use them, because `ToolContext` is `paths` and nothing else, and a
-    context that grew a field per stateful tool would hand every tool everything.
+    context that grew a field per stateful tool would hand every tool everything. The
+    caller holds them because the caller is who has to close them -- see `tools/kit.py`.
     """
-    indexes = indexes or Indexes()
-    return [FindDefinition(indexes), FindReferences(indexes)], indexes
+    return [FindDefinition(indexes), FindReferences(indexes)]

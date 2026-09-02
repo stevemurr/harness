@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from harness.events import EventLog, Visibility
+from harness.server.events import EventLog, Visibility
 
 
 def test_sequences_start_at_one_and_never_repeat() -> None:

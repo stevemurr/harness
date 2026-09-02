@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness.approval import Approvals, Policy
-from harness.loop import AgentLoop, Turn, parse_arguments, share, system, user
+from harness.agent.approval import Approvals, Policy
+from harness.agent.loop import AgentLoop, Turn, share, system, user
 from harness.settings import Limits, Output
-from harness.types import Message, Role, ToolCall, ToolResult, Transcript
+from harness.types import Message, Role, ToolCall, ToolResult, Transcript, parse_arguments
 
 OUT = Output()
 
@@ -339,13 +339,13 @@ async def test_an_identical_refused_call_is_told_it_is_repeating(tmp_path: Path)
     resolved outside the workspace, and made the identical call 34 times until the refusal
     cap ended it -- 56 turns, no edits, 0/45. It had already read the reason; what it never
     learned was that it was repeating itself."""
-    from harness.runner import ToolRunner
-    from harness.tools.base import Registry, ToolContext
+    from harness.agent.runner import ToolRunner
+    from harness.tools import ToolContext, new_registry
     from harness.tools.files import file_tools
     from harness.workspace import Workspace
 
     runner = ToolRunner(
-        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
             policy=Policy(approve_everything=True)
         )
     )
@@ -361,14 +361,14 @@ async def test_an_identical_refused_call_is_told_it_is_repeating(tmp_path: Path)
 
 
 async def test_a_different_call_is_not_caught_by_it(tmp_path: Path) -> None:
-    from harness.runner import ToolRunner
-    from harness.tools.base import Registry, ToolContext
+    from harness.agent.runner import ToolRunner
+    from harness.tools import ToolContext, new_registry
     from harness.tools.files import file_tools
     from harness.workspace import Workspace
 
     (tmp_path / "here.txt").write_text("fine")
     runner = ToolRunner(
-        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
             policy=Policy(approve_everything=True)
         )
     )
@@ -383,14 +383,14 @@ async def test_a_different_call_is_not_caught_by_it(tmp_path: Path) -> None:
 async def test_a_successful_call_may_be_repeated(tmp_path: Path) -> None:
     """Never remembered, on purpose. After a compaction the result is gone from the context
     and re-reading the same file is the correct recovery, not a loop."""
-    from harness.runner import ToolRunner
-    from harness.tools.base import Registry, ToolContext
+    from harness.agent.runner import ToolRunner
+    from harness.tools import ToolContext, new_registry
     from harness.tools.files import file_tools
     from harness.workspace import Workspace
 
     (tmp_path / "here.txt").write_text("fine")
     runner = ToolRunner(
-        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
+        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
             policy=Policy(approve_everything=True)
         )
     )
@@ -403,15 +403,15 @@ async def test_a_successful_call_may_be_repeated(tmp_path: Path) -> None:
 async def test_leaving_plan_mode_lets_a_withheld_call_through(tmp_path: Path) -> None:
     """The one refusal that changes on its own: a tool withheld in plan mode becomes
     available the moment a plan is approved, so the mode is part of the key."""
+    from harness.agent.runner import ToolRunner
     from harness.mode import PLAN, ModeState
-    from harness.runner import ToolRunner
-    from harness.tools.base import Registry, ToolContext
+    from harness.tools import ToolContext, new_registry
     from harness.tools.files import file_tools
     from harness.workspace import Workspace
 
     modes = ModeState(current=PLAN)
     runner = ToolRunner(
-        Registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)),
+        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)),
         Approvals(policy=Policy(approve_everything=True)), modes=modes,
     )
     write = {"path": "new.txt", "content": "x"}

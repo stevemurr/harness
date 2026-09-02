@@ -9,7 +9,10 @@ those.
 from __future__ import annotations
 
 import importlib.util
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -61,3 +64,35 @@ def test_silent_check_still_names_the_command(tmp_path: Path) -> None:
     passed, why = _runner().verify(rung, tmp_path / "work")
     assert not passed
     assert 'test "1" = "2"' in why
+
+
+@pytest.mark.skipif(not Path("/bin/bash").exists(), reason="needs bash for the ERR trap")
+def test_a_check_that_overruns_takes_its_children_with_it(tmp_path: Path) -> None:
+    """A timed-out check must not leave the thing it started running.
+
+    `subprocess.run(..., timeout=)` kills the shell it spawned and then waits for that one
+    process. On POSIX it never touches what the shell started, so a `verify.sh` that
+    backgrounds a server leaves the server holding its port after the timeout.
+
+    Found live on 2026-09-01: `07-service/code.3` timed out, its server survived with
+    `PPID=1`, and the next attempt failed `test "$(curl -sf .../health)" = "ok"` with
+    `OSError: [Errno 48] Address already in use` -- a red row that measured nothing about
+    the model. Same defect, and the same fix, as `shell._terminate` in the harness.
+    """
+    rung = _rung(tmp_path, "#!/bin/sh\nset -eu\nsleep 30 &\necho $! > child.pid\nwait\n")
+    work = tmp_path / "work"
+
+    passed, why = _runner().verify(rung, work, timeout=1)
+
+    assert not passed
+    assert "timed out" in why
+    child = int((work / "child.pid").read_text().strip())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    os.kill(child, signal.SIGKILL)
+    raise AssertionError("the check's child outlived the timeout that killed its shell")

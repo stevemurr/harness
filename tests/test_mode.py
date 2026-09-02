@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 
 from conftest import ScriptedModel, calls
-from harness.agent import Agent, build, default_registry
-from harness.approval import Approvals, Decision, Policy, Request, deny_all
+from harness.agent import Agent, new_agent
+from harness.agent.approval import Approvals, Decision, Policy, Request, deny_all
 from harness.mode import NORMAL, PLAN, Mode, ModeState
+from harness.tools.kit import Toolkit
 from harness.types import Message, Role
-from harness.workspace import Workspace
 
 
 @pytest.fixture
@@ -26,15 +26,14 @@ def folder(tmp_path: Path) -> Path:
 
 
 def agent_over(folder: Path, model, *, mode: Mode = NORMAL, approvals=None) -> Agent:
-    modes = ModeState(current=mode)
-    registry, plan, modes = default_registry(modes=modes)
-    return Agent(
-        workspace=Workspace.at(folder),
-        provider=model,
-        registry=registry,
+    kit = Toolkit(modes=ModeState(current=mode))
+    return new_agent(
+        folder,
+        model,
+        tools=kit.tools(),
+        modes=kit.modes,
+        inbox=kit.inbox,
         approvals=approvals or Approvals(policy=Policy(approve_everything=True)),
-        plan=plan,
-        modes=modes,
     )
 
 
@@ -122,12 +121,20 @@ async def test_the_checklist_is_available_in_plan_mode(folder: Path) -> None:
         )),
         Message(Role.ASSISTANT, "still looking"),
     )
-    agent = agent_over(folder, model, mode=PLAN)
+    kit = Toolkit(modes=ModeState(current=PLAN))
+    agent = new_agent(
+        folder,
+        model,
+        tools=kit.tools(),
+        modes=kit.modes,
+        inbox=kit.inbox,
+        approvals=Approvals(policy=Policy(approve_everything=True)),
+    )
 
     outcome = await agent.run("how would you fix this?")
 
     assert "update_plan" in model.tools_offered[0]
-    assert [s.text for s in agent.plan.steps] == ["read the parser"]
+    assert [s.text for s in kit.plan.steps] == ["read the parser"]
     assert agent.modes.planning
     assert outcome.stop.ok
 
@@ -277,7 +284,13 @@ def test_a_mode_is_two_fields_and_a_name() -> None:
     assert NORMAL.prompt == ""
 
 
-def test_build_starts_in_the_mode_it_was_given(tmp_path: Path) -> None:
-    agent = build(tmp_path, ScriptedModel(Message(Role.ASSISTANT, "x")), mode=PLAN)
+async def test_new_agent_starts_in_the_mode_it_was_given(tmp_path: Path) -> None:
+    """Observed from outside: a plan-mode agent does not offer the writing tools."""
+    model = ScriptedModel(Message(Role.ASSISTANT, "x"))
+    agent = new_agent(tmp_path, model, modes=ModeState(current=PLAN))
 
-    assert agent.modes.planning
+    await agent.run("look around")
+    await agent.aclose()
+
+    assert "write_file" not in model.tools_offered[0]
+    assert "read_file" in model.tools_offered[0]

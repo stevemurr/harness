@@ -48,7 +48,7 @@ def known() -> tuple[type[CodeIndex], ...]:
     """Every language the harness can index.
 
     The one list, and the one line adding a language adds outside its own file -- the same
-    shape as `default_registry` naming its tools. Imported here rather than at module scope
+    shape as `Toolkit.tools` naming its tools. Imported here rather than at module scope
     so `settings` and `base` stay free of language imports.
     """
     from harness.code.gopls import Gopls

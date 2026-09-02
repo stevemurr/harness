@@ -1,0 +1,240 @@
+  /* The palette and the transcript rules are watch.html's, deliberately copied rather than
+     shared: a shared asset is a second URL, and a route that does not exist yet would take
+     the live watch page down with it. Consolidate when nothing is mid-run. */
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8; --fg: #1c1b19; --dim: #6b6862; --rule: #e2ded7;
+    --card: #fff; --ok: #2f7d4f; --bad: #a83232; --warn: #9a6b1f;
+    --accent: #3a5f8a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17161a; --fg: #e8e6e3; --dim: #8b8781; --rule: #2c2a30;
+            --card: #1e1d22; --ok: #6cc08a; --bad: #e08585; --warn: #d3a44a;
+            --accent: #8fb3dd; }
+  }
+  * { box-sizing: border-box }
+  html { overflow: hidden }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+         display: flex; flex-direction: column;
+         position: fixed; top: 0; left: 0; right: 0;
+         height: var(--screen, 100dvh);
+         overflow: hidden; overscroll-behavior: none }
+  header { flex: none; background: var(--bg);
+           border-bottom: 1px solid var(--rule); padding: .8rem 1.2rem;
+           display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap }
+  h1 { font-size: .95rem; margin: 0; font-weight: 600; letter-spacing: .02em }
+  .meta { color: var(--dim); font-size: .82rem }
+  .pill { border: 1px solid var(--rule); border-radius: 999px; padding: .1rem .6rem; font-size: .78rem }
+  .grow { flex: 1 }
+  #who { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  /* `min-height: 0` is what lets a flex child actually scroll instead of growing the page. */
+  /* Full width, everything. The 62rem cap left a third of a large screen empty, and what is
+     on screen here -- ellipsised tool arguments, code blocks and tables that scroll inside
+     themselves -- all reads better with room. Prose runs long on a wide monitor, which is
+     the usual argument for a measure; the call here is that filling the window matters more
+     than the line length, so there is no cap on anything. */
+  main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+         padding: 1rem 1.2rem 2rem }
+  .turn { border-left: 2px solid var(--rule); padding: .1rem 0 .1rem .9rem; margin: 0 0 1.1rem }
+  .turn > .n { color: var(--dim); font-size: .78rem; letter-spacing: .04em }
+  .turn.arrived { border-left-color: var(--accent) }
+  .turn.arrived > .say, .turn.arrived > .md { color: var(--dim) }
+  .say { white-space: pre-wrap; margin: .35rem 0 .6rem; overflow-wrap: anywhere }
+
+  /* -- rendered prose -------------------------------------------------------------- */
+  .md { margin: .35rem 0 .6rem }
+  .md > :first-child { margin-top: 0 }
+  .md > :last-child { margin-bottom: 0 }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+    margin: .9rem 0 .35rem; font-weight: 600; line-height: 1.3 }
+  .md h1 { font-size: 1.1rem } .md h2 { font-size: 1rem } .md h3 { font-size: .94rem }
+  .md h4, .md h5, .md h6 { font-size: .9rem; color: var(--dim) }
+  /* pre-wrap, so a model that hard-wraps its own prose is shown as it wrote it rather
+     than reflowed -- markdown would collapse those breaks and lose the shape. */
+  .md p { margin: .5rem 0; white-space: pre-wrap; overflow-wrap: anywhere }
+  .md li, .md h1, .md h2, .md h3, .md h4 { overflow-wrap: anywhere }
+  .md ul, .md ol { margin: .5rem 0; padding-left: 1.5rem }
+  .md li { margin: .15rem 0 }
+  .md code { background: var(--card); border: 1px solid var(--rule); border-radius: 4px;
+             padding: 0 .25rem }
+  .md pre { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+            padding: .55rem .7rem; overflow-x: auto; margin: .55rem 0 }
+  .md pre code { background: none; border: 0; padding: 0 }
+  .md blockquote { margin: .55rem 0; padding-left: .8rem; color: var(--dim);
+                   border-left: 2px solid var(--rule) }
+  .md hr { border: 0; border-top: 1px solid var(--rule); margin: .9rem 0 }
+  /* `display: block` so a table wider than the column scrolls itself instead of stretching
+     the page -- an agent reporting per-file coverage writes wide ones. */
+  .md table { border-collapse: collapse; margin: .55rem 0; display: block; overflow-x: auto }
+  .md th, .md td { border: 1px solid var(--rule); padding: .25rem .5rem; text-align: left;
+                   white-space: nowrap }
+  .md th { background: var(--card); font-weight: 600 }
+  .md em { font-style: italic }
+  .tool { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+          padding: .4rem .65rem; margin: .3rem 0; display: flex; gap: .6rem; align-items: baseline }
+  .tool { cursor: pointer }
+  .tool:hover { border-color: var(--accent) }
+  .tool .name { font-weight: 600 }
+  .tool .arg { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 }
+  .mark { width: 1.1rem; flex: none }
+  .active .mark { color: var(--warn) } .completed .mark { color: var(--ok) } .failed .mark { color: var(--bad) }
+  .plan { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+          padding: .5rem .75rem; margin: .4rem 0 }
+  .plan div { display: flex; gap: .5rem }
+  .plan .done { color: var(--dim); text-decoration: line-through }
+  .plan .now { font-weight: 600 }
+  .compact { color: var(--accent); border-top: 1px dashed var(--accent);
+             border-bottom: 1px dashed var(--accent); padding: .4rem 0; margin: .8rem 0 }
+  a { color: var(--accent); text-decoration: none }
+
+  /* -- controls ------------------------------------------------------------------- */
+  button { font: inherit; color: var(--fg); background: var(--card);
+           border: 1px solid var(--rule); border-radius: 6px; padding: .25rem .7rem; cursor: pointer }
+  button:hover { border-color: var(--accent) }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg) }
+  button.danger { color: var(--bad) }
+  button:disabled { opacity: .45; cursor: default }
+  select { font: inherit; color: var(--dim); background: var(--bg);
+           border: 1px solid var(--rule); border-radius: 6px; padding: .15rem .3rem }
+  /* The mark, drawn the same on every page. It is a button on the console because it opens
+     the thread drawer, and a span elsewhere because nothing is behind it -- so they share
+     the whole box and differ only in hover, which `button:hover` gives to the one that is
+     actually clickable. */
+  #burger, #mark { padding: .3rem .45rem; line-height: 0; align-self: center;
+                   color: var(--fg); background: var(--card);
+                   border: 1px solid var(--rule); border-radius: 6px }
+  /* `currentColor`, so the colony inherits the button's colour and needs no dark-mode rule. */
+  #glider rect { fill: currentColor; transition: fill-opacity .16s linear }
+
+  /* -- the dock: everything that is not history ----------------------------------- */
+  #dock { flex: none; background: var(--bg); border-top: 1px solid var(--rule);
+          padding-bottom: env(safe-area-inset-bottom, 0px) }
+  #dock > * { padding: .55rem 1.2rem }
+  #composer { display: flex; gap: .6rem; align-items: flex-end }
+  #say { flex: 1; font: inherit; color: var(--fg); background: var(--card); resize: none;
+         border: 1px solid var(--rule); border-radius: 6px; padding: .45rem .6rem;
+         min-height: 2.4rem; max-height: 12rem }
+  #say:focus { outline: none; border-color: var(--accent) }
+  #composer button { height: 2.4rem }
+  #bar { display: flex; gap: .8rem; align-items: baseline; font-size: .82rem;
+         color: var(--dim); border-top: 1px solid var(--rule) }
+  #spin { color: var(--warn); display: inline-block; width: 1ch }
+  body.done #spin { color: var(--ok) }
+  #ctx.near { color: var(--warn) }
+  #ctx.over { color: var(--bad) }
+  #doing { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+  /* A card, like every other bordered thing on the page -- it was the one full-bleed
+     square-cornered panel in a UI made of inset rounded ones. */
+  #ask:empty { display: none }
+  .ask { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+         padding: .55rem .75rem; margin-bottom: .45rem }
+  .ask:last-child { margin-bottom: 0 }
+  .ask .head { display: flex; gap: .6rem; align-items: baseline }
+  .ask .title { font-weight: 600 }
+  .ask .why { color: var(--dim); font-size: .82rem; margin: .2rem 0 .5rem; white-space: pre-wrap }
+  .ask .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center }
+  .ask.high { border-color: var(--bad) }
+  .ask.high .title { color: var(--bad) }
+
+  /* -- drawer and picker ----------------------------------------------------------- */
+  #shade { position: fixed; inset: 0; background: #0006; z-index: 8;
+           opacity: 0; pointer-events: none; transition: opacity .18s ease }
+  #shade.on { opacity: 1; pointer-events: auto }
+  #drawer { position: fixed; top: 0; left: 0; height: var(--screen, 100dvh);
+            width: min(23rem, 85vw); z-index: 9;
+            background: var(--bg); border-right: 1px solid var(--rule);
+            transform: translateX(-100%); transition: transform .16s ease-out;
+            display: flex; flex-direction: column }
+  #drawer.on { transform: none }
+  #drawer h2 { font-size: .82rem; margin: 0; color: var(--dim); font-weight: 600;
+               letter-spacing: .04em; text-transform: uppercase }
+  #drawer .top { padding: max(.8rem, env(safe-area-inset-top)) 1rem .8rem;
+                 border-bottom: 1px solid var(--rule);
+                 display: flex; gap: .6rem; align-items: center }
+  #threads { flex: 1; min-height: 0; overflow-y: auto;
+             padding: .5rem .5rem calc(.5rem + env(safe-area-inset-bottom, 0px)) }
+  .project { color: var(--dim); font-size: .74rem; font-weight: 600; letter-spacing: .04em;
+             text-transform: uppercase; padding: .5rem .55rem .2rem;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  .project:not(:first-child) { border-top: 1px solid var(--rule); margin-top: .4rem }
+  .thread { display: block; width: 100%; text-align: left; border: 1px solid transparent;
+            background: none; border-radius: 6px; padding: .4rem .55rem; margin: .1rem 0 }
+  .thread:hover { background: var(--card); border-color: var(--rule) }
+  .thread.on { background: var(--card); border-color: var(--accent) }
+  .thread .who { display: block; color: var(--dim); font-size: .74rem; margin-top: .15rem }
+  /* The right-hand pull-out. A tool result is the one thing on this page that is both
+     essential and far too big for the row it belongs to: the log shows the first line, and
+     this shows what the model actually read. */
+  #detail { position: fixed; top: 0; right: 0; height: var(--screen, 100dvh);
+            width: min(48rem, 94vw); z-index: 9;
+            background: var(--bg); border-left: 1px solid var(--rule);
+            transform: translateX(100%); transition: transform .16s ease-out;
+            display: flex; flex-direction: column }
+  #detail.on { transform: none }
+  #detail .top { padding: max(.8rem, env(safe-area-inset-top)) 1rem .8rem;
+                 border-bottom: 1px solid var(--rule);
+                 display: flex; gap: .6rem; align-items: baseline }
+  #detail .name { font-weight: 600 }
+  #detail .body { flex: 1; min-height: 0; overflow-y: auto;
+                  padding: .9rem 1rem calc(2rem + env(safe-area-inset-bottom, 0px)) }
+  #detail h3 { font-size: .74rem; color: var(--dim); font-weight: 600; letter-spacing: .04em;
+               text-transform: uppercase; margin: 0 0 .35rem }
+  #detail section { margin-bottom: 1.1rem }
+  /* `pre`, not `pre-wrap`: a test log and a source file are both column-aligned, and
+     rewrapping them to the panel width destroys the thing you opened it to read. */
+  #detail pre { background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+                padding: .55rem .7rem; overflow-x: auto; margin: 0; white-space: pre }
+  /* A fixed size. Sizing to content meant the dialog jumped every time you stepped into a
+     folder with a different number of things in it, and the buttons moved under the cursor. */
+  #picker { position: fixed; z-index: 10; inset: 50% auto auto 50%; transform: translate(-50%, -50%);
+            width: min(40rem, 92vw); height: min(34rem, 80dvh);
+            background: var(--bg); border: 1px solid var(--rule);
+            border-radius: 8px; display: none; flex-direction: column }
+  #picker.on { display: flex }
+  #picker .top, #picker .bottom { padding: .7rem .9rem; display: flex; gap: .6rem; align-items: center }
+  #picker .top { border-bottom: 1px solid var(--rule) }
+  #picker .bottom { border-top: 1px solid var(--rule) }
+  #here { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl }
+  #dirs { flex: 1; min-height: 0; overflow-y: auto; padding: .4rem }
+  #newrow { display: flex; gap: .5rem; padding: .5rem .9rem; border-bottom: 1px solid var(--rule) }
+  #newname { flex: 1; font: inherit; color: var(--fg); background: var(--card);
+             border: 1px solid var(--accent); border-radius: 6px; padding: .3rem .5rem }
+  #newname:focus { outline: none }
+  .dir { display: block; width: 100%; text-align: left; border: 1px solid transparent;
+         background: none; border-radius: 6px; padding: .3rem .5rem }
+  .dir:hover { background: var(--card); border-color: var(--rule) }
+  .warn { color: var(--bad); font-size: .82rem }
+
+  .hl-str { color: var(--ok) }
+  .hl-com { color: var(--dim); font-style: italic }
+  .hl-num { color: var(--warn) }
+  .hl-key { color: var(--accent) }
+
+  /* -- fingers ---------------------------------------------------------------------- */
+  @media (pointer: coarse) {
+    /* iOS zooms the page when a focused field is under 16px. The zoom never comes back on
+       its own, so the composer is 16px on touch and the rest of the page is left alone. */
+    #say { font-size: 16px }
+    #composer button { height: 2.75rem }
+    button { padding: .45rem .8rem }
+    .thread, .dir { padding: .55rem }
+  }
+
+  /* -- small screens ---------------------------------------------------------------- */
+  @media (max-width: 40rem) {
+    header { padding: .6rem .8rem; gap: .6rem }
+    #who { max-width: 11rem }
+    #counts { display: none }
+    main { padding: .8rem .8rem 1.2rem }
+    #dock > * { padding: .5rem .8rem }
+    #bar { flex-wrap: wrap; row-gap: .15rem }
+    #doing { display: none }
+    /* Full width, because a 15%-of-the-screen peek at the page behind is not worth the
+       room it costs on a phone. */
+    #drawer, #detail { width: 100% }
+    /* A bottom sheet rather than a centred dialog: it is where a thumb is. */
+    #picker { inset: auto 0 0 0; transform: none; width: 100%; height: 88dvh;
+              border-radius: 10px 10px 0 0 }
+  }

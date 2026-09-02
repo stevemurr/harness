@@ -8,18 +8,18 @@ what the harness does onto what a client shows is testable without a socket.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
-from harness.approval import Decision
-from harness.conversations import TERMINAL_STATUSES as TERMINAL
-from harness.conversations import Runtime
-from harness.events import Visibility
-from harness.runs import RunStatus, progress_id
-from harness.settings import Limits
+from harness.agent.approval import Decision
+from harness.server.conversations import TERMINAL_STATUSES as TERMINAL
+from harness.server.conversations import Runtime
+from harness.server.events import Visibility
+from harness.server.runs import RunStatus, progress_id
+from harness.settings import Limits, Settings
+from harness.tools.shell import Shell
 from harness.types import Message, Role, ToolCall
 
 
@@ -31,10 +31,12 @@ def folder(tmp_path: Path) -> Path:
     return workspace
 
 
-def runtime_for(model, tmp_path: Path) -> Runtime:
+def runtime_for(model, tmp_path: Path, settings: Settings | None = None) -> Runtime:
     from harness.store import JsonlStore
 
-    return Runtime(provider=model, store=JsonlStore(tmp_path / "sessions"))
+    return Runtime(
+        provider=model, store=JsonlStore(tmp_path / "sessions"), settings=settings or Settings()
+    )
 
 
 async def drive(runtime: Runtime, folder: Path, message: str, **kw):
@@ -135,11 +137,12 @@ async def test_a_silent_first_turn_does_not_open_the_answer_with_a_blank_line(
 async def test_a_run_that_hit_the_turn_limit_did_not_complete(folder, tmp_path) -> None:
     """`max_turns` is not an ending anyone asked for, and reporting it as one is the
     failure `StopReason` exists to prevent."""
-    runtime = runtime_for(ScriptedModel(calls(("c1", "list_dir", {}))), tmp_path)
-    conversation = runtime.conversation("thr_1", folder, "ws_1")
-    conversation.agent.settings = replace(
-        conversation.agent.settings, limits=Limits(max_turns=2)
+    runtime = runtime_for(
+        ScriptedModel(calls(("c1", "list_dir", {}))),
+        tmp_path,
+        Settings(limits=Limits(max_turns=2)),
     )
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
 
     run = runtime.start(conversation, "go", mode="auto", policy="full-access")
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
@@ -178,7 +181,9 @@ async def test_a_tool_call_opens_a_row_and_the_same_row_settles(folder, tmp_path
     assert rows[0]["text"] == rows[1]["text"]
 
 
-async def test_the_active_row_is_published_before_the_tool_returns(folder, tmp_path) -> None:
+async def test_the_active_row_is_published_before_the_tool_returns(
+    folder, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The whole reason the registry is wrapped: an observer only fires once the turn is
     over, so a long tool call would show nothing at all until it finished."""
     started = asyncio.Event()
@@ -189,16 +194,16 @@ async def test_the_active_row_is_published_before_the_tool_returns(folder, tmp_p
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
-    slow = conversation.agent.registry.get("run")
-
-    async def blocked(args, ctx):
+    # The shell tool is held open at the class, since the agent's tools are not reachable
+    # from outside -- which is the point of `Agent` being four methods.
+    async def blocked(self, args, ctx):
         started.set()
         await release.wait()
         from harness.types import ToolResult
 
         return ToolResult("ok")
 
-    slow.inner = type("Held", (), {"spec": slow.spec, "run": staticmethod(blocked)})()
+    monkeypatch.setattr(Shell, "run", blocked)
 
     run = runtime.start(conversation, "go", mode="auto", policy="full-access")
     await asyncio.wait_for(started.wait(), timeout=5)
@@ -475,7 +480,7 @@ async def test_a_second_run_continues_the_same_transcript(folder, tmp_path) -> N
 
 async def test_two_runs_at_once_in_one_thread_are_refused(folder, tmp_path) -> None:
     """One transcript and one plan: two runs over them is not two conversations."""
-    from harness.runs import CommandRefused
+    from harness.server.runs import CommandRefused
 
     runtime = runtime_for(
         ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
@@ -572,8 +577,8 @@ async def test_shutting_down_twice_is_not_an_error(folder, tmp_path) -> None:
 async def test_the_server_propagates_shutdown_to_its_runs(folder, tmp_path) -> None:
     """End to end through the ASGI lifespan, which is what uvicorn drives on SIGTERM."""
     from harness.server import create_app
+    from harness.server.workspaces import Workspaces
     from harness.store import JsonlStore
-    from harness.workspaces import Workspaces
 
     model = ScriptedModel(says("done"))
     app = create_app(

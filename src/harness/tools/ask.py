@@ -6,8 +6,8 @@ alternative is what the predecessor built and never used.
 
 **An approval must be enforced; a question must not.** An approval sits between the model
 and a tool, and the harness has to be able to refuse -- so it is machinery the model cannot
-route around, and it lives in `runner.py`. A question needs no enforcement at all: the model
-just needs a value back, and "here is a value" is exactly what a tool result already is.
+route around, and it lives in `agent/runner.py`. A question needs no enforcement at all: the
+model just needs a value back, and "here is a value" is exactly what a tool result already is.
 Making it a protocol channel would add a pending state, a resolution path and a control
 concept to do what a tool result does for free.
 

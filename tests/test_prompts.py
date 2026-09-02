@@ -19,11 +19,12 @@ from __future__ import annotations
 import pytest
 
 from harness.agent import SYSTEM_PROMPT
+from harness.plan import Plan
 from harness.tools.plan import plan_tools
 from harness.tools.shell import shell_tools
 
-PLAN = plan_tools()[0][0].spec.description
-RUN, _READ, _STOP, WATCH, *_ = (t.spec.description for t in shell_tools())
+PLAN = plan_tools(Plan())[0].spec.description
+RUN, _READ, _STOP, MONITOR, *_ = (t.spec.description for t in shell_tools())
 
 
 @pytest.mark.parametrize(
@@ -69,12 +70,12 @@ def test_the_plan_tool_and_the_prompt_do_not_disagree() -> None:
         assert clause.split()[-1] in SYSTEM_PROMPT
 
 
-def test_the_watch_tool_offers_the_alternative_rather_than_only_forbidding() -> None:
-    """Twice against the live model it used `watch` on a command that exits at once. A rule
+def test_the_monitor_tool_offers_the_alternative_rather_than_only_forbidding() -> None:
+    """Twice against the live model it used `monitor` on a command that exits at once. A rule
     saying "do not" leaves nothing to do instead; the description names the replacement."""
-    assert "background=true" in WATCH
-    assert "until grep -q" in WATCH
-    assert "silent through a crash" in WATCH
+    assert "background=true" in MONITOR
+    assert "until grep -q" in MONITOR
+    assert "silent through a crash" in MONITOR
 
 
 def test_the_run_tool_says_what_to_do_instead_of_an_ampersand() -> None:

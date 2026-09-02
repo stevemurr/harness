@@ -19,9 +19,8 @@ from typing import Any
 
 import httpx
 
-from harness.loop import parse_arguments
 from harness.providers.base import Completion, ProviderError
-from harness.types import Message, Role, ToolCall, ToolSpec, Transcript
+from harness.types import Message, Role, ToolCall, ToolSpec, Transcript, parse_arguments
 
 log = logging.getLogger(__name__)
 

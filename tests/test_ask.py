@@ -13,9 +13,9 @@ import pytest
 
 from conftest import ScriptedModel
 from harness.mode import NORMAL, PLAN, ModeState
-from harness.plan import Plan
+from harness.tools import Registry, ToolContext, new_registry
 from harness.tools.ask import AskUser, ask_tools
-from harness.tools.base import Registry, ToolContext
+from harness.tools.kit import Toolkit
 from harness.types import ToolCall
 from harness.workspace import Workspace
 
@@ -36,7 +36,7 @@ async def test_the_answer_comes_back_as_the_tool_result(ctx: ToolContext) -> Non
         asked.append((question, options))
         return "use sqlite"
 
-    registry = Registry(ask_tools(person))
+    registry = new_registry(ask_tools(person))
 
     result = await call(registry, ctx, question="which database?")
 
@@ -49,7 +49,7 @@ async def test_options_are_offered_and_a_choice_returned(ctx: ToolContext) -> No
     async def person(question: str, options: tuple[str, ...]) -> str:
         return options[1]
 
-    registry = Registry(ask_tools(person))
+    registry = new_registry(ask_tools(person))
 
     result = await call(registry, ctx, question="which?", options=["sqlite", "postgres"])
 
@@ -60,7 +60,7 @@ async def test_with_nobody_to_ask_it_refuses_rather_than_inventing_an_answer(
     ctx: ToolContext,
 ) -> None:
     """The one thing this tool must never do is answer on the user's behalf."""
-    registry = Registry(ask_tools(None))
+    registry = new_registry(ask_tools(None))
 
     result = await call(registry, ctx, question="which database?")
 
@@ -78,7 +78,7 @@ async def test_an_empty_answer_is_reported_rather_than_left_to_inference(
     async def silent(question: str, options: tuple[str, ...]) -> str:
         return "   "
 
-    registry = Registry(ask_tools(silent))
+    registry = new_registry(ask_tools(silent))
 
     result = await call(registry, ctx, question="which database?")
 
@@ -104,8 +104,8 @@ def test_the_question_tool_survives_plan_mode() -> None:
 
 async def test_a_run_can_ask_in_plan_mode_end_to_end(tmp_path: Path) -> None:
 
-    from harness.agent import Agent, default_registry
-    from harness.approval import Approvals, Policy
+    from harness.agent import new_agent
+    from harness.agent.approval import Approvals, Policy
     from harness.types import Message, Role
 
     async def person(question: str, options: tuple[str, ...]) -> str:
@@ -119,15 +119,14 @@ async def test_a_run_can_ask_in_plan_mode_end_to_end(tmp_path: Path) -> None:
         ),
         Message(Role.ASSISTANT, "understood"),
     )
-    modes = ModeState(current=PLAN)
-    registry, plan, modes = default_registry(modes=modes, ask=person)
-    agent = Agent(
-        workspace=Workspace.at(tmp_path),
-        provider=model,
-        registry=registry,
+    kit = Toolkit(modes=ModeState(current=PLAN), ask=person)
+    agent = new_agent(
+        tmp_path,
+        model,
+        tools=kit.tools(),
+        modes=kit.modes,
+        inbox=kit.inbox,
         approvals=Approvals(policy=Policy(approve_everything=True)),
-        plan=plan,
-        modes=modes,
     )
 
     outcome = await agent.run("how would you build this?")
@@ -141,9 +140,7 @@ def test_the_plan_tools_are_on_by_default() -> None:
     """Anthropic ships TodoWrite off by default on its newest models -- it costs tokens
     every turn and drifts from reality. Kept on here deliberately (owner, 2026-08-30), so
     the default is asserted rather than left to whoever edits the registry next."""
-    from harness.agent import default_registry
+    names = {tool.spec.name for tool in Toolkit().tools()}
 
-    registry, _plan, _modes = default_registry(Plan(), ModeState())
-
-    assert "update_plan" in registry.names()
-    assert "ask_user" in registry.names()
+    assert "update_plan" in names
+    assert "ask_user" in names
