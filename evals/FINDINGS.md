@@ -27,9 +27,29 @@ each. So the rung measured nothing about delegation yet, and something about pla
 was to delegate, the parent called `delegate` once, the child ran in its own thread with
 the parent in its header, wrote the file, answered, and the parent relayed the answer.
 Nothing in the harness stood between a model that wanted to delegate and doing so; the
-model did not want to. Whether a system-prompt clause changes that is the next thing to
-measure, and this file's own rule says to expect nothing from a clause that describes a
-property.
+model did not want to.
+
+**With the prompt naming the action as well, adoption is one in four.** A "Working with
+other agents" section was added to `system.md` -- delegate the pieces before you read any
+of them, one call each, `wait=false`, then wait -- and the rung run four more times in the
+code arm (`results/2026-09-02-delegation-prompted`, `-waiting`). One parent delegated all
+five services; every child fixed its own in four to six turns, the five reports arrived
+between the parent's turns, and the parent passed 5/5 with the lowest peak context of any
+attempt. The other three parents fixed the services themselves and passed. Both arms are
+now 4/4 on this rung, so it does not separate them; the work fits in one context and the
+model, given the choice, keeps it. The rung's honest use so far is as the live exercise of
+the delegation path, which it has now been once.
+
+**The one delegating run measured the cost of having no way to wait.** The parent called
+`read_agent` thirteen times while its children ran, eight of them on the last child, a turn
+each: the repeat-call pathology in a new tool. `wait_agents` was added -- block until one
+child or all have finished, return their answers -- and the prompt points at it. It has not
+yet been exercised by a live parent, because none of the two attempts after it delegated.
+
+**What would make the rung measure delegation** is work that does not fit in one context,
+so that doing it alone costs something the base arm pays and the code arm does not. Five
+small services is not that. Until it is, "does the model delegate" is a question about the
+model's taste, and the answer at n=4 is: rarely.
 
 ## 2026-09-02: the shakedown after the rewrite, n=1
 
