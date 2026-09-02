@@ -104,7 +104,7 @@ def test_a_parent_delegates_and_a_child_reports_and_neither_has_the_other_tool(
     lineage = children.lineage("agent_x", "c1")
     childs = {h.spec.name for h in kit_for(lineage=lineage).tools()}
 
-    assert {"delegate", "tell_agent", "read_agent", "stop_agent"} <= parents
+    assert {"delegate", "tell_agent", "wait_agents", "read_agent", "stop_agent"} <= parents
     assert "report" not in parents
     assert "report" in childs
     assert not {"delegate", "tell_agent", "read_agent", "stop_agent"} & childs
@@ -310,6 +310,41 @@ def test_stop_agent_closes_a_running_child_and_says_so_for_a_finished_one(
 
     assert stopped.endswith("stopped") and closed == 1
     assert "had already finished" in finished
+
+
+def test_wait_agents_blocks_until_the_children_finish_and_returns_their_answers(
+    tmp_path: Path,
+) -> None:
+    """Measured: a parent called `read_agent` thirteen times while five children ran, a
+    turn each. Waiting costs none."""
+
+    async def scenario() -> tuple[str, str, tuple[Envelope, ...]]:
+        children, _ = parent(tmp_path)
+        gate = asyncio.Event()
+        original = children.spawner
+
+        def gated(task: str, lineage: Lineage) -> Agent:
+            child = original(task, lineage)
+            assert isinstance(child, Fake)
+            child.release = gate
+            return child
+
+        children.spawner = gated
+        nothing = await call(kit_for(children), tmp_path, "wait_agents")
+        _ = await call(kit_for(children), tmp_path, "delegate", task="a", wait=False)
+        _ = await call(kit_for(children), tmp_path, "delegate", task="b", wait=False)
+        waiting = asyncio.ensure_future(call(kit_for(children), tmp_path, "wait_agents"))
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        gate.set()
+        answer = await waiting
+        return nothing, answer, children.inbox.drain()
+
+    nothing, answer, arrived = asyncio.run(scenario())
+
+    assert "no agent is running" in nothing
+    assert "did: a" in answer and "did: b" in answer and answer.count("finished after") == 2
+    assert len(arrived) == 2  # the finishing notices still arrive; waiting reads ahead of them
 
 
 # -- the inbox and compaction ------------------------------------------------------------------

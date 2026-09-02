@@ -56,6 +56,12 @@ RUN, _READ, _STOP, MONITOR, *_ = (t.spec.description for t in shell_tools())
             "`python3 server.py 18080 &` outlived its run by nine minutes holding a port.",
         ),
         (
+            "do not call `read_agent` in a loop",
+            "The first live delegation: five children, thirteen `read_agent` calls while "
+            + "they ran, eight of them on the last child, a turn each. `wait_agents` exists "
+            + "for it and the prompt points at it. (2026-09-02)",
+        ),
+        (
             "delegate them before you read any of them",
             "Six attempts on 15-delegate-services with `delegate` offered and the task "
             + "naming the action: zero delegations. The prompt said nothing about other "

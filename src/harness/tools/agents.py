@@ -6,11 +6,11 @@ reporting when it ends. `delegate` waits by default -- a parent that is waiting 
 the files its child is editing, and the shared folder is the one hazard here that has no
 mechanism yet. Background children are the opt-in.
 
-`report` is the one tool a child has that a parent does not, and `delegate` is the one a
-parent has that a child does not. The kit decides which by whether it was built from a
-`Lineage`, which is how "children cannot delegate" is a fact of construction and not a
-counter.
-"""
+`wait_agents` exists because polling was the only alternative and it was measured to cost a
+parent thirteen turns. `report` is the one tool a child has that a parent does not, and
+`delegate` is the one a parent has that a child does not. The kit decides which by whether it
+was built from a `Lineage`, which is how "children cannot delegate" is a fact of construction
+and not a counter. """
 
 from __future__ import annotations
 
@@ -46,6 +46,13 @@ class AgentRef(Arguments):
 class Instruction(Arguments):
     agent_id: Annotated[str, "The id `delegate` gave you."]
     text: Annotated[str, "What to tell it. It reads this before its next step."]
+
+
+@dataclass(frozen=True, slots=True)
+class Waiting(Arguments):
+    agent_id: Annotated[
+        str, "One agent to wait for, or empty to wait for every agent still running."
+    ] = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +127,45 @@ class TellAgent:
                 f"no running agent {args.agent_id!r}. Running: {known}", ok=False, refused=True
             )
         return ToolResult(f"told {args.agent_id}")
+
+
+@dataclass
+class WaitAgents:
+    """Block until a child, or all of them, has finished. Costs no turns, which is the
+    point: a parent with nothing to do until its children report should not spend its turn
+    budget asking whether they have."""
+
+    children: Children
+    spec: ToolSpec = field(
+        default=spec_for(
+            Waiting,
+            name="wait_agents",
+            description=(
+                "Wait until an agent you delegated to has finished -- one by id, or all of "
+                + "them with no id -- and get each one's answer. Use this instead of calling "
+                + "read_agent repeatedly: waiting costs nothing, and every read_agent while "
+                + "an agent is still running costs a turn."
+            ),
+        )
+    )
+
+    def preview(self, args: Waiting, /) -> tuple[str, str]:
+        return f"wait for {args.agent_id or 'every agent'}", "wait_agents"
+
+    async def run(self, args: Waiting, _ctx: ToolContext, /) -> ToolResult:
+        finished = await self.children.wait(args.agent_id)
+        if isinstance(finished, str):
+            return ToolResult(finished, ok=False, refused=True)
+        parts: list[str] = []
+        for child in finished:
+            if child.outcome is None:
+                parts.append(f"{child.agent_id}: failed before answering")
+                continue
+            parts.append(
+                f"{child.agent_id} finished after {child.outcome.turns} turns "
+                + f"({child.outcome.stop.kind}):\n{child.outcome.answer or '(it said nothing)'}"
+            )
+        return ToolResult("\n\n".join(parts))
 
 
 @dataclass
@@ -203,6 +249,7 @@ def agent_tools(children: Children) -> list[Handler]:
     return [
         bind(Delegate(children)),
         bind(TellAgent(children)),
+        bind(WaitAgents(children)),
         bind(ReadAgent(children)),
         bind(StopAgent(children)),
     ]

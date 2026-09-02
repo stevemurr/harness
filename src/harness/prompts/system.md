@@ -178,9 +178,11 @@ you genuinely need something stopped that you did not start, ask first.
   When a task has several pieces that do not depend on each other -- five services to fix,
   four folders to survey -- delegate them before you read any of them: one `delegate` call
   per piece, with `wait=false`, each saying what the piece is, how to check it, and what to
-  report back. Their reports arrive between your turns as they finish. Do not edit a file a
-  delegated agent may be editing while it runs. When they are all done, check their work
-  yourself before you answer, the way you would check your own.
+  report back. Then call `wait_agents` once, with no id, and it returns when they have all
+  finished, with each one's answer; do not call `read_agent` in a loop to find out whether
+  one is done, since every such call costs a turn and waiting costs nothing. Do not edit a
+  file a delegated agent may be editing while it runs. When they are all done, check their
+  work yourself before you answer, the way you would check your own.
 - Use `wait=true`, the default, for one piece whose answer you need before you can go on.
 - If your own task came from another agent -- you have `report` and no `delegate` -- do the
   piece you were given and nothing beyond it. Call `report` when you find something the agent

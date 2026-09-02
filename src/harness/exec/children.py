@@ -195,6 +195,32 @@ class Children:
             lines.append(child.outcome.answer or "(it said nothing)")
         return "\n".join(lines)
 
+    async def wait(self, agent_id: str = "") -> list[Child] | str:
+        """Block until one child, or every running child, has finished. A string is why not.
+
+        Measured before this existed: a parent with five background children called
+        `read_agent` thirteen times while they ran, a turn each, because polling was the
+        only way to find out. Waiting costs no turns.
+        """
+        if agent_id:
+            child = self.started.get(agent_id)
+            if child is None:
+                return f"no agent {agent_id!r}"
+            chosen = [child]
+        else:
+            chosen = [c for c in self.started.values() if c.running]
+            if not chosen:
+                return "no agent is running"
+        for child in chosen:
+            if child.work is not None and not child.work.done():
+                try:
+                    _ = await asyncio.shield(child.work)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass  # the failure notice is already in the inbox
+        return chosen
+
     def ids(self, running: bool | None = None) -> list[str]:
         return [
             i for i, c in self.started.items() if running is None or c.running == running

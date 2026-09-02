@@ -57,7 +57,7 @@ CODE_TOOLS = frozenset({"find_definition", "find_references"})
 #: What the base arm goes without on a rung that allows delegation. The board goes with
 #: them: a lone agent's board is its plan.
 AGENT_TOOLS = frozenset({
-    "delegate", "tell_agent", "read_agent", "stop_agent",
+    "delegate", "tell_agent", "wait_agents", "read_agent", "stop_agent",
     "post_task", "list_tasks", "claim_task", "finish_task",
 })
 MUTATING = frozenset({"write_file", "edit_file"})
