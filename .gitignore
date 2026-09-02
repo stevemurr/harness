@@ -7,8 +7,5 @@ dist/
 build/
 *.egg-info/
 .eval-work/
-!evals/baseline.json
 
-# Eval scratch, but the baseline is the point of running it.
-.eval-work/
-evals/runs/
+# Eval scratch. Results are the point of running it, and they live in evals/results/.

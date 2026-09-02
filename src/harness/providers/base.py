@@ -75,10 +75,12 @@ class Provider(Protocol):
         """Human-readable, for logs and for telling the user what they are talking to."""
         ...
 
-    #: How much context the model has, in tokens, for compaction to size against. A fact
-    #: about the model, so it lives here rather than in a settings object; zero means
-    #: unknown, and compaction then never fires.
-    context_window: int
+    @property
+    def context_window(self) -> int:
+        """How much context the model has, in tokens, for compaction to size against. A
+        fact about the model, so it lives here rather than in a settings object; zero
+        means unknown, and compaction then never fires."""
+        ...
 
     async def complete(
         self, transcript: Transcript, tools: Sequence[ToolSpec] = ()

@@ -1,4 +1,3 @@
 {
-  "tests": "Building a layout engine to a written spec over a long horizon. Four subsystems that feed each other -- HTML parsing, the CSS cascade, block layout, inline layout -- so an early mistake surfaces as a wrong coordinate in a late case. Nine rules stated once in the spec's preamble are the probe for whether a compaction boundary loses what came before it.",
-  "long": true
+  "tests": "Building a layout engine to a written spec over a long horizon. Four subsystems that feed each other -- HTML parsing, the CSS cascade, block layout, inline layout -- so an early mistake surfaces as a wrong coordinate in a late case. Nine rules stated once in the spec's preamble are the probe for whether a compaction boundary loses what came before it."
 }

@@ -1,4 +1,3 @@
 {
-  "tests": "Building to a written spec over a long horizon, with a rule stated once in the preamble that only the last cases exercise -- the probe for whether a compaction boundary loses what came before it.",
-  "long": true
+  "tests": "Building to a written spec over a long horizon, with a rule stated once in the preamble that only the last cases exercise -- the probe for whether a compaction boundary loses what came before it."
 }

@@ -49,6 +49,8 @@ packages = ["src/harness"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# So `import evals` works: the runner is a package at the repository root, not in `src`.
+pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.mypy]
@@ -70,7 +72,7 @@ line-length = 96
 src = ["src", "tests"]
 # Eval seeds are fixtures the agent is asked to work on, not this project's code. They are
 # written to be a starting point rather than to satisfy a linter.
-extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed"]
+extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed", "evals/long/*/reference"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ISC"]
@@ -81,6 +83,9 @@ ignore = ["ISC003"]
 [tool.basedpyright]
 # The package only, like mypy above, and for the same reason. "recommended" is the based
 # ruleset: `Any` is reported, overrides must say so, and an unused parameter is a question.
-include = ["src/harness"]
+include = ["src/harness", "evals"]
+# Seeds and reference solutions are fixtures the agent is asked to work on, written to be
+# broken or to be solved; checking them would be checking the question.
+exclude = ["evals/ladder", "evals/long", "evals/results", "**/__pycache__"]
 pythonVersion = "3.12"
 typeCheckingMode = "recommended"

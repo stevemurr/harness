@@ -825,16 +825,7 @@ def build_app(args: argparse.Namespace) -> Starlette:
 
     settings = resolve(args)
     return create_app(
-        provider=OpenAICompatible(
-            base_url=settings.provider.base_url,
-            model=settings.provider.model,
-            api_key=settings.provider.api_key,
-            extra_body=settings.provider.extra_body,
-            context_window=settings.provider.context_window,
-            temperature=settings.provider.temperature,
-            top_p=settings.provider.top_p,
-            presence_penalty=settings.provider.presence_penalty,
-        ),
+        provider=OpenAICompatible.from_settings(settings.provider),
         store=JsonlStore(THREADS),
         token=settings.server.token,
         settings=settings.settings,

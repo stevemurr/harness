@@ -19,6 +19,7 @@ from typing import cast
 
 import httpx
 
+from harness.config import Provider as ProviderSettings
 from harness.providers.base import Completion, ProviderError
 from harness.types import (
     JSON,
@@ -80,6 +81,32 @@ class OpenAICompatible:
     #: did not send.
     extra_body: JSON = field(default_factory=dict)
     _client: httpx.AsyncClient | None = field(default=None, repr=False)
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: ProviderSettings,
+        *,
+        timeout: float = 300.0,
+        max_tokens: int | None = None,
+    ) -> OpenAICompatible:
+        """The provider a `[provider]` section describes.
+
+        Written once. The CLI, the server and the eval runner each mapped the same eight
+        fields by hand, which is three places for the ninth field to be missed in.
+        """
+        return cls(
+            base_url=settings.base_url,
+            model=settings.model,
+            api_key=settings.api_key,
+            extra_body=settings.extra_body,
+            context_window=settings.context_window,
+            temperature=settings.temperature,
+            top_p=settings.top_p,
+            presence_penalty=settings.presence_penalty,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )
 
     @property
     def name(self) -> str:

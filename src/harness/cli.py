@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -236,7 +236,8 @@ async def main_async(args: Flags) -> int:
     # whichever way the agent is driven. The two disagreeing about the provider shows up only
     # as an empty answer, which is the hardest kind of bug to attribute.
     stored = load(Path(args.config).expanduser() if args.config else None)
-    provider = OpenAICompatible(
+    settled = replace(
+        stored.provider,
         base_url=settle(
             args.base_url, os.environ.get("HARNESS_BASE_URL", ""),
             stored.provider.base_url, DEFAULT_BASE_URL,
@@ -248,10 +249,6 @@ async def main_async(args: Flags) -> int:
         api_key=settle(
             args.api_key, os.environ.get("HARNESS_API_KEY", ""), stored.provider.api_key, ""
         ),
-        max_tokens=args.max_tokens,
-        temperature=stored.provider.temperature,
-        top_p=stored.provider.top_p,
-        presence_penalty=stored.provider.presence_penalty,
         context_window=int(
             settle(
                 str(args.context_window or ""),
@@ -262,6 +259,7 @@ async def main_async(args: Flags) -> int:
         ),
         extra_body=extra or stored.provider.extra_body,
     )
+    provider = OpenAICompatible.from_settings(settled, max_tokens=args.max_tokens)
     approvals = Approvals(
         policy=Policy(approve_everything=args.yes),
         ask=approve,
