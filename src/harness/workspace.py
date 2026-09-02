@@ -118,8 +118,8 @@ class Workspace:
         tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(data)
-            tmp.replace(target)
+            _ = tmp.write_bytes(data)
+            _ = tmp.replace(target)
         finally:
             tmp.unlink(missing_ok=True)
         return len(data)

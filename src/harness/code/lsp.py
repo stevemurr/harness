@@ -27,11 +27,11 @@ import os
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast
 
-from harness.code.base import CodeIndexError, Location, Symbol
-from harness.code.servers import servers_bin
+from harness.code.base import CodeIndexError, Location, Symbol, servers_bin
 from harness.settings import Code
+from harness.types import JSON, as_dict, as_int, as_list, as_str
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class LspIndex:
 
     _process: asyncio.subprocess.Process | None = field(default=None, repr=False)
     _reader: asyncio.Task[None] | None = field(default=None, repr=False)
-    _pending: dict[int, asyncio.Future[Any]] = field(default_factory=dict, repr=False)
+    _pending: dict[int, asyncio.Future[object]] = field(default_factory=dict, repr=False)
     _opened: set[Path] = field(default_factory=set, repr=False)
     _next_id: int = field(default=0, repr=False)
     _starting: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -164,7 +164,7 @@ class LspIndex:
 
             self._reader = asyncio.create_task(self._read())
             try:
-                await asyncio.wait_for(
+                _ = await asyncio.wait_for(
                     self._request(
                         "initialize",
                         {
@@ -198,17 +198,17 @@ class LspIndex:
         process, self._process = self._process, None
         reader, self._reader = self._reader, None
         if reader is not None:
-            reader.cancel()
+            _ = reader.cancel()
         if process is not None and process.returncode is None:
             try:
                 process.terminate()
-                await asyncio.wait_for(process.wait(), timeout=5)
+                _ = await asyncio.wait_for(process.wait(), timeout=5)
             except (ProcessLookupError, TimeoutError):
                 with suppress(ProcessLookupError):
                     process.kill()
         for waiting in self._pending.values():
             if not waiting.done():
-                waiting.cancel()
+                _ = waiting.cancel()
         self._pending.clear()
 
     # -- the wire --------------------------------------------------------------------
@@ -236,7 +236,7 @@ class LspIndex:
                     headers[key.strip().lower()] = value.strip()
                 size = int(headers.get("content-length", 0))
                 body = await stream.readexactly(size) if size else b"{}"
-                self._settle(json.loads(body))
+                self._settle(as_dict(cast("object", json.loads(body))))
         except (EOFError, asyncio.IncompleteReadError, json.JSONDecodeError):
             self._fail_all(f"{self.name} stopped responding")
         except asyncio.CancelledError:
@@ -245,14 +245,13 @@ class LspIndex:
             log.exception("%s reader failed", self.name)
             self._fail_all(f"{self.name} reader failed: {exc}")
 
-    def _settle(self, message: dict[str, Any]) -> None:
-        waiting = self._pending.pop(message.get("id", -1), None)
+    def _settle(self, message: JSON) -> None:
+        waiting = self._pending.pop(as_int(message.get("id"), -1), None)
         if waiting is None or waiting.done():
             return  # a notification, a server request, or a reply nobody is waiting for
         if "error" in message:
-            waiting.set_exception(
-                CodeIndexError(f"{self.name}: {message['error'].get('message', 'error')}")
-            )
+            detail = as_str(as_dict(message.get("error")).get("message")) or "error"
+            waiting.set_exception(CodeIndexError(f"{self.name}: {detail}"))
         else:
             waiting.set_result(message.get("result"))
 
@@ -262,24 +261,24 @@ class LspIndex:
                 waiting.set_exception(CodeIndexError(reason))
         self._pending.clear()
 
-    def _send(self, payload: dict[str, Any]) -> None:
+    def _send(self, payload: JSON) -> None:
         process = self._process
         if process is None or process.stdin is None:
             raise CodeIndexError(f"{self.name} is not running")
         body = json.dumps({"jsonrpc": "2.0", **payload}).encode()
         process.stdin.write(b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
 
-    def _request(self, method: str, params: dict[str, Any]) -> asyncio.Future[Any]:
+    def _request(self, method: str, params: JSON) -> asyncio.Future[object]:
         self._next_id += 1
-        waiting: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        waiting: asyncio.Future[object] = asyncio.get_running_loop().create_future()
         self._pending[self._next_id] = waiting
         self._send({"id": self._next_id, "method": method, "params": params})
         return waiting
 
-    def _notify(self, method: str, params: dict[str, Any]) -> None:
+    def _notify(self, method: str, params: JSON) -> None:
         self._send({"method": method, "params": params})
 
-    async def _ask(self, method: str, params: dict[str, Any]) -> Any:
+    async def _ask(self, method: str, params: JSON) -> object:
         await self._ensure()
         try:
             return await asyncio.wait_for(
@@ -291,7 +290,7 @@ class LspIndex:
                 + f"{self.settings.request_timeout:.0f}s"
             ) from exc
 
-    async def _indexed(self, method: str, params: dict[str, Any]) -> Any:
+    async def _indexed(self, method: str, params: JSON) -> object:
         """Ask, and keep asking while the index may still be cold.
 
         Only ever slow once. The retry exists because "nothing found" and "nothing indexed
@@ -344,32 +343,33 @@ class LspIndex:
         container, _, bare = name.rpartition(".")
         found = await self._indexed("workspace/symbol", {"query": bare})
         symbols: list[Symbol] = []
-        for entry in found or []:
+        for item in as_list(found):
+            entry = as_dict(item)
             # Servers disagree about where qualification lives, and both are LSP-legal.
             # basedpyright: name="build", containerName="Widget". gopls:
             # name="Widget.Build", containerName="shop" -- the *package*. So the last
             # dotted segment of `name` is the symbol, and a prefix on it outranks
             # `containerName`, which may be describing something else entirely. Matching
             # `name` exactly finds every Python method and no Go one.
-            qualifier, _, offered = (entry.get("name") or "").rpartition(".")
+            qualifier, _, offered = as_str(entry.get("name")).rpartition(".")
             if not self._same_symbol(offered, bare):
                 continue  # the server matches loosely; answer about the name asked
-            location = entry.get("location") or {}
-            uri = location.get("uri") or (entry.get("location") or {}).get("targetUri")
+            location = as_dict(entry.get("location"))
+            uri = as_str(location.get("uri")) or as_str(location.get("targetUri"))
             if not uri:
                 continue
             path = _path(uri)
             if near is not None and path != near.resolve():
                 continue
-            found_container = qualifier or entry.get("containerName") or ""
+            found_container = qualifier or as_str(entry.get("containerName"))
             if container and container.split(".")[-1] != found_container.split(".")[-1]:
                 continue
-            line = (location.get("range") or {}).get("start", {}).get("line", 0) + 1
+            line = as_int(as_dict(as_dict(location.get("range")).get("start")).get("line")) + 1
             symbols.append(
                 Symbol(
                     name=offered,
                     location=Location(path, line, _line_text(path, line)),
-                    kind=KINDS.get(entry.get("kind", 0), "symbol"),
+                    kind=KINDS.get(as_int(entry.get("kind")), "symbol"),
                     container=found_container,
                 )
             )
@@ -419,9 +419,10 @@ class LspIndex:
             },
         )
         places: list[Location] = []
-        for entry in found or []:
-            where = _path(entry["uri"])
-            line = entry["range"]["start"]["line"] + 1
+        for item in as_list(found):
+            entry = as_dict(item)
+            where = _path(as_str(entry.get("uri")))
+            line = as_int(as_dict(as_dict(entry.get("range")).get("start")).get("line")) + 1
             places.append(Location(where, line, _line_text(where, line)))
         return tuple(places)
 

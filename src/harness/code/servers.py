@@ -27,24 +27,16 @@ import asyncio
 import logging
 import os
 import shutil
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 
-from harness.code.base import CodeIndex, Indexes
+from harness.code.base import Indexes, servers_bin
+from harness.code.lsp import LspIndex
 from harness.settings import Code
 
 log = logging.getLogger(__name__)
 
-#: Beside `threads/` and `config.toml`, for the same reason: one folder a person can inspect
-#: and delete.
-SERVERS = Path("~/.harness/servers")
-
-
-def servers_bin() -> Path:
-    return (SERVERS / "bin").expanduser()
-
-
-def known() -> tuple[type[CodeIndex], ...]:
+def known() -> tuple[type[LspIndex], ...]:
     """Every language the harness can index.
 
     The one list, and the one line adding a language adds outside its own file -- the same
@@ -88,16 +80,14 @@ def for_workspace(root: Path, settings: Code | None = None) -> Indexes:
     )
 
 
-def _speaks(factory: type[CodeIndex]) -> set[str]:
+def _speaks(factory: type[LspIndex]) -> set[str]:
     """What a backend claims, read from the class rather than an instance.
 
     Constructing one to ask would need a root, and the question is asked while deciding
-    whether a root has any use for it.
+    whether a root has any use for it. A dataclass field's default is the class attribute,
+    so the class answers.
     """
-    for declared in fields(factory):  # type: ignore[arg-type]
-        if declared.name == "extensions":
-            return set(declared.default or ())
-    return set()
+    return set(factory.extensions)
 
 
 def _extensions_in(root: Path, limit: int = 20_000) -> set[str]:
@@ -135,7 +125,7 @@ async def provision(settings: Code | None = None) -> list[Outcome]:
     outcomes: list[Outcome] = []
 
     for factory in known():
-        index = factory(Path.cwd(), settings)  # type: ignore[call-arg]
+        index = factory(Path.cwd(), settings)
         recipe = index.recipe
         link = target / recipe.binary
 

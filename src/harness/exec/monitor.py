@@ -23,13 +23,39 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Protocol
 
+from harness.exec.spawn import Child
 from harness.inbox import Envelope, Inbox
 from harness.types import Source
 
-if TYPE_CHECKING:
-    from harness.exec.processes import Process
+
+class Monitored(Protocol):
+    """What the pump needs of a process.
+
+    The table's `Process` satisfies it. The table imports this module, so this is the one
+    direction the dependency can run -- naming `Process` here, even only for the checker,
+    was a cycle.
+    """
+
+    #: Written by the pump when the child ends, so an attribute rather than a property.
+    code: int | None
+
+    @property
+    def process_id(self) -> str: ...
+
+    @property
+    def output(self) -> Path: ...
+
+    @property
+    def child(self) -> Child: ...
+
+    @property
+    def started(self) -> float: ...
+
+    @property
+    def call_id(self) -> str | None: ...
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +94,7 @@ FLOOD = Limits().flood
 class Monitor:
     """Holds a process and reads it. The reference, and the pump."""
 
-    process: Process = field(repr=False)
+    process: Monitored = field(repr=False)
     inbox: Inbox = field(repr=False)
     #: What the model said it is looking for. Shown with every notice, so that a person
     #: reading the transcript can tell why this text is here.
@@ -139,7 +165,7 @@ class Monitor:
             with process.output.open("wb") as sink:
                 async for raw in process.child.read_lines():
                     if written < self.limits.kept:
-                        sink.write(raw)
+                        _ = sink.write(raw)
                         sink.flush()
                         written += len(raw)
                     self.seen += 1
@@ -158,10 +184,10 @@ class Monitor:
         except Exception:
             log.exception("monitor %s stopped reading", process.process_id)
         finally:
-            ticking.cancel()
+            _ = ticking.cancel()
 
         process.code = await process.child.wait()
-        await flush()
+        _ = await flush()
         flooded = (
             " It was stopped for printing more than a monitor is allowed."
             if self.seen >= self.limits.flood
@@ -174,8 +200,7 @@ class Monitor:
         # long before, and this is the moment it is actually wrong. The same reasoning as the
         # repeat-call refusal: name the mistake where it happens.
         wasted = (
-            process.code is not None
-            and self.seen <= 1
+            self.seen <= 1
             and time.monotonic() - process.started < 3.0
             and self.seen < self.limits.flood
         )

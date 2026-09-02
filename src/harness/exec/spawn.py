@@ -12,13 +12,13 @@ written months apart:
   the next attempt, which failed on `Errno 48: Address already in use` -- a red row that
   measured nothing about the model.
 
-The rule has two halves and neither works alone. Spawn with `**OWN_SESSION` so the child
-leads its own process group; stop it with `terminate` so the signal reaches that group
+The rule has two halves and neither works alone. Spawn with `start_new_session=OWN_SESSION` so
+the child leads its own process group; stop it with `terminate` so the signal reaches that group
 rather than the single process a handle happens to name. Taking the first half without the
-second kills nothing extra. Taking the second without the first signals *this* process's
-group -- which killed the test runner outright the first time the group kill was written:
-exit 137, 52 dots, no failure, no summary, nothing to read. `terminate` refuses to do that,
-and `own_group` is the guard that makes the refusal checkable.
+second kills nothing extra. Taking the second without the first signals *this* process's group
+-- which killed the test runner outright the first time the group kill was written: exit 137, 52
+dots, no failure, no summary, nothing to read. `terminate` refuses to do that, and `own_group`
+is the guard that makes the refusal checkable.
 
 A shell script cannot fix this from the inside. `trap ... EXIT` belongs to the shell being
 killed, so it never runs. The fix has to live where the spawn does, which is here.
@@ -55,20 +55,21 @@ import contextlib
 import os
 import signal
 import subprocess
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from pathlib import Path
+from typing import IO, Protocol, runtime_checkable
 
-#: Spread into every spawn. `subprocess.Popen` and `asyncio.create_subprocess_shell` take
-#: the same keyword, so one mapping serves both. The child leads a new session, which makes
-#: its process group id its own pid -- something `terminate` can signal that is not also us.
+#: Passed to every spawn, by name. `subprocess.Popen` and `asyncio.create_subprocess_shell`
+#: take the same keyword. The child leads a new session, which makes its process group id
+#: its own pid -- something `terminate` can signal that is not also us.
 #:
 #: The cost, paid knowingly: a child in its own session no longer receives the terminal's
 #: SIGINT, so Ctrl-C reaches the harness alone. Every spawner using this must therefore stop
 #: its child on cancellation as well as on timeout, or an interrupted command outlives the
 #: run that owns it. `scoped` does that for you.
-OWN_SESSION: dict[str, Any] = {"start_new_session": True}
+OWN_SESSION = True
 
 #: How long to wait for a killed process to be collected. A bound, not a delay: the signal is
 #: SIGKILL, so in practice the wait returns in milliseconds and this only caps the
@@ -83,9 +84,9 @@ class Spawned(Protocol):
     """The little that `terminate` needs, which `subprocess` and `asyncio` both satisfy.
 
     `pid` is a read-only property rather than `pid: int`. A protocol declaring a settable
-    member is not satisfied by an implementation exposing a property, and this codebase has
-    three instances of exactly that mistake -- `Provider.name` and `Tool.spec` both fail
-    their own protocols for it. A read-only member accepts both shapes.
+    member is not satisfied by an implementation exposing a property -- `Provider.name` and
+    `Tool.spec` both failed their own protocols for exactly that until 2026-09-02. A
+    read-only member accepts both shapes.
     """
 
     @property
@@ -182,12 +183,12 @@ class Child:
         self.terminate()
         if self.stopping.then is not None:
             try:
-                await asyncio.wait_for(self.handle.wait(), self.stopping.grace)
+                _ = await asyncio.wait_for(self.handle.wait(), self.stopping.grace)
                 return
             except TimeoutError:
                 terminate(self.handle, self.stopping.then)
         with contextlib.suppress(TimeoutError, ProcessLookupError):
-            await asyncio.wait_for(self.handle.wait(), self.stopping.reap)
+            _ = await asyncio.wait_for(self.handle.wait(), self.stopping.reap)
 
     async def communicate(self) -> tuple[bytes, bytes]:
         """Everything it printed, once it has finished. For a child nobody is following."""
@@ -213,16 +214,30 @@ class Child:
 
 
 @asynccontextmanager
-async def scoped(command: str, **kwargs: Any) -> AsyncIterator[Child]:
+async def scoped(
+    command: str,
+    *,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+    stdout: int | IO[bytes] | None = None,
+    stderr: int | IO[bytes] | None = None,
+    stopping: Stopping | None = None,
+) -> AsyncGenerator[Child]:
     """A shell command that cannot outlive the block that started it.
 
     Stopping on the way out covers every exit: the command finished, it overran its timeout,
     it raised, or the run was cancelled at the keyboard. Stopping an already-collected child
     is cheap and silent, so the ordinary path pays almost nothing for the guarantee.
     """
-    stopping = kwargs.pop("stopping", None) or Stopping()
-    handle = await asyncio.create_subprocess_shell(command, **OWN_SESSION, **kwargs)
-    child = Child(handle, stopping)
+    handle = await asyncio.create_subprocess_shell(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+        start_new_session=OWN_SESSION,
+    )
+    child = Child(handle, stopping or Stopping())
     try:
         yield child
     finally:
@@ -230,17 +245,32 @@ async def scoped(command: str, **kwargs: Any) -> AsyncIterator[Child]:
 
 
 @contextmanager
-def scoped_sync(command: Any, **kwargs: Any) -> Iterator[subprocess.Popen]:
-    """The same guarantee for a synchronous caller. `command` is whatever `Popen` takes.
+def scoped_sync(
+    command: Sequence[str],
+    *,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+    stdout: int | None = None,
+    stderr: int | None = None,
+    reap: float = REAP_SECONDS,
+) -> Generator[subprocess.Popen[str]]:
+    """The same guarantee for a synchronous caller. Text mode: its caller reads words.
 
     Not a `Child`: that one wraps an asyncio handle, and the eval runner's grader is
     ordinary blocking code. What the two share is the rule, which is `terminate`.
     """
-    reap = kwargs.pop("reap", REAP_SECONDS)
-    process = subprocess.Popen(command, **OWN_SESSION, **kwargs)
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+        start_new_session=OWN_SESSION,
+    )
     try:
         yield process
     finally:
         terminate(process)
         with contextlib.suppress(subprocess.TimeoutExpired, ProcessLookupError):
-            process.communicate(timeout=reap)
+            _ = process.communicate(timeout=reap)

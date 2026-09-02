@@ -16,7 +16,9 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from harness.agent import new_agent
 from harness.agent.approval import Approvals, Decision, Policy, Request
@@ -26,6 +28,9 @@ from harness.config import (
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MODEL,
     ConfigError,
+    bool_flag,
+    flag,
+    int_flag,
     load,
     settle,
     write_example,
@@ -35,6 +40,7 @@ from harness.providers.openai import OpenAICompatible
 from harness.settings import Compaction
 from harness.store import JsonlStore
 from harness.store.base import StoreError
+from harness.types import JSON
 
 THREADS = Path("~/.harness/threads").expanduser()
 
@@ -45,11 +51,24 @@ def paint(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _COLOUR else text
 
 
-dim = lambda t: paint(t, "2")  # noqa: E731
-bold = lambda t: paint(t, "1")  # noqa: E731
-red = lambda t: paint(t, "31")  # noqa: E731
-green = lambda t: paint(t, "32")  # noqa: E731
-yellow = lambda t: paint(t, "33")  # noqa: E731
+def dim(text: str) -> str:
+    return paint(text, "2")
+
+
+def bold(text: str) -> str:
+    return paint(text, "1")
+
+
+def red(text: str) -> str:
+    return paint(text, "31")
+
+
+def green(text: str) -> str:
+    return paint(text, "32")
+
+
+def yellow(text: str) -> str:
+    return paint(text, "33")
 
 
 PLAN_TOOLS = {"update_plan"}
@@ -86,7 +105,7 @@ def _plan_line(line: str) -> str:
     return line
 
 
-def report_compaction(summary: str, before: int, after: int) -> None:
+def report_compaction(_summary: str, before: int, after: int) -> None:
     """Say that the context was handed off, and how much smaller it got.
 
     Said out loud rather than kept in a log: an agent that quietly forgets things and does
@@ -94,7 +113,9 @@ def report_compaction(summary: str, before: int, after: int) -> None:
     Nothing is lost from the transcript -- the file still holds every turn -- and this line
     is what tells someone that, if they wonder.
     """
-    tokens = lambda n: int(n / Compaction().seed_chars_per_token)  # noqa: E731
+    def tokens(chars: int) -> int:
+        return int(chars / Compaction().seed_chars_per_token)
+
     print(
         dim(
             f"\ncompacted context · ~{tokens(before):,} → ~{tokens(after):,} tokens · "
@@ -147,7 +168,50 @@ async def ask_user(question: str, options: tuple[str, ...]) -> str:
     return reply
 
 
-async def main_async(args: argparse.Namespace) -> int:
+@dataclass(frozen=True, slots=True)
+class Flags:
+    """What was typed, read once and by type. `argparse` hands back an untyped bag."""
+
+    prompt: str
+    folder: str
+    model: str
+    base_url: str
+    api_key: str
+    max_tokens: int | None
+    context_window: int | None
+    config: str
+    extra_body: str
+    resume: str
+    threads: bool
+    init_agents: bool
+    install_servers: bool
+    init: bool
+    plan: bool
+    yes: bool
+
+    @classmethod
+    def read(cls, args: argparse.Namespace) -> Flags:
+        return cls(
+            prompt=flag(args, "prompt"),
+            folder=flag(args, "folder"),
+            model=flag(args, "model"),
+            base_url=flag(args, "base_url"),
+            api_key=flag(args, "api_key"),
+            max_tokens=int_flag(args, "max_tokens"),
+            context_window=int_flag(args, "context_window"),
+            config=flag(args, "config"),
+            extra_body=flag(args, "extra_body"),
+            resume=flag(args, "resume"),
+            threads=bool_flag(args, "threads"),
+            init_agents=bool_flag(args, "init_agents"),
+            install_servers=bool_flag(args, "install_servers"),
+            init=bool_flag(args, "init"),
+            plan=bool_flag(args, "plan"),
+            yes=bool_flag(args, "yes"),
+        )
+
+
+async def main_async(args: Flags) -> int:
     if not args.api_key and not args.base_url.startswith("http://localhost"):
         print(
             red("no API key.") + " Set HARNESS_API_KEY or pass --api-key "
@@ -156,11 +220,17 @@ async def main_async(args: argparse.Namespace) -> int:
         )
         return 2
 
-    try:
-        extra = json.loads(args.extra_body) if args.extra_body else {}
-    except json.JSONDecodeError as exc:
-        print(red(f"--extra-body is not JSON: {exc}"), file=sys.stderr)
-        return 2
+    extra: JSON = {}
+    if args.extra_body:
+        try:
+            parsed = cast("object", json.loads(args.extra_body))
+        except json.JSONDecodeError as exc:
+            print(red(f"--extra-body is not JSON: {exc}"), file=sys.stderr)
+            return 2
+        if not isinstance(parsed, dict):
+            print(red("--extra-body must be a JSON object"), file=sys.stderr)
+            return 2
+        extra = cast("JSON", parsed)
 
     # Same file and same precedence as `harness-serve`: a deployment configured once works
     # whichever way the agent is driven. The two disagreeing about the provider shows up only
@@ -227,7 +297,7 @@ async def main_async(args: argparse.Namespace) -> int:
     try:
         # Opened before the run so the thread id can be reported even if the run fails.
         try:
-            thread_id = await agent.open_thread(args.resume)
+            thread_id = await agent.open_thread(args.resume or None)
         except StoreError as exc:
             # A bad --resume is caller input, not a defect. It reached the terminal as a
             # traceback until 2026-08-31, which tells a person nothing they can act on.
@@ -255,25 +325,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="harness", description="Run a coding agent over a folder."
     )
-    parser.add_argument("prompt", nargs="?", default="", help="What you want done.")
-    parser.add_argument(
+    _ = parser.add_argument("prompt", nargs="?", default="", help="What you want done.")
+    _ = parser.add_argument(
         "-C", "--folder", default=".", help="Folder to work in (default: here)."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--model",
         default="",
         help="Model name (env: HARNESS_MODEL, or provider.model in config.toml).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--base-url",
         default="",
         help="OpenAI-compatible endpoint (env: HARNESS_BASE_URL, or provider.base_url).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--api-key", default="", help="env: HARNESS_API_KEY, or provider.api_key"
     )
-    parser.add_argument("--max-tokens", type=int, default=None)
-    parser.add_argument(
+    _ = parser.add_argument("--max-tokens", type=int, default=None)
+    _ = parser.add_argument(
         "--context-window",
         type=int,
         default=None,
@@ -281,8 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         + "happened and carries on in a smaller one; nothing is removed from the transcript. "
         + "(env: HARNESS_CONTEXT_WINDOW, or provider.context_window in config.toml)",
     )
-    parser.add_argument("--config", default="", help="Path to config.toml.")
-    parser.add_argument(
+    _ = parser.add_argument("--config", default="", help="Path to config.toml.")
+    _ = parser.add_argument(
         "--extra-body",
         default=os.environ.get("HARNESS_EXTRA_BODY", ""),
         help="JSON merged into every request body, for deployment dialect the OpenAI schema "
@@ -290,45 +360,45 @@ def main(argv: list[str] | None = None) -> int:
         + "'{\"chat_template_kwargs\": {\"enable_thinking\": false}}' for Qwen3, which "
         + "otherwise answers with an empty string. (env: HARNESS_EXTRA_BODY)",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--resume", metavar="SESSION", help="Continue a thread instead of starting one."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--threads", action="store_true", help="List recent threads and exit."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--init-agents",
         action="store_true",
         help="Write a starter AGENTS.md in the folder, if it has none. The harness reads "
         + "that file at the start of every run; it is never written without this flag.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--install-servers",
         action="store_true",
         help="Set up the language servers code search uses, under ~/.harness/servers/bin. "
         + "Adopts what is already installed by linking it, and only downloads what is not "
         + "there. Run once; never happens during a run.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--init",
         action="store_true",
         help="Write a starter ~/.harness/config.toml and exit.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-p",
         "--plan",
         action="store_true",
         help="Start read-only. The agent researches and proposes a plan; nothing changes "
         + "until you approve it.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
         help="Approve everything without asking. Nothing stands between the agent and "
         + "your filesystem -- there is no sandbox.",
     )
-    args = parser.parse_args(argv)
+    args = Flags.read(parser.parse_args(argv))
     if not args.prompt and not (
         args.init or args.threads or args.install_servers or args.init_agents
     ):
@@ -376,7 +446,8 @@ async def _install_servers() -> int:
     download inside a tool call would blow the request timeout and fail where a model can
     only report it as a broken tool.
     """
-    from harness.code.servers import provision, servers_bin
+    from harness.code.base import servers_bin
+    from harness.code.servers import provision
 
     print(dim(f"language servers in {servers_bin()}"))
     outcomes = await provision()

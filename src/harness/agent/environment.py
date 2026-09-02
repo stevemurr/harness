@@ -57,7 +57,7 @@ def write_conventions(root: Path) -> Path | None:
         if (root / name).exists():
             return None
     target = root / CONVENTION_FILES[0]
-    target.write_text(STARTER_AGENTS, encoding="utf-8")
+    _ = target.write_text(STARTER_AGENTS, encoding="utf-8")
     return target
 
 #: Files whose presence says what the project is built with, so the model does not guess.

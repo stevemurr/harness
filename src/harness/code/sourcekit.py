@@ -42,7 +42,9 @@ compiled it once. `Code.warmup` covers a cold start, not an absent index.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import override
 
+from harness.code.base import Symbol
 from harness.code.lsp import LspIndex, Recipe
 
 
@@ -75,8 +77,10 @@ class SourceKit(LspIndex):
         )
     )
 
+    @override
     def _same_symbol(self, offered: str, asked: str) -> bool:
         return offered == asked or offered.startswith(f"{asked}(")
 
-    def _needle(self, symbol) -> str:
+    @override
+    def _needle(self, symbol: Symbol) -> str:
         return symbol.name.split("(")[0]

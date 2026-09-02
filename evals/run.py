@@ -216,7 +216,7 @@ def _run_group(
     Answers `None` when the checks overran.
     """
     with scoped_sync(
-        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
         try:
             out, err = process.communicate(timeout=timeout)

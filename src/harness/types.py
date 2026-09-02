@@ -266,6 +266,10 @@ def as_str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def as_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
 def parse_arguments(raw: str) -> JSON:
     """Provider tool arguments, which arrive as a JSON string and are not always valid.
 

@@ -154,7 +154,7 @@ class Processes:
                 stdout=sink,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
-                **OWN_SESSION,
+                start_new_session=OWN_SESSION,
             )
 
         process = Process(
@@ -220,7 +220,7 @@ class Processes:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
-            **OWN_SESSION,
+            start_new_session=OWN_SESSION,
         )
         process = Process(
             process_id=process_id,
@@ -288,10 +288,10 @@ class Processes:
         for process in list(self.started.values()):
             process.child.terminate()
         for task in list(self._tasks.values()):
-            task.cancel()
+            _ = task.cancel()
         for process in list(self.started.values()):
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(process.child.wait(), process.child.stopping.reap)
+                _ = await asyncio.wait_for(process.child.wait(), process.child.stopping.reap)
         self.started.clear()
         self._tasks.clear()
 

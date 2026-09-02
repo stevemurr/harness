@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from harness.settings import Limits, Output
 from harness.types import (
+    JSON,
     Message,
     Role,
     StopReason,
@@ -244,7 +245,7 @@ def system(text: str) -> Message:
     return Message(Role.SYSTEM, text)
 
 
-def assistant_with_calls(*calls: tuple[str, str, dict]) -> Message:
+def assistant_with_calls(*calls: tuple[str, str, JSON]) -> Message:
     """Test helper: an assistant message asking for tools."""
     return Message(
         Role.ASSISTANT,

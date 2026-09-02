@@ -84,7 +84,17 @@ class CodeIndexError(Exception):
 
     def __init__(self, message: str, *, available: bool = True) -> None:
         super().__init__(message)
-        self.available = available
+        self.available: bool = available
+
+
+#: Beside `threads/` and `config.toml`, for the same reason: one folder a person can inspect
+#: and delete. Here rather than in `servers.py` because `lsp.py` needs the path and
+#: `servers.py` needs every `lsp.py` backend, which was a cycle.
+SERVERS = Path("~/.harness/servers")
+
+
+def servers_bin() -> Path:
+    return (SERVERS / "bin").expanduser()
 
 
 @runtime_checkable

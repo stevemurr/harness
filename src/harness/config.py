@@ -26,14 +26,16 @@ So the file is created 0600, and `load` says so plainly when it finds one that i
 
 from __future__ import annotations
 
+import argparse
 import os
 import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from harness.settings import Compaction, Limits, Output, Settings
+from harness.types import JSON
 
 DEFAULT_PATH = Path("~/.harness/config.toml")
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -70,7 +72,7 @@ class Provider:
     model: str = DEFAULT_MODEL
     api_key: str = field(default="", repr=False)
     #: Merged into every model request. See `providers/openai.py` for why this exists.
-    extra_body: dict[str, Any] = field(default_factory=dict)
+    extra_body: JSON = field(default_factory=dict)
     #: How much context this model has. A property of the model, so it sits here and is
     #: handed to the provider rather than threaded to both front ends separately.
     context_window: int = DEFAULT_CONTEXT_WINDOW
@@ -116,7 +118,7 @@ def load(path: Path | None = None) -> Config:
         return Config()
 
     try:
-        raw = tomllib.loads(resolved.read_text(encoding="utf-8"))
+        raw: JSON = tomllib.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{resolved}: {exc}") from exc
 
@@ -126,17 +128,17 @@ def load(path: Path | None = None) -> Config:
             + f"Expected: {', '.join(sorted(_TABLES))}."
         )
 
-    provider_table = _table(raw, "provider", _PROVIDER_KEYS, resolved)
-    server_table = _table(raw, "server", _SERVER_KEYS, resolved)
-    compaction_table = _table(raw, "compaction", _COMPACTION_KEYS, resolved)
-    output_table = _table(raw, "output", _OUTPUT_KEYS, resolved)
-    limits_table = _table(raw, "limits", _LIMITS_KEYS, resolved)
+    provider = _table(raw, "provider", _PROVIDER_KEYS, resolved)
+    server = _table(raw, "server", _SERVER_KEYS, resolved)
+    compaction = _table(raw, "compaction", _COMPACTION_KEYS, resolved)
+    output = _table(raw, "output", _OUTPUT_KEYS, resolved)
+    limits = _table(raw, "limits", _LIMITS_KEYS, resolved)
 
-    extra = provider_table.get("extra_body", {})
+    extra = provider.values.get("extra_body", {})
     if not isinstance(extra, dict):
         raise ConfigError(f"{resolved}: provider.extra_body must be a table")
 
-    if provider_table.get("api_key") and _is_group_or_world_readable(resolved):
+    if provider.values.get("api_key") and _is_group_or_world_readable(resolved):
         raise ConfigError(
             f"{resolved} holds an api_key and is readable by other users. "
             + f"Run: chmod 600 {resolved}"
@@ -144,47 +146,36 @@ def load(path: Path | None = None) -> Config:
 
     return Config(
         provider=Provider(
-            base_url=str(provider_table.get("base_url") or DEFAULT_BASE_URL),
-            model=str(provider_table.get("model") or DEFAULT_MODEL),
-            api_key=str(provider_table.get("api_key") or ""),
-            extra_body=dict(extra),
-            context_window=int(
-                provider_table.get("context_window") or DEFAULT_CONTEXT_WINDOW
-            ),
-            temperature=float(provider_table.get("temperature", 0.0)),
-            top_p=_optional_float(provider_table.get("top_p")),
-            presence_penalty=_optional_float(provider_table.get("presence_penalty")),
+            base_url=provider.text("base_url", DEFAULT_BASE_URL),
+            model=provider.text("model", DEFAULT_MODEL),
+            api_key=provider.text("api_key", ""),
+            extra_body=dict(cast("JSON", extra)),
+            context_window=provider.integer("context_window", DEFAULT_CONTEXT_WINDOW),
+            temperature=provider.number("temperature", 0.0),
+            top_p=provider.optional_number("top_p"),
+            presence_penalty=provider.optional_number("presence_penalty"),
         ),
         server=Server(
-            host=str(server_table.get("host") or DEFAULT_HOST),
-            port=int(server_table.get("port") or DEFAULT_PORT),
-            token=str(server_table.get("token") or ""),
+            host=server.text("host", DEFAULT_HOST),
+            port=server.integer("port", DEFAULT_PORT),
+            token=server.text("token", ""),
         ),
         settings=Settings(
             compaction=Compaction(
                 # `is None` rather than `or`: `enabled = false` is the whole point of the
                 # key, and `or` would read it as absent and turn compaction back on.
-                enabled=(
-                    True
-                    if compaction_table.get("enabled") is None
-                    else bool(compaction_table["enabled"])
-                ),
-                at=float(compaction_table.get("at") or Compaction().at),
-                keep_turns=int(
-                    compaction_table.get("keep_turns") or Compaction().keep_turns
-                ),
+                enabled=compaction.flag("enabled", True),
+                at=compaction.number("at", Compaction().at),
+                keep_turns=compaction.integer("keep_turns", Compaction().keep_turns),
             ),
             output=Output(
-                per_result=int(
-                    output_table.get("per_result") or Output().per_result
-                ),
-                per_turn=int(output_table.get("per_turn") or Output().per_turn),
+                per_result=output.integer("per_result", Output().per_result),
+                per_turn=output.integer("per_turn", Output().per_turn),
             ),
             limits=Limits(
-                max_turns=int(limits_table.get("max_turns") or Limits().max_turns),
-                max_consecutive_refusals=int(
-                    limits_table.get("max_consecutive_refusals")
-                    or Limits().max_consecutive_refusals
+                max_turns=limits.integer("max_turns", Limits().max_turns),
+                max_consecutive_refusals=limits.integer(
+                    "max_consecutive_refusals", Limits().max_consecutive_refusals
                 ),
             ),
         ),
@@ -192,26 +183,66 @@ def load(path: Path | None = None) -> Config:
     )
 
 
-def _optional_float(value: Any) -> float | None:
-    """A sampling parameter, or nothing at all.
+@dataclass(frozen=True, slots=True)
+class _Table:
+    """One `[section]`, read by type.
 
-    Absent is not zero. `presence_penalty = 0` is a real instruction to penalise nothing,
-    and leaving the key out means "do not send it" -- which some gateways treat
-    differently from sending the neutral value.
+    TOML values are typed, so a key of the wrong type is the file being wrong, and it is
+    said so with the key's name. An absent or empty value is the default -- the same `or`
+    the reads used to do -- except for `flag`, where `false` is the whole point of the
+    key and must not read as absent.
     """
-    return None if value is None else float(value)
+
+    name: str
+    values: JSON
+    path: Path
+
+    def text(self, key: str, default: str) -> str:
+        value = self.values.get(key)
+        return default if not value else str(value)
+
+    def integer(self, key: str, default: int) -> int:
+        value = self.values.get(key)
+        if value is None or value == 0:
+            return default
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"{self.path}: {self.name}.{key} must be an integer")
+        return value
+
+    def number(self, key: str, default: float) -> float:
+        found = self.optional_number(key)
+        return found if found else default
+
+    def optional_number(self, key: str) -> float | None:
+        """A sampling parameter, or nothing at all.
+
+        Absent is not zero. `presence_penalty = 0` is a real instruction to penalise
+        nothing, and leaving the key out means "do not send it" -- which some gateways
+        treat differently from sending the neutral value.
+        """
+        value = self.values.get(key)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ConfigError(f"{self.path}: {self.name}.{key} must be a number")
+        return float(value)
+
+    def flag(self, key: str, default: bool) -> bool:
+        value = self.values.get(key)
+        return default if value is None else bool(value)
 
 
-def _table(raw: dict, name: str, allowed: frozenset[str], path: Path) -> dict:
+def _table(raw: JSON, name: str, allowed: frozenset[str], path: Path) -> _Table:
     table = raw.get(name, {})
     if not isinstance(table, dict):
         raise ConfigError(f"{path}: [{name}] must be a table")
-    if unknown := set(table) - allowed:
+    values = cast("JSON", table)
+    if unknown := set(values) - allowed:
         raise ConfigError(
             f"{path}: unknown key(s) in [{name}]: {', '.join(sorted(unknown))}. "
             + f"Expected: {', '.join(sorted(allowed))}."
         )
-    return table
+    return _Table(name, values, path)
 
 
 def _is_group_or_world_readable(path: Path) -> bool:
@@ -220,6 +251,22 @@ def _is_group_or_world_readable(path: Path) -> bool:
     except OSError:
         return False
     return bool(mode & (stat.S_IRGRP | stat.S_IROTH))
+
+
+def flag(args: argparse.Namespace, name: str) -> str:
+    """One string flag. `Namespace` is untyped, and this is the one place it is read."""
+    value = cast("object", getattr(args, name, ""))
+    return value if isinstance(value, str) else ""
+
+
+def int_flag(args: argparse.Namespace, name: str) -> int | None:
+    """One integer flag, or `None` when it was not given."""
+    value = cast("object", getattr(args, name, None))
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def bool_flag(args: argparse.Namespace, name: str) -> bool:
+    return cast("object", getattr(args, name, False)) is True
 
 
 def settle(flag: str | None, environment: str, configured: str, default: str) -> str:
@@ -248,7 +295,7 @@ def write_example(path: Path | None = None) -> Path:
     if resolved.exists():
         raise ConfigError(f"{resolved} already exists; edit it rather than replacing it")
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(
+    _ = resolved.write_text(
         "# harness settings. A flag beats an env var beats this file.\n"
         + "\n"
         + "[provider]\n"

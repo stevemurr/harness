@@ -39,6 +39,8 @@ from harness.config import (
     DEFAULT_MODEL,
     DEFAULT_PORT,
     Config,
+    flag,
+    int_flag,
     load,
     settle,
 )
@@ -858,17 +860,6 @@ def _extra_body(raw: str) -> JSON:
     return cast("JSON", parsed)
 
 
-def _flag(args: argparse.Namespace, name: str) -> str:
-    """One string flag. `Namespace` is untyped, and this is the one place it is read."""
-    value = cast("object", getattr(args, name, ""))
-    return value if isinstance(value, str) else ""
-
-
-def _int_flag(args: argparse.Namespace, name: str) -> int:
-    value = cast("object", getattr(args, name, 0))
-    return value if isinstance(value, int) else 0
-
-
 def resolve(args: argparse.Namespace) -> Config:
     """Flags, then environment, then the config file, then the built-in defaults.
 
@@ -876,28 +867,28 @@ def resolve(args: argparse.Namespace) -> Config:
     chances to get the order subtly different, and a precedence that varies per setting is
     one nobody can hold in their head.
     """
-    config = _flag(args, "config")
+    config = flag(args, "config")
     stored = load(Path(config).expanduser() if config else None)
     environment = os.environ
-    extra = _extra_body(_flag(args, "extra_body")) or _extra_body(
+    extra = _extra_body(flag(args, "extra_body")) or _extra_body(
         environment.get("HARNESS_EXTRA_BODY", "")
     )
     return Config(
         provider=ProviderSettings(
             base_url=settle(
-                _flag(args, "base_url"),
+                flag(args, "base_url"),
                 environment.get("HARNESS_BASE_URL", ""),
                 stored.provider.base_url,
                 DEFAULT_BASE_URL,
             ),
             model=settle(
-                _flag(args, "model"),
+                flag(args, "model"),
                 environment.get("HARNESS_MODEL", ""),
                 stored.provider.model,
                 DEFAULT_MODEL,
             ),
             api_key=settle(
-                _flag(args, "api_key"),
+                flag(args, "api_key"),
                 environment.get("HARNESS_API_KEY", ""),
                 stored.provider.api_key,
                 "",
@@ -906,19 +897,19 @@ def resolve(args: argparse.Namespace) -> Config:
         ),
         server=ServerSettings(
             host=settle(
-                _flag(args, "host"),
+                flag(args, "host"),
                 environment.get("HARNESS_HOST", ""),
                 stored.server.host,
                 DEFAULT_HOST,
             ),
             port=int(
-                _int_flag(args, "port")
+                (int_flag(args, "port") or 0)
                 or environment.get("HARNESS_PORT", "")
                 or stored.server.port
                 or DEFAULT_PORT
             ),
             token=settle(
-                _flag(args, "token"),
+                flag(args, "token"),
                 environment.get("HARNESS_TOKEN", ""),
                 stored.server.token,
                 "",
