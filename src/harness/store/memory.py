@@ -8,7 +8,7 @@ twice, and the second one is where the accidental assumptions in the first show 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -27,10 +27,10 @@ class _Held:
 class MemoryStore:
     _held: dict[str, _Held] = field(default_factory=dict)
 
-    async def create(self, workspace: Path, thread_id: str = "") -> str:
+    async def create(self, workspace: Path, thread_id: str = "", parent: str = "") -> str:
         thread_id = thread_id or uuid4().hex[:16]
         self._held[thread_id] = _Held(
-            ThreadInfo(thread_id, datetime.now(UTC), Path(workspace))
+            ThreadInfo(thread_id, datetime.now(UTC), Path(workspace), parent=parent)
         )
         return thread_id
 
@@ -44,13 +44,8 @@ class MemoryStore:
             first = next((m for m in messages if m.role.value == "user"), None)
             if first is not None:
                 title = first.content.strip().splitlines()[0][:80] if first.content else ""
-        held.info = ThreadInfo(
-            held.info.thread_id,
-            held.info.created_at,
-            held.info.workspace,
-            title,
-            len(held.messages),
-        )
+        # `replace`, not a rebuild: a rebuild dropped `parent` the day it was added.
+        held.info = replace(held.info, title=title, message_count=len(held.messages))
 
     async def load(self, thread_id: str) -> Transcript | None:
         held = self._held.get(thread_id)

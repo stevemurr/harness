@@ -44,6 +44,7 @@ from harness.agent.environment import describe
 from harness.agent.loop import AgentLoop, Observer, Turn, system, user
 from harness.agent.runner import ToolRunner
 from harness.approval import Approvals
+from harness.board import Board
 from harness.exec.children import Children, Lineage, Spawner
 from harness.inbox import Inbox, render
 from harness.mode import ModeState
@@ -89,6 +90,12 @@ class _Agent:
     settings: Settings = field(default_factory=Settings)
     system_prompt: str = SYSTEM_PROMPT
     on_compaction: CompactionObserver | None = None
+    #: The thread that delegated this agent, recorded in its own thread's header.
+    parent_thread: str = ""
+    #: The agents this one may delegate to. Held so `open_thread` can tell them which
+    #: thread is the parent -- the one fact about lineage the root does not know at
+    #: construction, because the store mints the id.
+    children: Children | None = field(default=None, repr=False)
     #: What `new_agent` made and therefore owns. A caller who supplied the tools owns
     #: their kit; this list is empty for them.
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list, repr=False)
@@ -114,6 +121,12 @@ class _Agent:
         An unknown id opens a fresh thread rather than raising: the id may simply be stale,
         and refusing to work is a worse answer than working and saying where.
         """
+        opened = await self._resolve(thread_id)
+        if self.children is not None:
+            self.children.parent_thread = opened
+        return opened
+
+    async def _resolve(self, thread_id: str | None) -> str:
         if (
             thread_id is not None
             and self.store is not None
@@ -124,7 +137,9 @@ class _Agent:
             return thread_id or "unsaved"
         # The caller's id is kept rather than replaced. An unknown id used to open a thread
         # under a DIFFERENT id, which is how a server ended up holding two.
-        return await self.store.create(self.workspace.root, thread_id or "")
+        return await self.store.create(
+            self.workspace.root, thread_id or "", parent=self.parent_thread
+        )
 
     async def run(self, prompt: str, thread_id: str | None = None) -> Outcome:
         """Do one exchange, in the thread given or a fresh one.
@@ -414,6 +429,8 @@ def new_agent(
     ask: Questioner | None = None,
     spawner: Spawner | None = None,
     lineage: Lineage | None = None,
+    board: Board | None = None,
+    identity: str = "",
     settings: Settings | None = None,
     system_prompt: str = SYSTEM_PROMPT,
     on_compaction: CompactionObserver | None = None,
@@ -429,6 +446,7 @@ def new_agent(
     root = Path(folder).expanduser().resolve()
     settings = settings or Settings()
     closers: list[Callable[[], Awaitable[None]]] = []
+    children: Children | None = None
 
     # A child inherits its approvals and its mode from its lineage, so the spawner passes
     # the lineage and nothing else has to remember to. `Approvals()` for a child would be
@@ -442,7 +460,14 @@ def new_agent(
         modes = modes or ModeState()
         inbox = inbox or Inbox()
         children = (
-            Children(inbox=inbox, spawner=spawner, approvals=approvals, modes=modes)
+            Children(
+                inbox=inbox,
+                spawner=spawner,
+                approvals=approvals,
+                modes=modes,
+                root=root,
+                parent_thread=identity,
+            )
             if spawner is not None
             else None
         )
@@ -454,6 +479,8 @@ def new_agent(
             ask=ask,
             children=children,
             lineage=lineage,
+            board=board,
+            identity=identity,
         )
         tools = kit.tools()
         closers.append(kit.aclose)
@@ -462,9 +489,10 @@ def new_agent(
             "tools were supplied without the modes and inbox they share; "
             + "pass the Toolkit's modes= and inbox= as well"
         )
-    elif ask is not None or spawner is not None:
+    elif ask is not None or spawner is not None or board is not None:
         raise ValueError(
-            "ask= and spawner= apply to the default toolkit; give them to the Toolkit instead"
+            "ask=, spawner= and board= apply to the default toolkit; "
+            + "give them to the Toolkit instead"
         )
 
     return _Agent(
@@ -479,5 +507,40 @@ def new_agent(
         settings=settings,
         system_prompt=system_prompt,
         on_compaction=on_compaction,
+        parent_thread=lineage.parent_thread if lineage is not None else "",
+        children=children,
         closers=closers,
     )
+
+
+def spawning(
+    provider: Provider,
+    *,
+    store: Store | None = None,
+    board: Board | None = None,
+    observers: Sequence[Observer] = (),
+    ask: Questioner | None = None,
+    settings: Settings | None = None,
+    on_compaction: CompactionObserver | None = None,
+) -> Spawner:
+    """A spawner that makes children the way this root makes parents.
+
+    For a front end whose children need no wrapping: the CLI, a script, the eval runner.
+    The server writes its own, because it wraps every child tool to stream its activity,
+    and that is the whole reason `Spawner` is supplied rather than fixed.
+    """
+
+    def spawn(_task: str, lineage: Lineage) -> Agent:
+        return new_agent(
+            lineage.root,
+            provider,
+            store=store,
+            observers=observers,
+            ask=ask,
+            lineage=lineage,
+            board=board,
+            settings=settings,
+            on_compaction=on_compaction,
+        )
+
+    return spawn

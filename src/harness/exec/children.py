@@ -24,6 +24,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from uuid import uuid4
 
 from harness.approval import Approvals
@@ -43,6 +44,8 @@ class Lineage:
     """What a child is told about where it came from. Everything it inherits, in one place."""
 
     agent_id: str
+    #: The folder both work in. A child shares the workspace.
+    root: Path
     parent_thread: str
     #: The `delegate` call that started it, for the finishing notice to point back at.
     call_id: str
@@ -86,6 +89,7 @@ class Children:
     spawner: Spawner
     approvals: Approvals
     modes: ModeState
+    root: Path = field(default_factory=Path.cwd)
     parent_thread: str = ""
     #: How many may run at once. Four is a guess with no measurement behind it, chosen so
     #: a model cannot fan out unboundedly on a whim; it is the number to tune first.
@@ -95,6 +99,7 @@ class Children:
     def lineage(self, agent_id: str, call_id: str) -> Lineage:
         return Lineage(
             agent_id=agent_id,
+            root=self.root,
             parent_thread=self.parent_thread,
             call_id=call_id,
             approvals=self.approvals,

@@ -43,6 +43,8 @@ class ThreadInfo:
     #: opaque ids is a list nobody uses.
     title: str = ""
     message_count: int = 0
+    #: The thread that delegated this one, or empty. What lets a listing nest children.
+    parent: str = ""
 
 
 class StoreError(Exception):
@@ -67,8 +69,8 @@ class OnDisk(Protocol):
 class Store(Protocol):
     """Durable transcripts."""
 
-    async def create(self, workspace: Path, thread_id: str = "") -> str:
-        """Begin a thread and return its id.
+    async def create(self, workspace: Path, thread_id: str = "", parent: str = "") -> str:
+        """Begin a thread and return its id. `parent` is the thread that delegated it.
 
         `thread_id` lets a caller name it. A server must answer `POST /threads` with an id
         before any run exists, and minting there and again here gave one thread two ids in

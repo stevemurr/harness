@@ -20,9 +20,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from harness.agent import new_agent
+from harness.agent import new_agent, spawning
 from harness.agent.loop import Turn
 from harness.approval import Approvals, Decision, Policy, Request
+from harness.board import board_id_for
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
@@ -40,9 +41,12 @@ from harness.providers.openai import OpenAICompatible
 from harness.settings import Compaction
 from harness.store import JsonlStore
 from harness.store.base import StoreError
+from harness.store.boards import JsonlBoard
 from harness.types import JSON
 
 THREADS = Path("~/.harness/threads").expanduser()
+#: One board per folder, beside the threads, for the same reason they are there.
+BOARDS = Path("~/.harness/boards").expanduser()
 
 _COLOUR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -74,17 +78,18 @@ def yellow(text: str) -> str:
 PLAN_TOOLS = {"update_plan"}
 
 
-def render(turn: Turn) -> None:
+def render(turn: Turn, indent: str = "") -> None:
     """One turn, as the person watching sees it."""
     if turn.assistant.content.strip():
-        print(f"\n{turn.assistant.content.strip()}\n")
+        said = turn.assistant.content.strip().replace("\n", f"\n{indent}")
+        print(f"\n{indent}{said}\n")
     for call, result in turn.results:
         if call.name in PLAN_TOOLS and result.ok:
             # The plan is the one tool result worth showing whole: it is written for a
             # person to read, and a one-line summary of a checklist is not a checklist.
-            print(f"\n{dim('plan')}")
+            print(f"\n{indent}{dim('plan')}")
             for line in result.content.splitlines():
-                print(f"  {_plan_line(line)}")
+                print(f"{indent}  {_plan_line(line)}")
             print()
             continue
         # Three marks, not two: a refusal is the harness declining, a failure is the world
@@ -93,7 +98,12 @@ def render(turn: Turn) -> None:
         first = result.content.strip().splitlines()
         summary = first[0][:100] if first else ""
         extra = f" {dim(f'(+{len(first) - 1} lines)')}" if len(first) > 1 else ""
-        print(f"  {mark} {bold(call.name)} {dim(summary)}{extra}")
+        print(f"{indent}  {mark} {bold(call.name)} {dim(summary)}{extra}")
+
+
+def render_child(turn: Turn) -> None:
+    """A delegated agent's turn: the same rendering, set in from the parent's."""
+    render(turn, indent=dim("    ↳ "))
 
 
 def _plan_line(line: str) -> str:
@@ -265,17 +275,32 @@ async def main_async(args: Flags) -> int:
         ask=approve,
     )
     folder = Path(args.folder).expanduser().resolve()
+    store = JsonlStore(THREADS)
+    board = JsonlBoard(path=BOARDS / f"{board_id_for(folder)}.jsonl")
+    # Only when a person is actually there. Piped or redirected, `input` would block on a
+    # stdin nobody is typing into, and the tool's own refusal ("there is nobody to ask")
+    # is a better answer than a hang.
+    asker = ask_user if sys.stdin.isatty() else None
     agent = new_agent(
         folder,
         provider,
-        store=JsonlStore(THREADS),
+        store=store,
         approvals=approvals,
         observers=[render],
         modes=ModeState(current=PLAN if args.plan else NORMAL),
-        # Only when a person is actually there. Piped or redirected, `input` would block on a
-        # stdin nobody is typing into, and the tool's own refusal ("there is nobody to ask")
-        # is a better answer than a hang.
-        ask=ask_user if sys.stdin.isatty() else None,
+        ask=asker,
+        # A child renders set in from its parent, asks the same person, shares the board,
+        # and inherits the approvals through its lineage.
+        spawner=spawning(
+            provider,
+            store=store,
+            board=board,
+            observers=[render_child],
+            ask=asker,
+            settings=stored.settings,
+            on_compaction=report_compaction,
+        ),
+        board=board,
         settings=stored.settings,
         on_compaction=report_compaction,
     )

@@ -36,6 +36,8 @@ from uuid import uuid4
 from harness.agent import new_agent
 from harness.agent.loop import Observer, Turn
 from harness.approval import Approvals
+from harness.board import Board, MemoryBoard, board_id_for
+from harness.exec.children import Children, Lineage
 from harness.inbox import Inbox
 from harness.mode import NORMAL, PLAN, ModeState
 from harness.plan import Plan
@@ -51,6 +53,7 @@ from harness.server.runs import (
 )
 from harness.settings import Settings
 from harness.store.base import Store
+from harness.store.boards import JsonlBoard
 from harness.tools import JSON, Handler, ToolContext
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
@@ -89,6 +92,9 @@ class Watched:
     inner: Handler
     live: Live
     plan: Plan
+    #: Set on a delegated agent's tools, so its rows say whose they are in the parent's
+    #: stream -- a child has no run of its own; it works inside the parent's.
+    label: str = ""
 
     @property
     def spec(self) -> ToolSpec:
@@ -113,6 +119,8 @@ class Watched:
         # the whole plan, because there the detail is the decision -- and an activity row
         # is one row.
         text = one_line(self.inner.preview(args)[0])
+        if self.label:
+            text = f"[{self.label}] {text}"
         planning = name in PLAN_TOOLS
         if not planning:
             run.progress(update_id, text, "active")
@@ -245,6 +253,9 @@ class Conversation:
     #: it made, and this front end made the kit -- it had to, to wrap every tool in
     #: `Watched` and to keep the plan it renders.
     kit: Toolkit
+    #: The kits of the agents this conversation delegated to. Made by the spawner below,
+    #: so closed here: a child built from wrapped tools owns nothing it can close itself.
+    child_kits: list[Toolkit] = field(default_factory=list)
     runs: list[Run] = field(default_factory=list)
 
     @property
@@ -286,6 +297,7 @@ def open_conversation(
     provider: Provider,
     store: Store,
     settings: Settings | None = None,
+    board: Board | None = None,
 ) -> Conversation:
     """Build the agent for one conversation, with the front end's collaborators in place.
 
@@ -303,10 +315,55 @@ def open_conversation(
     settings = settings or Settings()
     modes = ModeState()
     inbox = Inbox()
-    kit = Toolkit.for_workspace(
-        root, settings=settings, modes=modes, inbox=inbox, ask=_questioner(live)
-    )
     approvals = Approvals()
+    child_kits: list[Toolkit] = []
+
+    def spawn(_task: str, lineage: Lineage) -> Agent:
+        # A child's tools are wrapped like the parent's, labelled with its id, so its
+        # activity streams into the parent's run. It has no run of its own.
+        child_kit = Toolkit.for_workspace(
+            lineage.root,
+            settings=settings,
+            modes=ModeState(current=lineage.mode),
+            lineage=lineage,
+            board=board,
+        )
+        child_kits.append(child_kit)
+        return new_agent(
+            lineage.root,
+            provider,
+            tools=[
+                Watched(tool, live, child_kit.plan, label=lineage.agent_id)
+                for tool in child_kit.tools()
+            ],
+            modes=child_kit.modes,
+            inbox=child_kit.inbox,
+            store=store,
+            approvals=lineage.approvals,
+            observers=[observer_for(live)],
+            settings=settings,
+            lineage=lineage,
+            on_compaction=compaction_reporter(live),
+        )
+
+    children = Children(
+        inbox=inbox,
+        spawner=spawn,
+        approvals=approvals,
+        modes=modes,
+        root=root,
+        parent_thread=thread_id,
+    )
+    kit = Toolkit.for_workspace(
+        root,
+        settings=settings,
+        modes=modes,
+        inbox=inbox,
+        ask=_questioner(live),
+        children=children,
+        board=board,
+        identity=thread_id,
+    )
     agent = new_agent(
         root,
         provider,
@@ -329,6 +386,7 @@ def open_conversation(
         plan=kit.plan,
         modes=modes,
         kit=kit,
+        child_kits=child_kits,
     )
 
 
@@ -347,8 +405,25 @@ class Runtime:
     #: same thing through `harness-serve` as through `harness`. A setting one front end reads
     #: and the other does not is the bug `config.py` was written about.
     settings: Settings = field(default_factory=Settings)
+    #: Where boards are kept, one file per folder. `None` keeps them in memory, which is
+    #: what a test wants and what a server that should leave nothing behind wants.
+    boards: Path | None = None
     conversations: dict[str, Conversation] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
+    _boards: dict[str, Board] = field(default_factory=dict, repr=False)
+
+    def board_for(self, root: Path) -> Board:
+        """This folder's board, the same object every time it is asked for."""
+        key = board_id_for(root)
+        found = self._boards.get(key)
+        if found is None:
+            found = (
+                JsonlBoard(path=self.boards / f"{key}.jsonl")
+                if self.boards is not None
+                else MemoryBoard()
+            )
+            self._boards[key] = found
+        return found
 
     def conversation(
         self,
@@ -366,6 +441,7 @@ class Runtime:
             self.provider,
             self.store,
             self.settings,
+            board=self.board_for(root),
         )
         self.conversations[thread_id] = opened
         return opened
@@ -477,6 +553,8 @@ class Runtime:
         # subprocesses this process started, and nothing else will reap them.
         for conversation in self.conversations.values():
             await conversation.kit.aclose()
+            for child_kit in conversation.child_kits:
+                await child_kit.aclose()
         await self.provider.aclose()
 
     def for_thread(self, thread_id: str) -> list[Run]:

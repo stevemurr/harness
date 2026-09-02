@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
+from harness.board import Board
 from harness.exec.children import Children, Lineage
 from harness.exec.processes import Processes
 from harness.inbox import Inbox
@@ -27,6 +29,7 @@ from harness.symbols.base import Indexes
 from harness.tools.agents import agent_tools, report_tools
 from harness.tools.ask import Questioner, ask_tools
 from harness.tools.base import Handler
+from harness.tools.board import board_tools
 from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
 from harness.tools.plan import plan_tools
@@ -65,12 +68,20 @@ class Toolkit:
     #: `delegate` -- depth one, by construction -- and not `exit_plan_mode`, because only a
     #: person unlocks and the person talks to the parent.
     lineage: Lineage | None = None
+    #: This folder's work board, when the front end keeps one. The four board tools speak
+    #: as `identity`.
+    board: Board | None = None
+    #: Who this kit's agent is on the board and to its children. A child's is its agent
+    #: id; a front end that knows the thread id passes that.
+    identity: str = field(default_factory=lambda: f"agent_{uuid4().hex[:8]}")
 
     def __post_init__(self) -> None:
         if self.processes is None:
             self.processes = Processes(inbox=self.inbox)
         if self.children is not None and self.lineage is not None:
             raise ValueError("a kit is a parent's or a child's, not both")
+        if self.lineage is not None:
+            self.identity = self.lineage.agent_id
 
     @classmethod
     def for_workspace(
@@ -83,10 +94,12 @@ class Toolkit:
         ask: Questioner | None = None,
         children: Children | None = None,
         lineage: Lineage | None = None,
+        board: Board | None = None,
+        identity: str = "",
     ) -> Toolkit:
         """A kit whose code tools can answer for the languages in `root`."""
         settings = settings or Settings()
-        return cls(
+        made = cls(
             modes=modes or ModeState(),
             inbox=inbox or Inbox(),
             indexes=servers.for_workspace(root, settings.symbols),
@@ -94,7 +107,11 @@ class Toolkit:
             settings=settings,
             children=children,
             lineage=lineage,
+            board=board,
         )
+        if identity and lineage is None:
+            made.identity = identity
+        return made
 
     def tools(self) -> list[Handler]:
         """The one list. Adding a tool to the default set is one line here."""
@@ -108,6 +125,7 @@ class Toolkit:
             *ask_tools(self.ask),
             *(agent_tools(self.children) if self.children is not None else []),
             *(report_tools(self.lineage) if self.lineage is not None else []),
+            *(board_tools(self.board, self.identity) if self.board is not None else []),
         ]
 
     async def aclose(self) -> None:

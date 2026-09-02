@@ -33,6 +33,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from harness.board import Status
 from harness.config import (
     DEFAULT_BASE_URL,
     DEFAULT_HOST,
@@ -69,6 +70,7 @@ PROTOCOL_VERSION = "1"
 #: Where the terminal front end keeps its threads, and where this one keeps them too. One
 #: place, so `harness --sessions` lists what the server ran and `--resume` continues it.
 THREADS = Path("~/.harness/threads").expanduser()
+BOARDS = Path("~/.harness/boards").expanduser()
 
 
 def is_id(value: str) -> bool:
@@ -110,6 +112,7 @@ def create_app(
     instance_id: str | None = None,
     heartbeat: float = HEARTBEAT,
     settings: Settings | None = None,
+    boards: Path | None = None,
 ) -> Starlette:
     """The server, with its collaborators handed in.
 
@@ -117,7 +120,9 @@ def create_app(
     scripted model -- which is the practical argument for the interface, separate from the
     design one.
     """
-    runtime = Runtime(provider=provider, store=store, settings=settings or Settings())
+    runtime = Runtime(
+        provider=provider, store=store, settings=settings or Settings(), boards=boards
+    )
     folders = workspaces or Workspaces()
     identity = (
         os.environ.get("ORCA_MANAGED_INSTANCE_ID", "")
@@ -252,6 +257,41 @@ def create_app(
             raise ApiError(400, "no_such_folder", f"could not create {target}: {exc}") from exc
         return JSONResponse({"path": str(target), "name": name}, status_code=201)
 
+    # -- the board ---------------------------------------------------------------------------
+
+    async def list_tasks(request: Request) -> Response:
+        record = require_workspace(cast("str", request.path_params["workspace_id"]))
+        wanted = request.query_params.get("status") or ""
+        status: Status | None = None
+        if wanted:
+            try:
+                status = Status(wanted)
+            except ValueError as exc:
+                raise ApiError(400, "invalid_request", f"no status {wanted!r}.") from exc
+        board = runtime.board_for(Path(record.root_path))
+        return JSONResponse({"tasks": [task.wire() for task in await board.list(status)]})
+
+    async def create_task(request: Request) -> Response:
+        """A person leaving work for an agent that has not started yet, which is the one
+        consumer of the board that is not an agent."""
+        record = require_workspace(cast("str", request.path_params["workspace_id"]))
+        body = await read_json(request)
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise ApiError(400, "invalid_request", "title is required.")
+        depends_on = tuple(
+            str(item) for item in cast("list[object]", body.get("depends_on") or [])
+        )
+        board = runtime.board_for(Path(record.root_path))
+        task = await board.post(
+            title,
+            by=str(body.get("by") or "person"),
+            detail=str(body.get("detail") or ""),
+            assign_to=str(body.get("assign_to") or ""),
+            depends_on=depends_on,
+        )
+        return JSONResponse(task.wire(), status_code=201)
+
     # -- threads ---------------------------------------------------------------------------
 
     async def create_thread(request: Request) -> Response:
@@ -310,6 +350,7 @@ def create_app(
                     info.thread_id,
                     info.title,
                     root=info.workspace,
+                    parent=info.parent,
                 )
             )
         return JSONResponse({"threads": rows[:limit]})
@@ -331,13 +372,20 @@ def create_app(
         return datetime.fromtimestamp(when, tz=UTC).isoformat()
 
     def thread_row(
-        thread_id: str, title: str, updated_at: str = "", root: Path | None = None
+        thread_id: str,
+        title: str,
+        updated_at: str = "",
+        root: Path | None = None,
+        parent: str = "",
     ) -> JSON:
         runs = runtime.for_thread(thread_id)
         updated_at = updated_at or last_written(thread_id)
         return {
             "thread_id": thread_id,
             "title": title,
+            # The thread that delegated this one, or empty. What lets a listing nest a
+            # child under its parent instead of showing it as a question nobody asked.
+            "parent": parent,
             "latest_run_status": runs[0].status.value if runs else "",
             "updated_at": updated_at,
             # Which folder the thread works in. Both sources already know it -- a held
@@ -639,6 +687,8 @@ def create_app(
         Route(f"{API}/health", health),
         Route(f"{API}/workspaces", list_workspaces),
         Route(f"{API}/workspaces", create_workspace, methods=["POST"]),
+        Route(f"{API}/workspaces/{{workspace_id}}/tasks", list_tasks),
+        Route(f"{API}/workspaces/{{workspace_id}}/tasks", create_task, methods=["POST"]),
         Route(f"{API}/folders", list_folders),
         Route(f"{API}/folders", create_folder, methods=["POST"]),
         Route(f"{API}/threads", list_threads),
@@ -828,6 +878,7 @@ def build_app(args: argparse.Namespace) -> Starlette:
         store=JsonlStore(THREADS),
         token=settings.server.token,
         settings=settings.settings,
+        boards=BOARDS,
     )
 
 

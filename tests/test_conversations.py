@@ -594,3 +594,42 @@ async def test_the_server_propagates_shutdown_to_its_runs(folder, tmp_path) -> N
         "lifespan.shutdown.complete",
     ]
     assert model.closed, "the shutdown signal must reach the provider"
+
+
+# -- delegation -----------------------------------------------------------------------------
+
+
+async def test_a_delegated_child_works_inside_the_parents_run(
+    folder, tmp_path
+) -> None:
+    """The server's spawner: a child's tools are wrapped and labelled, so its activity
+    streams into the parent's run, and its thread names the parent as its own.
+
+    One scripted provider serves both agents in order: the parent delegates, the child
+    lists the folder and answers, the parent answers with what it was told.
+    """
+    model = ScriptedModel(
+        calls(("c1", "delegate", {"task": "what is in this folder?"})),
+        calls(("c2", "list_dir", {})),
+        says("notes.md, nothing else"),
+        says("the child says: notes.md"),
+    )
+    runtime = runtime_for(model, tmp_path)
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+
+    run = await drive(runtime, folder, "delegate a look around", policy="full-access")
+    threads = await runtime.store.threads()
+    await runtime.aclose()
+
+    assert run.status is RunStatus.COMPLETED
+    rows = payloads(run, "run.progress")
+    labelled = [r["text"] for r in rows if r["text"].startswith("[agent_")]
+    assert labelled and "list_dir" in labelled[0]
+    assert "the child says: notes.md" in "".join(
+        d["text"] for d in payloads(run, "answer.delta")
+    )
+    child = next(t for t in threads if t.parent)
+    assert child.parent == "thr_1"
+    assert conversation.child_kits and "delegate" in model.tools_offered[0]
+    offered_to_child = model.tools_offered[1]
+    assert "delegate" not in offered_to_child and "report" in offered_to_child

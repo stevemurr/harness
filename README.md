@@ -490,6 +490,34 @@ the runner and a front end's wrapper handle is a `Handler`: spec, `preview`, `ca
 that touches nothing on the machine names its context `_ctx`, and a grep for that lists
 every such tool.
 
+## Delegating, and the board
+
+A parent may hand a self-contained task to a child agent with `delegate`. The spawner is
+the parent. Five tools in the shape of the process tools, because a child is a background
+command with a model inside: `delegate` waits by default and returns the child's answer,
+or with `wait=false` answers with an id and a notice arrives in the parent's inbox when the
+child ends; `tell_agent` speaks to a running child, `read_agent` shows its reports and its
+answer, `stop_agent` ends it. `report` is the one tool a child has that a parent does not.
+
+A child inherits the workspace, the approvals and the mode -- a person is asked for a
+child's actions exactly as for the parent's, and a child in plan mode cannot unlock itself
+-- and owns its plan, its kit, its inbox and its thread, whose header names the parent.
+Children cannot delegate. Depth one, by construction: a kit built from a `Lineage` gets
+`report` and not `delegate`. Who builds a child is the fifth thing a front end supplies,
+`Spawner`, beside the asker, the approver, the observer and the store; the CLI renders a
+child's turns set in from the parent's, and the server labels a child's activity rows
+with its id inside the parent's run.
+
+The board is the third primitive beside the inbox and the plan, and the difference is the
+design. The inbox is messages, consumed by `drain`. The plan is one agent's own checklist.
+The board is state: durable units of work with a status and an owner, one per folder,
+under `~/.harness/boards/`. `post_task`, `list_tasks`, `claim_task` and `finish_task` speak
+as the agent's identity; a claim is refused if the task is held, done, for someone else,
+or waiting on a task that is not done; only a holder may finish. A person posts work for
+a run that has not started yet through `POST /api/v1/workspaces/{id}/tasks`. It arrived
+with `delegate` because every harness that has one grew it at the moment there were
+several workers, and none ships one for a single agent, whose board is its plan.
+
 ## Code search
 
 Two tools, `find_definition` and `find_references`, backed by a real language index rather

@@ -932,3 +932,31 @@ async def test_making_a_folder_under_one_that_is_not_there(tmp_path: Path) -> No
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "no_such_folder"
+
+
+# -- the board -----------------------------------------------------------------------------
+
+
+async def test_a_person_posts_work_to_a_folders_board_and_reads_it_back(
+    folder, tmp_path
+) -> None:
+    """The one consumer of the board that is not an agent: work left for a run that has
+    not started. Posted as `person`, listed by status, refused without a title."""
+    async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
+        workspace_id = await register(client, folder)
+        posted = await client.post(
+            f"/workspaces/{workspace_id}/tasks",
+            json={"title": "migrate the parser", "detail": "see SPEC.md"},
+        )
+        untitled = await client.post(f"/workspaces/{workspace_id}/tasks", json={"title": " "})
+        listed = await client.get(f"/workspaces/{workspace_id}/tasks?status=open")
+        nothing_done = await client.get(f"/workspaces/{workspace_id}/tasks?status=done")
+        bad = await client.get(f"/workspaces/{workspace_id}/tasks?status=pending")
+
+    assert posted.status_code == 201
+    task = posted.json()
+    assert task["task_id"].startswith("task_") and task["posted_by"] == "person"
+    assert untitled.status_code == 400
+    assert [t["title"] for t in listed.json()["tasks"]] == ["migrate the parser"]
+    assert nothing_done.json()["tasks"] == []
+    assert bad.status_code == 400

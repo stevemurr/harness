@@ -73,7 +73,7 @@ class JsonlStore:
             raise StoreError(f"not a thread id: {thread_id!r}")
         return self.root / thread_id
 
-    async def create(self, workspace: Path, thread_id: str = "") -> str:
+    async def create(self, workspace: Path, thread_id: str = "", parent: str = "") -> str:
         # Microseconds, not seconds, and the random suffix for collisions. This used to be
         # load-bearing for ordering -- `threads()` sorted by filename, so the id's precision
         # WAS the sort key, and at second precision two threads made in the same second fell
@@ -88,6 +88,7 @@ class JsonlStore:
             "thread_id": thread_id,
             "created_at": datetime.now(UTC).isoformat(),
             "workspace": str(workspace),
+            "parent": parent,
         }
         def _begin() -> None:
             path = self.path_for(thread_id)
@@ -193,6 +194,7 @@ def _describe(path: Path) -> ThreadInfo | None:
         workspace=Path(as_str(header.get("workspace")) or "."),
         title=title,
         message_count=count,
+        parent=as_str(header.get("parent")),
     )
 
 

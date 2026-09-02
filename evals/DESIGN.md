@@ -82,24 +82,11 @@ that a rung runs the artifact and never reads the answer. Visual work resists th
 Worth deciding what "correct" means for a visual rung *before* building the tools, because
 the answer determines whether the tools are worth having.
 
-## A work board, when there is more than one agent
+## The work board: built, and what it waits on
 
-Not built, and the shape is written down so it is not reasoned through twice.
-
-The inbox is messages: ordered, transient, consumed by `drain`. A board is state: durable
-units with a status, an owner and possibly dependencies, observed rather than consumed. The
-plan is a third thing, one agent's private breakdown of the unit it is on. If a board exists
-the rule is that it holds units of work and their status, threads hold the conversation
-about each, and the plan stays the agent's own.
-
-Every harness that has one grew it at the moment there were several workers -- Claude Code's
-team task list with `blockedBy`, OpenHands' equivalent -- and none ships one for a single
-agent, because a single agent's board is its plan. `loop.py` refuses "a coordinator
-assigning units to workers" without a measurement, and a board is that coordinator's data
-structure. So it waits for one of three consumers: subagents (now mocked in
-`tools/agents.py`, depth one), work that outlives a run, or a person watching many threads.
-
-Shape, when it comes: a `Board` protocol beside `Store`, durable in the same folder, with
-`post`, `claim`, `update` and `list`; two or three tools over it; and delivery on the inbox,
-so a board assigning work posts a `HARNESS` envelope and the loop stays ignorant of it the
-way it is ignorant of every other source. The first multi-agent rung is the measurement.
+Built on 2026-09-02 with `delegate`, as `board.py`, `store/boards.py` and `tools/board.py`.
+The shape is the one reasoned through here before it existed: units of work with a status
+and an owner, one board per folder, `post`/`claim`/`finish`/`list`, tools that speak as
+the kit's identity, a person posting through the server. Still not built, and waiting on a
+measurement: delivery of board changes into inboxes, and any dependency richer than
+"done before". The first multi-agent rung is the measurement, and there is not one yet.
