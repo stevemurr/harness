@@ -72,7 +72,7 @@ line-length = 96
 src = ["src", "tests"]
 # Eval seeds are fixtures the agent is asked to work on, not this project's code. They are
 # written to be a starting point rather than to satisfy a linter.
-extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed", "evals/long/*/reference"]
+extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed", "evals/long/*/reference", "evals/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ISC"]
@@ -86,6 +86,6 @@ ignore = ["ISC003"]
 include = ["src/harness", "evals"]
 # Seeds and reference solutions are fixtures the agent is asked to work on, written to be
 # broken or to be solved; checking them would be checking the question.
-exclude = ["evals/ladder", "evals/long", "evals/results", "**/__pycache__"]
+exclude = ["evals/ladder", "evals/long", "evals/results", "evals/fixtures", "**/__pycache__"]
 pythonVersion = "3.12"
 typeCheckingMode = "recommended"

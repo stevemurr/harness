@@ -4,7 +4,7 @@ line directly above each of those calls.
 
 The word `resolve` appears in many places here that are NOT this method -- `Path.resolve()`,
 `resolve_approval`, `resolve_question`, `resolve_for_write`, and an unrelated `resolve()`
-function in `harness/server.py`. Do not mark any of those. Mark only calls to the
+function in `harness/server/app.py`. Do not mark any of those. Mark only calls to the
 `Workspace.resolve` method, and change nothing else.
 
 Before you answer, check that `python3 -c "import harness.workspace"` still works.

@@ -13,31 +13,32 @@ def methods(path, classname):
             return {n.name for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
     sys.exit(f"class {classname} not found in {path}")
 
-registry = methods("harness/tools/base.py", "Registry")
-if "dispatch" not in registry: sys.exit(f"Registry.dispatch missing; has {sorted(registry)}")
-if "run" in registry:          sys.exit("Registry.run should be gone")
+for klass in ("Registry", "_Registry"):
+    registry = methods("harness/tools/base.py", klass)
+    if "dispatch" not in registry: sys.exit(f"{klass}.dispatch missing; has {sorted(registry)}")
+    if "run" in registry:          sys.exit(f"{klass}.run should be gone")
 
-runner = methods("harness/runner.py", "ToolRunner")
+runner = methods("harness/agent/runner.py", "ToolRunner")
 if "invoke" not in runner: sys.exit(f"ToolRunner.invoke missing; has {sorted(runner)}")
 if "run" in runner:        sys.exit("ToolRunner.run should be gone")
 
 # The three that must NOT have moved.
-for path, klass in [("harness/loop.py", "AgentLoop"), ("harness/agent.py", "Agent"),
-                    ("harness/tools/shell.py", "Shell")]:
+for path, klass in [("harness/agent/loop.py", "AgentLoop"), ("harness/agent/__init__.py", "_Agent"),
+                    ("harness/agent/__init__.py", "Agent"), ("harness/tools/shell.py", "Shell")]:
     if "run" not in methods(path, klass):
         sys.exit(f"{klass}.run was renamed and should not have been")
 EOF
 
 # Both use sites moved, including the one that is not a call.
-grep -q "self.registry.dispatch(" harness/runner.py
+grep -q "self.registry.dispatch(" harness/agent/runner.py
 # `if ... then exit` rather than `! ...`: a command whose value is inverted is
 # exempt from `set -e`, so every `! grep` here failed silently and gated nothing.
-if grep -q "self.registry.run(" harness/runner.py; then
+if grep -q "self.registry.run(" harness/agent/runner.py; then
     echo "FAILED: runner.py still calls self.registry.run(" >&2
     exit 1
 fi
-grep -q "\.invoke," harness/agent.py
-if grep -qE "\)\.run,$" harness/agent.py; then
+grep -q "\.invoke," harness/agent/__init__.py
+if grep -qE "\)\.run,$" harness/agent/__init__.py; then
     echo "FAILED: agent.py still passes ).run, as a value" >&2
     exit 1
 fi

@@ -116,6 +116,17 @@ def test_a_rung_whose_checks_pass_on_the_unsolved_seed_is_refused(tmp_path: Path
     assert unsolved(red, tmp_path / "stage") is None
 
 
+@needs_bash
+def test_a_rung_naming_a_file_its_seed_lacks_is_refused(tmp_path: Path) -> None:
+    """Six red rows on 2026-09-02, every one a `No such file` from a check written
+    against a layout that had moved. The seed check catches it before the model runs."""
+    stale = _rung(tmp_path, "#!/bin/sh\ngrep -q x harness/server.py\n", name="stale")
+
+    reason = unsolved(stale, tmp_path / "stage")
+
+    assert reason is not None and "harness/server.py" in reason
+
+
 def test_every_shipped_rung_has_what_a_rung_needs() -> None:
     for suite in ("ladder", "long"):
         rungs = discover(suite)

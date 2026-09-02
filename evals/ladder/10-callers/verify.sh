@@ -43,4 +43,4 @@ w = Workspace.at(root)
 assert w.resolve("a.txt").name == "a.txt"
 assert w.read("a.txt") == "hi"
 EOF
-grep -q "root.resolve(strict=True)" harness/server.py
+grep -q "root.resolve(strict=True)" harness/server/app.py

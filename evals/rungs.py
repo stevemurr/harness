@@ -7,6 +7,7 @@ fact stated twice is a fact that can disagree with itself.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,6 +89,21 @@ def stage(rung: Rung, into: Path) -> Path:
     return work
 
 
+NAMED = re.compile(r"\bharness/[\w/]+\.py\b")
+
+
+def missing(rung: Rung, work: Path) -> list[str]:
+    """Files the task or the checks name that the staged seed does not have.
+
+    The rot this catches happened on 2026-09-02: the package was split, and every check
+    that named `harness/server.py` failed on `No such file` before the model's work was
+    looked at -- six red rows measuring the last commit rather than the agent.
+    """
+    text = rung.task + rung.script.read_text()
+    named: set[str] = set(NAMED.findall(text))
+    return sorted(name for name in named if not (work / name).exists())
+
+
 def unsolved(rung: Rung, into: Path) -> str | None:
     """Why the rung cannot be trusted, or `None` if its checks fail on the untouched seed.
 
@@ -95,7 +111,10 @@ def unsolved(rung: Rung, into: Path) -> str | None:
     quietly: every attempt at it would be a green row. The runner's docstring promised this
     check from the start and no code did it until 2026-09-02.
     """
-    verdict = verify(rung.script, stage(rung, into))
+    work = stage(rung, into)
+    if absent := missing(rung, work):
+        return f"{rung.name}: names files its seed does not have: {', '.join(absent)}"
+    verdict = verify(rung.script, work)
     if not verdict.passed:
         return None
     return f"{rung.name}: verify passes on its own unsolved seed {verdict.score}".rstrip()

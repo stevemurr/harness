@@ -3,6 +3,28 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-02: the shakedown after the rewrite, n=1
+
+Run to find harness defects after the agent, tools, server and evals were reworked, not to
+measure anything -- one attempt per rung per arm is a coin. `results/2026-09-02-shakedown`
+and `results/2026-09-02-codesearch`, commit `4b1ba21`, prompt `172fea94532d`.
+
+**No harness defect surfaced.** All sixteen attempts on the eight ordinary rungs passed in
+both arms, including `07-service`, the rung the process-group bug stalled on 2026-09-01.
+Both `&`-with-`background` refusals were correct and recovered from. Compaction did not
+fire; peak context was 166k characters against a threshold near 500k.
+
+**The three code-search rungs failed six of six, on the rungs and not the model.** They
+seeded from live source, and every task and check named `harness/server.py` or
+`harness/runner.py`, which the package split the day before had moved. Every attempt died
+on `No such file` before the work was graded. They now seed from a frozen copy in
+`fixtures/`, and the runner refuses a rung that names a file its seed does not have.
+
+Rerun on the fixed rungs: with the index 3/3, without it 1/3. Both base-arm failures missed
+the call made from inside the `Workspace` class -- the case a text search cannot see and
+the reason the rungs exist. Same direction as the n=5 measurement below, and at n=1 it is
+only that.
+
 ## Measured: the index is worth about 1.9x on the rung built for it
 
 The clean run, after the three defects below were fixed and with both arms under identical

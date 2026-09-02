@@ -2,7 +2,7 @@
 set -eu
 # No counts of anything in the seeded source. This rung reads `src/harness` live, so any
 # number about it is a number that rots the next time that source grows -- which is exactly
-# what happened: the check demanded eight bare `.resolve()` calls, `harness/code/lsp.py` was
+# what happened: the check demanded eight bare `.resolve()` calls, `harness/symbols/lsp.py` was
 # added with two more, and the rung then failed ten runs out of ten for a reason that had
 # nothing to do with the model. Every assertion below is a property, not a tally.
 
@@ -30,10 +30,10 @@ if grep -rq --include='*.py' "\.resolve_read()" harness/; then
     echo "FAILED: a bare .resolve_read() means a pathlib call was renamed" >&2
     exit 1
 fi
-grep -q "root.resolve(strict=True)" harness/server.py
+grep -q "root.resolve(strict=True)" harness/server/app.py
 grep -q "def resolve_for_write" harness/workspace.py
-grep -q "def resolve_approval" harness/runs.py
-grep -q "def resolve_question" harness/runs.py
+grep -q "def resolve_approval" harness/server/runs.py
+grep -q "def resolve_question" harness/server/runs.py
 
 # It still works, including the two paths that go through the call made from inside the
 # class -- which a search for "paths.resolve(" cannot see.

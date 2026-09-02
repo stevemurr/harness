@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>harness · threads</title>
+<style><!-- include shared.css --></style>
+<style>
+  .row { display: block; width: 100%; text-align: left; cursor: pointer;
+         background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+         padding: .55rem .7rem; margin: .35rem 0; font: inherit; color: var(--fg) }
+  .row:hover { border-color: var(--accent) }
+  .row .top { display: flex; gap: .6rem; align-items: baseline }
+  .row .what { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  .row .when { color: var(--dim); font-size: .78rem; flex: none }
+  .row .where { color: var(--dim); font-size: .74rem; margin-top: .15rem }
+  .live { color: var(--ok); font-weight: 600 }
+  .live .dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%;
+               background: var(--ok); margin-right: .4rem;
+               animation: beat 1.4s ease-in-out infinite }
+  @keyframes beat { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+  a { text-decoration: none }
+</style>
+
+<header>
+  <span id="mark"><svg id="glider" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"></svg></span>
+  <h1>harness</h1>
+  <span class="meta">threads</span>
+  <span class="pill" id="status">reading</span>
+  <span class="grow"></span>
+  <a class="meta" href="/console">console →</a>
+</header>
+
+<main><div id="list"></div></main>
+
+<script><!-- include shared.js --></script>
+<script>
+// Everything there is to watch. "Live" is the transcript's mtime rather than a run object,
+// because the runs worth watching are usually evals in another process entirely -- they
+// never appear in this server's own run table, only in the files they are writing.
+const LIVE = 120_000;   // quiet longer than this and a run is between turns at best
+
+function ago(ms) {
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s ago` : `${human(ms)} ago`;
+}
+
+async function refresh() {
+  let rows = [];
+  try {
+    rows = (await (await fetch("/api/v1/threads?limit=100")).json()).threads || [];
+    $("status").textContent = "watching";
+  } catch (e) {
+    $("status").textContent = "no server";
+    return;
+  }
+
+  const now = Date.now();
+  for (const row of rows) row._age = now - (Date.parse(row.updated_at || "") || 0);
+  rows.sort((a, b) => a._age - b._age);
+
+  const list = $("list");
+  list.textContent = "";
+  if (!rows.length) {
+    list.appendChild(el("meta", "no threads yet."));
+    return;
+  }
+  let quiet = false;
+  for (const row of rows) {
+    const live = row._age < LIVE;
+    // One divider, the first time the list stops being live. A heading per group would be
+    // noise when everything is one or the other.
+    if (!live && !quiet && rows[0]._age < LIVE) {
+      list.appendChild(el("project", "earlier"));
+      quiet = true;
+    }
+    const link = document.createElement("a");
+    link.href = `/watch/${row.thread_id}`;
+    const item = document.createElement("button");
+    item.className = "row";
+    const top = el("top");
+    const what = el("what", row.title || "(untitled)");
+    const when = el("when" + (live ? " live" : ""));
+    if (live) when.appendChild(el("dot"));
+    when.appendChild(document.createTextNode(live ? "running" : ago(row._age)));
+    top.append(what, when);
+    item.append(top, el("where", [row.folder, row.latest_run_status, row.thread_id]
+      .filter(Boolean).join(" · ")));
+    link.appendChild(item);
+    list.appendChild(link);
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>

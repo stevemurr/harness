@@ -1,6 +1,6 @@
 {
   "tests": "Finding every caller of one method, and no false positives.",
   "seed_from": {
-    "src/harness": "harness"
+    "evals/fixtures/harness": "harness"
   }
 }
