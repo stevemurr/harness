@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from harness.agent.approval import Approvals, Policy
-from harness.agent.loop import AgentLoop, Turn, share, system, user
+from harness.agent.loop import AgentLoop, Turn, assistant_with_calls, share, system, user
 from harness.settings import Limits, Output
 from harness.types import Message, Role, ToolCall, ToolResult, Transcript, parse_arguments
 
@@ -478,3 +478,25 @@ async def test_an_arrival_resets_the_refusal_count() -> None:
     # Without the reset the run would end at turn 4; the arrival buys it another four.
     assert outcome.stop.kind == "refused"
     assert outcome.turns > 4
+
+
+async def test_a_zero_turn_limit_is_no_limit() -> None:
+    """`max_turns=0` runs until the model stops. A long rung's budget is the thing under
+    test, and a limit of a hundred thousand is a lie about what the number means."""
+    replies = [assistant_with_calls(("c", "noop", {})) for _ in range(150)] + [
+        Message(Role.ASSISTANT, "done")
+    ]
+    scripted = iter(replies)
+
+    async def complete(_transcript: Transcript) -> Message:
+        return next(scripted)
+
+    async def run_tool(_call: ToolCall) -> ToolResult:
+        return ToolResult("ok")
+
+    outcome = await AgentLoop(
+        complete, run_tool, limits=Limits(max_turns=0), output=Output(), observers=[]
+    ).run(Transcript([system("s"), user("go")]))
+
+    assert outcome.stop.kind == "done"
+    assert outcome.turns == 151

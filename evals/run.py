@@ -288,7 +288,7 @@ class Flags:
         return cls(
             label=flag(args, "label"),
             only=flag(args, "only"),
-            max_turns=int_flag(args, "max_turns") or 30,
+            max_turns=_or(int_flag(args, "max_turns"), 30),
             work=flag(args, "work"),
             no_code=bool_flag(args, "no_code"),
             both=bool_flag(args, "both"),
@@ -299,13 +299,18 @@ class Flags:
         )
 
 
+def _or(value: int | None, default: int) -> int:
+    """`None` is the default; zero is a value. `--max-turns 0` means no limit."""
+    return default if value is None else value
+
+
 def parser() -> argparse.ArgumentParser:
     made = argparse.ArgumentParser(description="Run the app-build ladder.")
     _ = made.add_argument(
         "--label", required=True, help="Names the sweep: results/<date>-<label>/."
     )
     _ = made.add_argument("--only", default="", help="Comma-separated rung names.")
-    _ = made.add_argument("--max-turns", type=int, default=30)
+    _ = made.add_argument("--max-turns", type=int, default=30, help="0 means no limit.")
     _ = made.add_argument("--work", default="", help="Where to build. .eval-work by default.")
     _ = made.add_argument("--no-code", action="store_true", help="Withhold the code tools.")
     _ = made.add_argument("--both", action="store_true", help="Run each rung with and without.")

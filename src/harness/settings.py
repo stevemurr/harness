@@ -62,6 +62,9 @@ class Limits:
     It counts REFUSALS, not failures. A failing test is not a stuck agent -- under TDD it is
     the expected first state -- so counting it would end runs for working correctly. What
     signals a stall is the harness saying no over and over. (2026-08-31)
+
+    `max_turns=0` is no limit. A long rung's budget is the thing under test, and a
+    "limit" of a hundred thousand is a lie about what the number means.
     """
 
     max_turns: int = 100

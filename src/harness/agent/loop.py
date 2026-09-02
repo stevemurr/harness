@@ -90,7 +90,7 @@ class AgentLoop:
         consecutive_refusals = 0
 
         while True:
-            if turns >= self.limits.max_turns:
+            if self.limits.max_turns and turns >= self.limits.max_turns:
                 return Outcome(
                     transcript,
                     StopReason("max_turns", f"stopped after {turns} turns"),

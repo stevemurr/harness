@@ -1,0 +1,89 @@
+{
+  "label": "long",
+  "started": "2026-09-02T20:15:29+00:00",
+  "commit": "16b9ee1",
+  "prompt": "172fea94532d",
+  "model": "qwen3.6",
+  "base_url": "http://192.168.1.237:4000/v1",
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "presence_penalty": 1.5,
+  "max_turns": 450,
+  "suite": "long",
+  "arms": [
+    "code"
+  ],
+  "repeat": 1,
+  "note": "",
+  "attempts": [
+    {
+      "rung": "12-conformance",
+      "tests": "Building to a written spec over a long horizon, with a rule stated once in the preamble that only the last cases exercise -- the probe for whether a compaction boundary loses what came before it.",
+      "arm": "code",
+      "attempt": 1,
+      "passed": true,
+      "score": "[40/40]",
+      "why": "",
+      "stop": "done",
+      "detail": "",
+      "turns": 15,
+      "seconds": 57.3,
+      "calls": 21,
+      "tools": {
+        "edit_file": 2,
+        "list_dir": 1,
+        "read_file": 12,
+        "run": 5,
+        "write_file": 1
+      },
+      "failed": {},
+      "refused": {
+        "read_file": 1
+      },
+      "compactions": 0,
+      "context_peak_chars": 48503,
+      "context_peak_tokens": 12497,
+      "context_total_chars": 590226,
+      "model_seconds": 54.4,
+      "model_calls": 15,
+      "verified_last": true,
+      "mutations": 3,
+      "recovered": 1,
+      "unrecovered": 0
+    },
+    {
+      "rung": "13-migration",
+      "tests": "A convention held consistently across twenty-two files, with the rule stated once -- the probe for whether a compaction boundary loses a decision made early.",
+      "arm": "code",
+      "attempt": 1,
+      "passed": true,
+      "score": "[22/22]",
+      "why": "",
+      "stop": "done",
+      "detail": "",
+      "turns": 23,
+      "seconds": 93.6,
+      "calls": 63,
+      "tools": {
+        "edit_file": 1,
+        "list_dir": 3,
+        "read_file": 24,
+        "run": 5,
+        "update_plan": 7,
+        "write_file": 23
+      },
+      "failed": {},
+      "refused": {},
+      "compactions": 0,
+      "context_peak_chars": 69120,
+      "context_peak_tokens": 16236,
+      "context_total_chars": 1176525,
+      "model_seconds": 92.2,
+      "model_calls": 23,
+      "verified_last": true,
+      "mutations": 24,
+      "recovered": 0,
+      "unrecovered": 0
+    }
+  ]
+}
