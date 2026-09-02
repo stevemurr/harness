@@ -1,0 +1,4 @@
+{
+  "tests": "Five independent pieces of work, each small enough for one agent and together enough to fill a context. Whether a parent hands them out with `delegate`, whether the children's answers come back usable, and whether the parent's own context stays small while the work gets done.",
+  "agents": true
+}

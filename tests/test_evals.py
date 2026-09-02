@@ -200,3 +200,43 @@ def test_the_table_reads_from_the_record_not_the_file() -> None:
     out = table(sweep)
     assert "01" in out and "1/2" in out
     assert "widest spread: 01/code (5-20 turns)" in out
+
+
+# -- the arm rule ------------------------------------------------------------------------------
+
+
+def test_the_base_arm_goes_without_searching_and_delegating(tmp_path: Path) -> None:
+    """On a rung that allows agents, the code arm gets `delegate` and the board and the
+    base arm gets neither, the way it gets no code tools. On any other rung nobody gets
+    them."""
+    from evals.run import Recording, assemble
+
+    from harness.approval import Approvals
+    from harness.providers.openai import OpenAICompatible
+    from harness.settings import Settings
+
+    provider = OpenAICompatible(base_url="http://x/v1", model="m")
+    model = Recording(provider)
+    (tmp_path / "work").mkdir()
+    agents = _rung(tmp_path, "#!/bin/sh\nexit 1\n", name="agents")
+    _ = (agents.path / "rung.json").write_text('{"tests": "t", "agents": true}\n')
+    agents = type(agents).at(agents.path)
+    plain = _rung(tmp_path, "#!/bin/sh\nexit 1\n", name="plain")
+
+    def names(rung, with_code: bool) -> set[str]:
+        made = assemble(
+            rung,
+            tmp_path / "work",
+            with_code=with_code,
+            settings=Settings(),
+            model=model,
+            threads=tmp_path / "threads",
+            approvals=Approvals(),
+            observers=[],
+        )
+        return {t.spec.name for t in made.tools}
+
+    assert agents.agents and not plain.agents
+    assert {"delegate", "post_task", "find_definition"} <= names(agents, True)
+    assert not {"delegate", "post_task", "find_definition"} & names(agents, False)
+    assert "delegate" not in names(plain, True) and "read_file" in names(plain, False)

@@ -33,6 +33,9 @@ class Rung:
     #: every sweep records the commit it ran against.
     seed_from: dict[str, str] = field(default_factory=dict)
     long: bool = False
+    #: Whether the agent may delegate. A rung says so; the code arm then gets `delegate`
+    #: and the board, and the base arm gets neither, the way it gets no code tools.
+    agents: bool = False
 
     @classmethod
     def at(cls, path: Path) -> Rung:
@@ -46,6 +49,7 @@ class Rung:
             tests=as_str(meta.get("tests")),
             seed_from=seed_from,
             long=path.parent == SUITES["long"],
+            agents=meta.get("agents") is True,
         )
 
     @property

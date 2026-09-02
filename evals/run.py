@@ -31,15 +31,20 @@ from evals.record import Attempt, Call, Sweep
 from evals.report import table
 from evals.rungs import HERE, REPO, Rung, discover, stage, unsolved
 from evals.verify import verify
-from harness.agent import new_agent
-from harness.agent.loop import Turn
+from harness.agent import new_agent, spawning
+from harness.agent.loop import Observer, Turn
 from harness.approval import Approvals, Policy
+from harness.board import MemoryBoard
 from harness.config import bool_flag, flag, int_flag, load
+from harness.exec.children import Children
+from harness.inbox import Inbox
+from harness.mode import ModeState
 from harness.providers.base import Completion
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
 from harness.store import JsonlStore
 from harness.store.codec import encode
+from harness.tools import Handler
 from harness.tools.kit import Toolkit
 from harness.types import Message, ToolSpec, Transcript
 
@@ -49,6 +54,12 @@ from harness.types import Message, ToolSpec, Transcript
 THREADS = Path("~/.harness/threads").expanduser()
 RESULTS = HERE / "results"
 CODE_TOOLS = frozenset({"find_definition", "find_references"})
+#: What the base arm goes without on a rung that allows delegation. The board goes with
+#: them: a lone agent's board is its plan.
+AGENT_TOOLS = frozenset({
+    "delegate", "tell_agent", "read_agent", "stop_agent",
+    "post_task", "list_tasks", "claim_task", "finish_task",
+})
 MUTATING = frozenset({"write_file", "edit_file"})
 
 
@@ -139,6 +150,66 @@ def commit() -> str:
         return "unknown"
 
 
+@dataclass
+class Assembly:
+    """What one attempt's agent is built from. Separated so the arm rule is testable."""
+
+    kit: Toolkit
+    tools: list[Handler]
+    children: Children | None
+
+
+def assemble(
+    rung: Rung,
+    work: Path,
+    *,
+    with_code: bool,
+    settings: Settings,
+    model: Recording,
+    threads: Path,
+    approvals: Approvals,
+    observers: Sequence[Observer],
+) -> Assembly:
+    """The arm rule. `code` is every tool; `base` is without the searching tools and,
+    on a rung that allows delegation, without the delegating ones.
+
+    Without code tools no language server is probed or started either: a kit that is not
+    built `for_workspace` has empty indexes. A child shares the recording provider, so
+    every model call counts, and the observer, so every tool call counts.
+    """
+    inbox = Inbox()
+    modes = ModeState()
+    children: Children | None = None
+    board = MemoryBoard() if rung.agents and with_code else None
+    if rung.agents and with_code:
+        children = Children(
+            inbox=inbox,
+            spawner=spawning(
+                model,
+                store=JsonlStore(threads),
+                board=board,
+                observers=observers,
+                settings=settings,
+            ),
+            approvals=approvals,
+            modes=modes,
+            root=work,
+        )
+    kit = (
+        Toolkit.for_workspace(
+            work, settings=settings, modes=modes, inbox=inbox, children=children, board=board
+        )
+        if with_code
+        else Toolkit(settings=settings, modes=modes, inbox=inbox)
+    )
+    withheld: frozenset[str] = frozenset() if with_code else CODE_TOOLS | AGENT_TOOLS
+    return Assembly(
+        kit=kit,
+        tools=[t for t in kit.tools() if t.spec.name not in withheld],
+        children=children,
+    )
+
+
 async def attempt(
     rung: Rung,
     work: Path,
@@ -153,14 +224,7 @@ async def attempt(
     """One run of one rung in one arm, graded."""
     model = Recording(provider)
     settings = Settings(limits=Limits(max_turns=max_turns))
-    # Without code tools, no language server is probed or started either: a kit that is
-    # not built `for_workspace` has empty indexes, and the two tools are dropped below.
-    kit = (
-        Toolkit.for_workspace(work, settings=settings)
-        if with_code
-        else Toolkit(settings=settings)
-    )
-    tools = [t for t in kit.tools() if with_code or t.spec.name not in CODE_TOOLS]
+    approvals = Approvals(policy=Policy(approve_everything=True))
 
     used: Counter[str] = Counter()
     failed: Counter[str] = Counter()
@@ -181,17 +245,29 @@ async def attempt(
         nonlocal compactions
         compactions += 1
 
+    made = assemble(
+        rung,
+        work,
+        with_code=with_code,
+        settings=settings,
+        model=model,
+        threads=threads,
+        approvals=approvals,
+        observers=[watch],
+    )
+    kit = made.kit
+
     # A store, so the transcript exists while the run is happening rather than only after
     # it: it can be watched with `tail -f`, and a run that is killed keeps everything up to
     # the turn it died on.
     agent = new_agent(
         work,
         model,
-        tools=tools,
+        tools=made.tools,
         modes=kit.modes,
         inbox=kit.inbox,
         store=JsonlStore(threads),
-        approvals=Approvals(policy=Policy(approve_everything=True)),
+        approvals=approvals,
         settings=settings,
         observers=[watch],
         on_compaction=compacted,
@@ -199,6 +275,9 @@ async def attempt(
 
     started = time.monotonic()
     thread = await agent.open_thread()
+    if made.children is not None:
+        # The root sets this itself when it built the kit; here the runner did.
+        made.children.parent_thread = thread
     print(f"      watching: tail -f {threads / thread / 'transcript.jsonl'}", flush=True)
     messages: list[Message] = []
     try:
