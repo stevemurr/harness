@@ -186,8 +186,8 @@ class Processes:
             Envelope(
                 Source.HARNESS,
                 f"{process.process_id} ({process.command[:80]}) exited "
-                f"{process.code} after {process.elapsed():.0f}s. "
-                f"Call read_process with {process.process_id} to see what it printed.",
+                + f"{process.code} after {process.elapsed():.0f}s. "
+                + f"Call read_process with {process.process_id} to see what it printed.",
                 sender=process.process_id,
                 call_id=process.call_id,
             )

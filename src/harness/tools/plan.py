@@ -13,11 +13,27 @@ reading the ones that matter.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated
 
 from harness.plan import Plan, Status, Step
-from harness.tools.base import ToolContext, ToolSpec, schema
-from harness.types import ToolResult
+from harness.tools.base import Arguments, Handler, MinItems, ToolContext, bind, spec_for
+from harness.types import ToolResult, ToolSpec
+
+
+@dataclass(frozen=True, slots=True)
+class Entry(Arguments):
+    step: Annotated[str, "What this step achieves."]
+    status: Annotated[Status, "pending, in_progress, or completed."]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Checklist(Arguments):
+    explanation: Annotated[
+        str, "Why the plan changed, if it did. One sentence, or omit it."
+    ] = ""
+    plan: Annotated[
+        list[Entry], "Every step, in order -- not only the ones that changed.", MinItems(1)
+    ]
 
 
 @dataclass
@@ -26,65 +42,29 @@ class UpdatePlan:
 
     plan: Plan
     spec: ToolSpec = field(
-        default=ToolSpec(
+        default=spec_for(
+            Checklist,
             name="update_plan",
             description=(
                 "Keep a short checklist of the work. Listing the steps in your reply "
-                "instead of calling this does not count -- the checklist exists only here. "
-                "Send the first list before your first edit. Skip it for straightforward "
-                "work, and never make a single-step plan. "
-                "Steps are outcomes ('make cases 01 to 08 pass'), not tool calls ('call "
-                "edit_file'). Send the WHOLE list every time, including steps that have not "
-                "changed: this replaces the plan rather than patching it. Keep one step in "
-                "progress at a time, mark a step completed only when it is genuinely done, "
-                "and update the plan after finishing one of the steps you put in it. Use "
-                "`explanation` when the plan changes shape, since that is the part a person "
-                "reading it cannot infer."
-            ),
-            parameters=schema(
-                {
-                    "explanation": {
-                        "type": "string",
-                        "description": (
-                            "Why the plan changed, if it did. One sentence, or omit it."
-                        ),
-                    },
-                    "plan": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": (
-                            "Every step, in order -- not only the ones that changed."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "step": {
-                                    "type": "string",
-                                    "description": "What this step achieves.",
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": [s.value for s in Status],
-                                    "description": "pending, in_progress, or completed.",
-                                },
-                            },
-                            "required": ["step", "status"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                required=["plan"],
+                + "instead of calling this does not count -- the checklist exists only here. "
+                + "Send the first list before your first edit. Skip it for straightforward "
+                + "work, and never make a single-step plan. "
+                + "Steps are outcomes ('make cases 01 to 08 pass'), not tool calls ('call "
+                + "edit_file'). Send the WHOLE list every time, including steps that have not "
+                + "changed: this replaces the plan rather than patching it. Keep one step in "
+                + "progress at a time, mark a step completed only when it is genuinely done, "
+                + "and update the plan after finishing one of the steps you put in it. Use "
+                + "`explanation` when the plan changes shape, since that is the part a person "
+                + "reading it cannot infer."
             ),
         )
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Checklist, _ctx: ToolContext, /) -> ToolResult:
         self.plan.replace(
-            [
-                Step(entry["step"], Status(entry.get("status", "pending")))
-                for entry in args["plan"]
-            ],
-            explanation=(args.get("explanation") or "").strip(),
+            [Step(entry.step, entry.status) for entry in args.plan],
+            explanation=args.explanation.strip(),
         )
         body = self.plan.render()
         if self.plan.explanation:
@@ -92,7 +72,7 @@ class UpdatePlan:
         return ToolResult(body)
 
 
-def plan_tools(plan: Plan) -> list[Any]:
+def plan_tools(plan: Plan) -> list[Handler]:
     """The plan tool, over the plan the caller holds.
 
     The plan is held by the tool rather than put on `ToolContext`, so the context stays the
@@ -100,4 +80,4 @@ def plan_tools(plan: Plan) -> list[Any]:
     tool would hand every tool everything, which is the opposite of confining them. The
     caller makes the plan because the caller is who has to render it -- see `tools/kit.py`.
     """
-    return [UpdatePlan(plan)]
+    return [bind(UpdatePlan(plan))]

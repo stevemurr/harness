@@ -11,10 +11,10 @@ import fnmatch
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated
 
-from harness.tools.base import ToolContext, ToolSpec, schema
-from harness.types import ToolResult
+from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
+from harness.types import ToolResult, ToolSpec
 from harness.workspace import PathEscape, PathRefused, WorkspaceError
 
 #: Directories never worth walking. Not a security boundary -- containment is -- just the
@@ -33,38 +33,37 @@ def _walk(root: Path) -> list[Path]:
 
 
 @dataclass(frozen=True, slots=True)
+class Read(Arguments):
+    path: Annotated[str, "Path relative to the workspace."]
+    offset: Annotated[int, "First line to return (1-based)."] = 1
+    limit: Annotated[int, "How many lines to return."] = 2000
+
+
+@dataclass(frozen=True, slots=True)
 class ReadFile:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Read,
         name="read_file",
         description=(
             "Read a file from the workspace. Returns the contents with 1-based line "
-            "numbers, which are what edit_file and the user both refer to."
-        ),
-        parameters=schema(
-            {
-                "path": {"type": "string", "description": "Path relative to the workspace."},
-                "offset": {"type": "integer", "description": "First line to return (1-based)."},
-                "limit": {"type": "integer", "description": "How many lines to return."},
-            },
-            required=["path"],
+            + "numbers, which are what edit_file and the user both refer to."
         ),
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Read, ctx: ToolContext, /) -> ToolResult:
         try:
-            text = ctx.paths.read(args["path"])
+            text = ctx.paths.read(args.path)
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
 
         lines = text.splitlines()
-        offset = max(1, int(args.get("offset", 1)))
-        limit = int(args.get("limit", 2000))
-        window = lines[offset - 1 : offset - 1 + limit]
+        offset = max(1, args.offset)
+        window = lines[offset - 1 : offset - 1 + args.limit]
         if not window:
             return ToolResult(
-                f"{args['path']} has {len(lines)} lines; offset {offset} is past the end"
+                f"{args.path} has {len(lines)} lines; offset {offset} is past the end"
             )
 
         body = "\n".join(f"{offset + i:6d}\t{line}" for i, line in enumerate(window))
@@ -75,65 +74,61 @@ class ReadFile:
 
 
 @dataclass(frozen=True, slots=True)
+class Write(Arguments):
+    path: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class WriteFile:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Write,
         name="write_file",
         description=(
             "Create a file or replace its entire contents. To change part of an existing "
-            "file use edit_file, which will not silently discard the rest of it."
-        ),
-        parameters=schema(
-            {
-                "path": {"type": "string"},
-                "content": {"type": "string"},
-            },
-            required=["path", "content"],
+            + "file use edit_file, which will not silently discard the rest of it."
         ),
         mutates=True,
     )
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        size = len(args.get("content", ""))
-        return f"write {args.get('path')} ({size} bytes)", "write_file"
+    def preview(self, args: Write, /) -> tuple[str, str]:
+        return f"write {args.path} ({len(args.content)} bytes)", "write_file"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Write, ctx: ToolContext, /) -> ToolResult:
         try:
-            written = ctx.paths.write(args["path"], args["content"])
+            written = ctx.paths.write(args.path, args.content)
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
-        return ToolResult(f"wrote {written} bytes to {args['path']}")
+        return ToolResult(f"wrote {written} bytes to {args.path}")
+
+
+@dataclass(frozen=True, slots=True)
+class Edit(Arguments):
+    path: str
+    old: Annotated[str, "Exact text to replace, including indentation."]
+    new: str
+    replace_all: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class EditFile:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Edit,
         name="edit_file",
         description=(
             "Replace an exact string in a file. `old` must appear exactly once unless "
-            "replace_all is true -- an ambiguous edit is refused rather than guessed at."
-        ),
-        parameters=schema(
-            {
-                "path": {"type": "string"},
-                "old": {
-                    "type": "string",
-                    "description": "Exact text to replace, including indentation.",
-                },
-                "new": {"type": "string"},
-                "replace_all": {"type": "boolean"},
-            },
-            required=["path", "old", "new"],
+            + "replace_all is true -- an ambiguous edit is refused rather than guessed at."
         ),
         mutates=True,
     )
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"edit {args.get('path')}", "edit_file"
+    def preview(self, args: Edit, /) -> tuple[str, str]:
+        return f"edit {args.path}", "edit_file"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        path, old, new = args["path"], args["old"], args["new"]
+    async def run(self, args: Edit, ctx: ToolContext, /) -> ToolResult:
+        path, old, new = args.path, args.old, args.new
         if old == new:
             return ToolResult("old and new are identical; nothing to do", ok=False)
         try:
@@ -147,15 +142,15 @@ class EditFile:
         if count == 0:
             return ToolResult(
                 f"{path} does not contain that text. Read the file and copy the exact "
-                "text including indentation.",
+                + "text including indentation.",
                 ok=False,
             )
         # Refusing rather than picking is the whole point: replacing the first of five
         # matches edits a line the model did not look at, and it will not notice.
-        if count > 1 and not args.get("replace_all"):
+        if count > 1 and not args.replace_all:
             return ToolResult(
                 f"that text appears {count} times in {path}. Include surrounding lines to "
-                "make it unique, or pass replace_all.",
+                + "make it unique, or pass replace_all.",
                 ok=False,
                 # The harness declining to guess, which is policy rather than the world
                 # saying no -- so it counts towards a stall the way a schema mismatch does.
@@ -164,7 +159,7 @@ class EditFile:
             )
 
         try:
-            ctx.paths.write(path, text.replace(old, new))
+            _ = ctx.paths.write(path, text.replace(old, new))
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
@@ -173,24 +168,29 @@ class EditFile:
 
 
 @dataclass(frozen=True, slots=True)
+class Listing(Arguments):
+    path: str = "."
+
+
+@dataclass(frozen=True, slots=True)
 class ListDir:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Listing,
         name="list_dir",
         description="List the entries of a directory in the workspace.",
-        parameters=schema({"path": {"type": "string"}}),
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Listing, ctx: ToolContext, /) -> ToolResult:
         try:
-            target = ctx.paths.resolve(args.get("path", "."))
+            target = ctx.paths.resolve(args.path)
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
         if not target.is_dir():
-            return ToolResult(f"not a directory: {args.get('path', '.')}", ok=False)
+            return ToolResult(f"not a directory: {args.path}", ok=False)
 
-        rows = []
+        rows: list[str] = []
         for entry in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name)):
             if entry.name in SKIP:
                 continue
@@ -199,15 +199,20 @@ class ListDir:
 
 
 @dataclass(frozen=True, slots=True)
+class Pattern(Arguments):
+    pattern: str
+
+
+@dataclass(frozen=True, slots=True)
 class Glob:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Pattern,
         name="glob",
         description="Find files by name pattern, e.g. '**/*.py'. Returns paths, not contents.",
-        parameters=schema({"pattern": {"type": "string"}}, required=["pattern"]),
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        pattern = args["pattern"]
+    async def run(self, args: Pattern, ctx: ToolContext, /) -> ToolResult:
+        pattern = args.pattern
         hits = [
             ctx.paths.relative(p)
             for p in _walk(ctx.paths.root)
@@ -220,33 +225,30 @@ class Glob:
 
 
 @dataclass(frozen=True, slots=True)
+class Expression(Arguments):
+    pattern: str
+    glob: Annotated[str | None, "Restrict to files matching this name pattern."] = None
+
+
+@dataclass(frozen=True, slots=True)
 class Grep:
-    spec: ToolSpec = ToolSpec(
+    spec: ToolSpec = spec_for(
+        Expression,
         name="grep",
         description=(
             "Search file contents with a regular expression. Returns matching lines with "
-            "their paths and line numbers."
-        ),
-        parameters=schema(
-            {
-                "pattern": {"type": "string"},
-                "glob": {
-                    "type": "string",
-                    "description": "Restrict to files matching this name pattern.",
-                },
-            },
-            required=["pattern"],
+            + "their paths and line numbers."
         ),
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Expression, ctx: ToolContext, /) -> ToolResult:
         try:
-            expression = re.compile(args["pattern"])
+            expression = re.compile(args.pattern)
         except re.error as exc:
             # The model wrote the regex, so a bad one is its failure to fix, not a crash.
             return ToolResult(f"bad regular expression: {exc}", ok=False, refused=True)
 
-        restrict = args.get("glob")
+        restrict = args.glob
         rows: list[str] = []
         for path in _walk(ctx.paths.root):
             name = ctx.paths.relative(path)
@@ -263,8 +265,15 @@ class Grep:
                     rows.append(f"{name}:{number}: {line.strip()[:300]}")
                     if len(rows) >= 300:
                         return ToolResult("\n".join(rows) + "\n\n[300 match limit reached]")
-        return ToolResult("\n".join(rows) if rows else f"no matches for {args['pattern']}")
+        return ToolResult("\n".join(rows) if rows else f"no matches for {args.pattern}")
 
 
-def file_tools() -> list[Any]:
-    return [ReadFile(), WriteFile(), EditFile(), ListDir(), Glob(), Grep()]
+def file_tools() -> list[Handler]:
+    return [
+        bind(ReadFile()),
+        bind(WriteFile()),
+        bind(EditFile()),
+        bind(ListDir()),
+        bind(Glob()),
+        bind(Grep()),
+    ]

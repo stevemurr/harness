@@ -389,7 +389,7 @@ def create_app(
                 400,
                 "workspace_required",
                 "This backend works in a folder, so a run needs a workspace. Register one "
-                "with POST /workspaces first.",
+                + "with POST /workspaces first.",
             )
         record = folders.get(workspace_id)
         if record is None:
@@ -411,8 +411,8 @@ def create_app(
                 409,
                 "workspace_mismatch",
                 "That conversation belongs to another folder. A run works in the folder it "
-                "was given, and moving it would make the client show a path that is not "
-                "where the work happened.",
+                + "was given, and moving it would make the client show a path that is not "
+                + "where the work happened.",
             )
 
         # Typed before it is read. `message` arriving as a bare string is the obvious
@@ -924,8 +924,8 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help=(
             "JSON merged into every model request, for deployment dialect the OpenAI "
-            "schema does not cover. A Qwen3 behind LiteLLM answers with an empty string "
-            "without it. (env: HARNESS_EXTRA_BODY)"
+            + "schema does not cover. A Qwen3 behind LiteLLM answers with an empty string "
+            + "without it. (env: HARNESS_EXTRA_BODY)"
         ),
     )
     parser.add_argument(

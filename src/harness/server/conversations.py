@@ -31,13 +31,11 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from harness.agent import Agent, new_agent
 from harness.agent.approval import Approvals
 from harness.agent.loop import Observer, Turn
-from harness.agent.runner import describe
 from harness.inbox import Inbox
 from harness.mode import NORMAL, PLAN, ModeState
 from harness.plan import Plan
@@ -53,7 +51,7 @@ from harness.server.runs import (
 )
 from harness.settings import Settings
 from harness.store.base import Store
-from harness.tools import Tool, ToolContext
+from harness.tools import JSON, Handler, ToolContext
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role, StopReason, ToolResult, ToolSpec
@@ -83,46 +81,43 @@ class Live:
 class Watched:
     """One tool, with its activity row published around it.
 
-    Wrapping rather than changing: `Tool` is a protocol, `Registry` takes whatever satisfies
+    Wrapping rather than changing: `Handler` is a protocol, `Registry` takes whatever satisfies
     it, and the composition root is where a front end is allowed to decide what a tool call
     looks like from outside.
     """
 
-    inner: Tool
+    inner: Handler
     live: Live
     plan: Plan
-
-    def __post_init__(self) -> None:
-        # Forward `preview` when the wrapped tool has one. `runner.describe` looks for it by
-        # attribute, so a wrapper that does not forward it silently downgrades every
-        # approval prompt for that tool to a JSON dump of its arguments -- and the summary
-        # is the only thing the person actually reads.
-        preview = getattr(self.inner, "preview", None)
-        if preview is not None:
-            self.preview = preview
 
     @property
     def spec(self) -> ToolSpec:
         return self.inner.spec
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    def preview(self, arguments: JSON, /) -> tuple[str, str]:
+        # Forwarded, not reimplemented: the summary is the only thing the person reads on
+        # an approval prompt, and a wrapper that lost it would downgrade every prompt for
+        # this tool to a JSON dump of its arguments.
+        return self.inner.preview(arguments)
+
+    async def call(self, args: JSON, ctx: ToolContext, /) -> ToolResult:
         run = self.live.run
         if run is None:  # no run in flight: the agent is being driven directly
-            return await self.inner.run(args, ctx)
+            return await self.inner.call(args, ctx)
 
         await run.gate()
 
         name = self.spec.name
         update_id = progress_id(run.turns, name, args)
-        # One line. `describe` may return several -- `exit_plan_mode` deliberately returns
+        # One line. A preview may return several -- `exit_plan_mode` deliberately returns
         # the whole plan, because there the detail is the decision -- and an activity row
         # is one row.
-        text = one_line(describe(self.inner, args)[0])
+        text = one_line(self.inner.preview(args)[0])
         planning = name in PLAN_TOOLS
         if not planning:
             run.progress(update_id, text, "active")
 
-        result = await self.inner.run(args, ctx)
+        result = await self.inner.call(args, ctx)
 
         if planning:
             if result.ok:
@@ -387,7 +382,7 @@ class Runtime:
         if conversation.busy:
             raise CommandRefused(
                 "That conversation already has a run going. Wait for it to finish, or "
-                "cancel it."
+                + "cancel it."
             )
 
         run = Run(

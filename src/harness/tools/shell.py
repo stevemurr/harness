@@ -21,15 +21,26 @@ import asyncio
 import os
 import re
 import shlex
-from copy import deepcopy
-from dataclasses import dataclass, field, replace
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Annotated
 
 from harness.exec.processes import Processes
 from harness.exec.spawn import scoped
 from harness.settings import Shell as ShellSettings
-from harness.tools.base import ToolContext, ToolSpec, schema
-from harness.types import ToolResult
+from harness.tools.base import Arguments, Handler, ToolContext, bind, described, spec_for
+from harness.types import ToolResult, ToolSpec
+
+
+@dataclass(frozen=True, slots=True)
+class Command(Arguments):
+    command: Annotated[str, "The command line to run."]
+    #: `None` is the configured default, which the description names per instance.
+    timeout: Annotated[int | None, "Seconds before it is killed."] = None
+    background: Annotated[
+        bool,
+        "Run it detached and answer at once with an id, rather than "
+        + "waiting. For anything that does not exit on its own.",
+    ] = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,37 +56,22 @@ class Shell:
     #: Where a backgrounded command is registered. `None` withholds backgrounding rather
     #: than pretending: a process nobody is holding is the `&` problem this exists to fix.
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
+    spec: ToolSpec = field(default=spec_for(
+        Command,
         name="run",
         description=(
             "Run a shell command in the workspace directory. Requires the user's approval "
-            "before it runs, and it is NOT sandboxed -- it has the same access as the user, "
-            "so do not run anything destructive or anything outside the workspace without "
-            "saying why first. Returns combined stdout and stderr with the exit code. Set "
-            "background for a command that does not return on its own -- a server, a "
-            "file monitor, a long build: it answers immediately with an id instead of waiting, "
-            "you are told when it ends, and read_process shows what it has printed. Do not "
-            "put `&` in the command, with or without background: `&` detaches the work from "
-            "the shell this call is holding, so the harness ends up watching a wrapper that "
-            "exits at once while the real process runs where nothing can read or stop it. "
-            "background=true is how you detach; `&` is how you lose it."
-        ),
-        parameters=schema(
-            {
-                "command": {"type": "string", "description": "The command line to run."},
-                "timeout": {
-                    "type": "integer",
-                    "description": "Seconds before it is killed.",
-                },
-                "background": {
-                    "type": "boolean",
-                    "description": (
-                        "Run it detached and answer at once with an id, rather than "
-                        "waiting. For anything that does not exit on its own."
-                    ),
-                },
-            },
-            required=["command"],
+            + "before it runs, and it is NOT sandboxed -- it has the same access as the user, "
+            + "so do not run anything destructive or anything outside the workspace without "
+            + "saying why first. Returns combined stdout and stderr with the exit code. Set "
+            + "background for a command that does not return on its own -- a server, a "
+            + "file monitor, a long build: it answers immediately with an id instead of "
+            + "waiting, "
+            + "you are told when it ends, and read_process shows what it has printed. Do not "
+            + "put `&` in the command, with or without background: `&` detaches the work from "
+            + "the shell this call is holding, so the harness ends up watching a wrapper that "
+            + "exits at once while the real process runs where nothing can read or stop it. "
+            + "background=true is how you detach; `&` is how you lose it."
         ),
         mutates=True,
     ))
@@ -83,35 +79,35 @@ class Shell:
     def __post_init__(self) -> None:
         # Frozen, so the spec is replaced rather than edited -- and only to tell the model
         # the real default, which is the one number here a caller can change.
-        parameters = deepcopy(self.spec.parameters)
-        parameters["properties"]["timeout"]["description"] = (
-            f"Seconds before it is killed (default {self.settings.timeout})."
+        spec = described(
+            self.spec,
+            "timeout",
+            f"Seconds before it is killed (default {self.settings.timeout}).",
         )
-        object.__setattr__(self, "spec", replace(self.spec, parameters=parameters))
+        object.__setattr__(self, "spec", spec)
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        command = args.get("command", "")
-        return f"run: {command}", f"run:{_program(command)}"
+    def preview(self, args: Command, /) -> tuple[str, str]:
+        return f"run: {args.command}", f"run:{_program(args.command)}"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        command = args["command"]
-        timeout = int(args.get("timeout", self.settings.timeout))
+    async def run(self, args: Command, ctx: ToolContext, /) -> ToolResult:
+        command = args.command
+        timeout = self.settings.timeout if args.timeout is None else args.timeout
 
         if _backgrounds(command):
             detail = (
                 "background is already doing that, so the two together leave the harness "
-                "holding the wrapper shell -- which exits immediately -- while the real "
-                "work runs detached. Remove the `&`."
-                if args.get("background")
+                + "holding the wrapper shell -- which exits immediately -- while the real "
+                + "work runs detached. Remove the `&`."
+                if args.background
                 else "that detaches it from this call, so it outlives the run with nothing "
-                "able to read or stop it. Use background=true instead, which gives you an "
-                "id, its output, and a way to end it."
+                + "able to read or stop it. Use background=true instead, which gives you an "
+                + "id, its output, and a way to end it."
             )
             return ToolResult(
                 f"this command backgrounds itself with `&`: {detail}", ok=False, refused=True
             )
 
-        if args.get("background"):
+        if args.background:
             if self.processes is None:
                 return ToolResult(
                     "background commands are not available in this harness", ok=False,
@@ -122,9 +118,9 @@ class Shell:
             )
             return ToolResult(
                 f"{process.process_id} started (pid {process.pid}) and is running in the "
-                f"background. You will be told when it ends. Call read_process with "
-                f"{process.process_id} to see what it has printed so far, or stop_process "
-                f"to end it."
+                + "background. You will be told when it ends. Call read_process with "
+                + f"{process.process_id} to see what it has printed so far, or stop_process "
+                + "to end it."
             )
 
         # `scoped` gives the command its own process group and stops that whole group on
@@ -242,6 +238,26 @@ def _program(command: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessRef(Arguments):
+    process_id: Annotated[str, "The id `run` gave you when it started, like proc_1a2b."]
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorRef(Arguments):
+    monitor_id: Annotated[str, "The id `monitor` gave you."]
+
+
+@dataclass(frozen=True, slots=True)
+class Watch(Arguments):
+    command: Annotated[str, "The command to run. Its stdout lines are the events."]
+    description: Annotated[
+        str,
+        "What you are monitoring, in a few words. It is shown with every "
+        + "notice, so 'errors in deploy.log' beats 'monitoring logs'.",
+    ]
+
+
+@dataclass(frozen=True, slots=True)
 class ReadProcess:
     """What a background command has printed.
 
@@ -253,36 +269,28 @@ class ReadProcess:
     """
 
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
+    spec: ToolSpec = field(default=spec_for(
+        ProcessRef,
         name="read_process",
         description=(
             "Show what a background command has printed so far, most recent output last. "
-            "Works while it is still running and after it has ended."
-        ),
-        parameters=schema(
-            {
-                "process_id": {
-                    "type": "string",
-                    "description": "The id `run` gave you when it started, like proc_1a2b.",
-                },
-            },
-            required=["process_id"],
+            + "Works while it is still running and after it has ended."
         ),
     ))
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"read {args.get('process_id', '')}", "read_process"
+    def preview(self, args: ProcessRef, /) -> tuple[str, str]:
+        return f"read {args.process_id}", "read_process"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: ProcessRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("no background commands here", ok=False, refused=True)
-        process = self.processes.get(args["process_id"])
+        process = self.processes.get(args.process_id)
         if process is None or process.monitor is not None:
             known = ", ".join(self.processes.ids(monitored=False)) or "none"
             return ToolResult(
-                f"no process {args['process_id']!r}. Running: {known}", ok=False, refused=True
+                f"no process {args.process_id!r}. Running: {known}", ok=False, refused=True
             )
-        text = self.processes.read(args["process_id"]) or ""
+        text = self.processes.read(args.process_id) or ""
         state = "still running" if process.running else f"exited {process.code}"
         if not text.strip():
             return ToolResult(f"[{state}, no output yet]")
@@ -300,36 +308,37 @@ class StopProcess:
     """
 
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
-        name="stop_process",
-        description=(
-            "Stop a background command you started. Only reaches commands from this run."
+    spec: ToolSpec = field(default=described(
+        spec_for(
+            ProcessRef,
+            name="stop_process",
+            description=(
+                "Stop a background command you started. Only reaches commands from this run."
+            ),
         ),
-        parameters=schema(
-            {"process_id": {"type": "string", "description": "The id `run` gave you."}},
-            required=["process_id"],
-        ),
+        "process_id",
+        "The id `run` gave you.",
     ))
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"stop {args.get('process_id', '')}", "stop_process"
+    def preview(self, args: ProcessRef, /) -> tuple[str, str]:
+        return f"stop {args.process_id}", "stop_process"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: ProcessRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("no background commands here", ok=False, refused=True)
-        found = self.processes.get(args["process_id"])
+        found = self.processes.get(args.process_id)
         what = (
-            await self.processes.stop(args["process_id"])
+            await self.processes.stop(args.process_id)
             if found is not None and found.monitor is None
             else None
         )
         if what is None:
             known = ", ".join(self.processes.ids(monitored=False)) or "none"
             return ToolResult(
-                f"no process {args['process_id']!r}. Started here: {known}",
+                f"no process {args.process_id!r}. Started here: {known}",
                 ok=False, refused=True,
             )
-        return ToolResult(f"{args['process_id']} {what}")
+        return ToolResult(f"{args.process_id} {what}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,91 +346,71 @@ class MonitorProcess:
     """Monitor a command's output as it appears."""
 
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
+    spec: ToolSpec = field(default=spec_for(
+        Watch,
         name="monitor",
         description=(
             "Be told about a command's output MORE THAN ONCE, as it arrives -- every error "
-            "in a log, every file change. Batches of lines reach you between turns, so you "
-            "keep working.\n"
-            "If you only need to be told ONCE that something is ready, this is the wrong "
-            "tool. Use run with background=true and a command that EXITS when the condition "
-            "holds: `until grep -q Ready app.log; do sleep 0.5; done`. You get a single "
-            "notice when it exits. A monitor on `tail -f` never ends by itself, so it stays "
-            "armed long after the thing you were waiting for happened.\n"
-            "Filter tightly, and filter for failure too: a monitor matching only the happy "
-            "path stays silent through a crash, and silence looks exactly like still "
-            "working. Prefer `grep -E --line-buffered 'done|Error|Traceback|FAILED'` over "
-            "matching success alone -- and note that every stage of a pipe must flush per "
-            "line, so grep needs --line-buffered and awk needs fflush(). A monitor that sends "
-            "too much is stopped for you."
-        ),
-        parameters=schema(
-            {
-                "command": {
-                    "type": "string",
-                    "description": "The command to run. Its stdout lines are the events.",
-                },
-                "description": {
-                    "type": "string",
-                    "description": (
-                        "What you are monitoring, in a few words. It is shown with every "
-                        "notice, so 'errors in deploy.log' beats 'monitoring logs'."
-                    ),
-                },
-            },
-            required=["command", "description"],
+            + "in a log, every file change. Batches of lines reach you between turns, so you "
+            + "keep working.\n"
+            + "If you only need to be told ONCE that something is ready, this is the wrong "
+            + "tool. Use run with background=true and a command that EXITS when the condition "
+            + "holds: `until grep -q Ready app.log; do sleep 0.5; done`. You get a single "
+            + "notice when it exits. A monitor on `tail -f` never ends by itself, so it stays "
+            + "armed long after the thing you were waiting for happened.\n"
+            + "Filter tightly, and filter for failure too: a monitor matching only the happy "
+            + "path stays silent through a crash, and silence looks exactly like still "
+            + "working. Prefer `grep -E --line-buffered 'done|Error|Traceback|FAILED'` over "
+            + "matching success alone -- and note that every stage of a pipe must flush per "
+            + "line, so grep needs --line-buffered and awk needs fflush(). A monitor that "
+            + "sends "
+            + "too much is stopped for you."
         ),
         mutates=True,
     ))
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return (
-            f"monitor: {args.get('command', '')}",
-            f"monitor:{_program(args.get('command', ''))}",
-        )
+    def preview(self, args: Watch, /) -> tuple[str, str]:
+        return f"monitor: {args.command}", f"monitor:{_program(args.command)}"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Watch, ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("monitoring is not available here", ok=False, refused=True)
         watched = await self.processes.monitor(
-            args["command"], args["description"],
+            args.command, args.description,
             cwd=ctx.paths.root, env=_environment(), call_id=ctx.call_id,
         )
         return ToolResult(
             f"{watched.process_id} monitoring (pid {watched.pid}). Its lines will reach you "
-            f"between turns. Call read_monitor with {watched.process_id} for everything "
-            f"it has printed, or stop_monitor to end it."
+            + f"between turns. Call read_monitor with {watched.process_id} for everything "
+            + "it has printed, or stop_monitor to end it."
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ReadMonitor:
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
+    spec: ToolSpec = field(default=spec_for(
+        MonitorRef,
         name="read_monitor",
         description="Everything a monitor has printed, including lines already reported.",
-        parameters=schema(
-            {"monitor_id": {"type": "string", "description": "The id `monitor` gave you."}},
-            required=["monitor_id"],
-        ),
     ))
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"read {args.get('monitor_id', '')}", "read_monitor"
+    def preview(self, args: MonitorRef, /) -> tuple[str, str]:
+        return f"read {args.monitor_id}", "read_monitor"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: MonitorRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("monitoring is not available here", ok=False, refused=True)
         # A process id is not a monitor id even though one table now holds both: the model was
         # given two vocabularies and gets the refusal it would have got before.
-        watched = self.processes.get(args["monitor_id"])
+        watched = self.processes.get(args.monitor_id)
         if watched is None or watched.monitor is None:
             known = ", ".join(self.processes.ids(monitored=True)) or "none"
             return ToolResult(
-                f"no monitor {args['monitor_id']!r}. Started here: {known}",
+                f"no monitor {args.monitor_id!r}. Started here: {known}",
                 ok=False, refused=True,
             )
-        text = self.processes.read(args["monitor_id"]) or ""
+        text = self.processes.read(args.monitor_id) or ""
         state = "still monitoring" if watched.running else f"ended {watched.code}"
         if not text.strip():
             return ToolResult(f"[{state}, nothing printed yet]")
@@ -431,44 +420,41 @@ class ReadMonitor:
 @dataclass(frozen=True, slots=True)
 class StopMonitor:
     processes: Processes | None = None
-    spec: ToolSpec = field(default=ToolSpec(
+    spec: ToolSpec = field(default=spec_for(
+        MonitorRef,
         name="stop_monitor",
         description="Stop a monitor you started. Only reaches monitors from this run.",
-        parameters=schema(
-            {"monitor_id": {"type": "string", "description": "The id `monitor` gave you."}},
-            required=["monitor_id"],
-        ),
     ))
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        return f"stop {args.get('monitor_id', '')}", "stop_monitor"
+    def preview(self, args: MonitorRef, /) -> tuple[str, str]:
+        return f"stop {args.monitor_id}", "stop_monitor"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: MonitorRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("monitoring is not available here", ok=False, refused=True)
-        found = self.processes.get(args["monitor_id"])
+        found = self.processes.get(args.monitor_id)
         what = (
-            await self.processes.stop(args["monitor_id"])
+            await self.processes.stop(args.monitor_id)
             if found is not None and found.monitor is not None
             else None
         )
         if what is None:
             known = ", ".join(self.processes.ids(monitored=True)) or "none"
             return ToolResult(
-                f"no monitor {args['monitor_id']!r}. Started here: {known}",
+                f"no monitor {args.monitor_id!r}. Started here: {known}",
                 ok=False, refused=True,
             )
-        return ToolResult(f"{args['monitor_id']} {what}")
+        return ToolResult(f"{args.monitor_id} {what}")
 
 
 def shell_tools(
     settings: ShellSettings | None = None, processes: Processes | None = None
-) -> list[Any]:
+) -> list[Handler]:
     return [
-        Shell(settings or ShellSettings(), processes),
-        ReadProcess(processes),
-        StopProcess(processes),
-        MonitorProcess(processes),
-        ReadMonitor(processes),
-        StopMonitor(processes),
+        bind(Shell(settings or ShellSettings(), processes)),
+        bind(ReadProcess(processes)),
+        bind(StopProcess(processes)),
+        bind(MonitorProcess(processes)),
+        bind(ReadMonitor(processes)),
+        bind(StopMonitor(processes)),
     ]

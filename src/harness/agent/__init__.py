@@ -51,7 +51,7 @@ from harness.prompts import prompt
 from harness.providers.base import Provider
 from harness.settings import Settings
 from harness.store.base import Store
-from harness.tools import Registry, Tool, ToolContext, new_registry
+from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role, ToolSpec, Transcript
@@ -426,7 +426,7 @@ def new_agent(
     folder: Path | str,
     provider: Provider,
     *,
-    tools: Iterable[Tool] | None = None,
+    tools: Iterable[Handler] | None = None,
     modes: ModeState | None = None,
     inbox: Inbox | None = None,
     store: Store | None = None,
@@ -462,7 +462,7 @@ def new_agent(
     elif modes is None or inbox is None:
         raise ValueError(
             "tools were supplied without the modes and inbox they share; "
-            "pass the Toolkit's modes= and inbox= as well"
+            + "pass the Toolkit's modes= and inbox= as well"
         )
     elif ask is not None:
         raise ValueError("ask= applies to the default toolkit; give it to the Toolkit instead")

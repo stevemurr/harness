@@ -458,29 +458,36 @@ describing. One type now, read from the file and handed over whole.
 
 ## Adding a tool
 
-One class, one registration. Nothing else in the harness changes.
+An arguments class, one tool class, one line in `tools/kit.py`. Nothing else in the harness
+changes.
 
 ```python
 @dataclass(frozen=True, slots=True)
+class Counted(Arguments):
+    path: Annotated[str, "A file in the workspace."]
+
+@dataclass(frozen=True, slots=True)
 class WordCount:
-    spec = ToolSpec(
-        name="word_count",
-        description="Count words in a workspace file.",
-        parameters=schema({"path": {"type": "string"}}, required=["path"]),
-        mutates=False,          # read-only, so never asked about
-    )
+    spec = spec_for(Counted, name="word_count", description="Count words in a workspace file.")
 
-    async def run(self, args, ctx):
-        return ToolResult(str(len(ctx.paths.read(args["path"]).split())))
+    async def run(self, args: Counted, ctx: ToolContext, /) -> ToolResult:
+        return ToolResult(str(len(ctx.paths.read(args.path).split())))
 
-registry.register(WordCount())
+registry = new_registry([bind(WordCount())])
 ```
 
-Two things are taken away from you on purpose: **arguments are validated against your
-schema before `run` is called**, so you never write defensive parsing and cannot disagree
-with your own schema; and **paths are resolved by `ctx.paths`, never by you**, so a tool
-cannot escape the workspace. A tool that resolved its own paths is how the predecessor
-deleted its own control journal.
+The arguments class is the schema: the fields are the properties, a default makes one
+optional, the `Annotated` string is its description, and `spec_for` renders the JSON Schema
+the model sees. Two things are taken away from you on purpose: **arguments are validated
+against that schema before `run` is called**, and arrive as the class rather than a dict,
+so you never write defensive parsing and cannot disagree with your own schema; and **paths
+are resolved by `ctx.paths`, never by you**, so a tool cannot escape the workspace. A tool
+that resolved its own paths is how the predecessor deleted its own control journal.
+
+`bind` is where a tool's argument type is erased at the JSON boundary. What the registry,
+the runner and a front end's wrapper handle is a `Handler`: spec, `preview`, `call`. A tool
+that touches nothing on the machine names its context `_ctx`, and a grep for that lists
+every such tool.
 
 ## Code search
 
@@ -502,8 +509,8 @@ be unique, and it is not a substitute: two modules may each define a `Workspace`
 a line cannot collide.
 
 The tool surface enforces it with the machinery that already exists -- `path` and `line` are
-`required` in the schema, so `Registry.run` refuses a one-step call before the tool is
-reached and names the missing field. No new concept.
+required -- every field of the `Definition` arguments class is -- so the registry refuses a
+one-step call before the tool is reached and names the missing field. No new concept.
 
 **Polyglot is the ordinary case.** Almost every repository is mixed -- Markdown, TOML, a
 shell script beside the code -- and many are mixed in earnest. A question naming a file goes

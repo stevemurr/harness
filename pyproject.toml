@@ -72,4 +72,14 @@ src = ["src", "tests"]
 extend-exclude = ["evals/long/*/seed", "evals/ladder/*/seed"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ISC"]
+# Explicit `+` between the pieces of a long string, never adjacency: basedpyright's
+# `reportImplicitStringConcatenation` is on, and ruff's ISC003 would ask for the opposite.
+ignore = ["ISC003"]
+
+[tool.basedpyright]
+# The package only, like mypy above, and for the same reason. "recommended" is the based
+# ruleset: `Any` is reported, overrides must say so, and an unused parameter is a question.
+include = ["src/harness"]
+pythonVersion = "3.12"
+typeCheckingMode = "recommended"

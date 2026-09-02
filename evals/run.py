@@ -166,8 +166,8 @@ def verify(rung: Path, work: Path, timeout: int = 120) -> tuple[bool, str]:
         command = [
             "bash",
             "-c",
-            f"trap 'echo \"__FAILED__ $BASH_COMMAND\" | head -1 >&2' ERR; "
-            f". {shlex.quote(script)}",
+            "trap 'echo \"__FAILED__ $BASH_COMMAND\" | head -1 >&2' ERR; "
+            + f". {shlex.quote(script)}",
         ]
     else:
         command = ["sh", script]
@@ -421,12 +421,12 @@ async def main() -> None:
     parser.add_argument(
         "--threads", default="",
         help="Where transcripts go. The harness's own folder by default, so a run can be "
-             "watched live; point it elsewhere for a sweep that should not leave threads.",
+             + "watched live; point it elsewhere for a sweep that should not leave threads.",
     )
     parser.add_argument(
         "--suite", default="ladder", choices=["ladder", "long"],
         help="`ladder` is the fast suite. `long` is the 30-90 minute rungs -- kept apart so "
-             "the fast one stays something you can run on a whim.",
+             + "the fast one stays something you can run on a whim.",
     )
     args = parser.parse_args()
 
@@ -453,8 +453,8 @@ async def main() -> None:
                 mark = "PASS" if row["passed"] else "FAIL"
                 print(
                     f"[{rung.name}/{arm} {attempt_number}] {mark}  {row['stop']}  "
-                    f"turns={row['turns']} calls={row['calls']}  {row['seconds']}s  "
-                    f"peak={row['context_peak_chars']:,}c"
+                    + f"turns={row['turns']} calls={row['calls']}  {row['seconds']}s  "
+                    + f"peak={row['context_peak_chars']:,}c"
                     + (f"  <- {row['why'][:70]}" if not row["passed"] else ""),
                     flush=True,
                 )
@@ -485,7 +485,7 @@ def report(results: list[dict]) -> None:
     print("\n" + "=" * 118)
     print(
         f"{'rung':<22} {'arm':<5} {'pass':>6} {'turns':>6} {'turn range':>11} "
-        f"{'secs':>7} {'sec range':>13} {'peak ctx':>9} {'find':>5}"
+        + f"{'secs':>7} {'sec range':>13} {'peak ctx':>9} {'find':>5}"
     )
     print("-" * 118)
     seen: list[tuple[str, str]] = []
@@ -504,9 +504,9 @@ def report(results: list[dict]) -> None:
         # whatever makes a task unstable, which is worth finding across rungs.
         print(
             f"{row['rung']:<22} {row['arm']:<5} {passed:>3}/{len(group):<2} "
-            f"{median(turns):>6.1f} {f'{min(turns)}-{max(turns)}':>11} "
-            f"{median(secs):>7.1f} {f'{min(secs):.0f}-{max(secs):.0f}':>13} "
-            f"{median([r['context_peak_chars'] for r in group]):>9,.0f} {found:>5}"
+            + f"{median(turns):>6.1f} {f'{min(turns)}-{max(turns)}':>11} "
+            + f"{median(secs):>7.1f} {f'{min(secs):.0f}-{max(secs):.0f}':>13} "
+            + f"{median([r['context_peak_chars'] for r in group]):>9,.0f} {found:>5}"
         )
     print("-" * 100)
     print("-" * 118)
@@ -525,12 +525,12 @@ def report(results: list[dict]) -> None:
         if rows:
             print(
                 f"  {arm}: {sum(1 for r in rows if r['passed'])}/{len(rows)} passed, "
-                f"median {median([r['turns'] for r in rows]):.0f} turns, "
-                f"median {median([r['seconds'] for r in rows]):.0f}s, "
-                f"peak context {median([r['context_peak_chars'] for r in rows]):,.0f} chars, "
-                f"verified-last {sum(1 for r in rows if r['verified_last'])}/{len(rows)}, "
-                f"recovered {sum(r.get('recovered', 0) for r in rows)} / "
-                f"unrecovered {sum(r.get('unrecovered', 0) for r in rows)}"
+                + f"median {median([r['turns'] for r in rows]):.0f} turns, "
+                + f"median {median([r['seconds'] for r in rows]):.0f}s, "
+                + f"peak context {median([r['context_peak_chars'] for r in rows]):,.0f} chars, "
+                + f"verified-last {sum(1 for r in rows if r['verified_last'])}/{len(rows)}, "
+                + f"recovered {sum(r.get('recovered', 0) for r in rows)} / "
+                + f"unrecovered {sum(r.get('unrecovered', 0) for r in rows)}"
             )
 
 

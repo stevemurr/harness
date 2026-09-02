@@ -24,7 +24,7 @@ from harness.mode import ModeState
 from harness.plan import Plan
 from harness.settings import Settings
 from harness.tools.ask import Questioner, ask_tools
-from harness.tools.base import Tool
+from harness.tools.base import Handler
 from harness.tools.code import code_tools
 from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
@@ -82,7 +82,7 @@ class Toolkit:
             settings=settings,
         )
 
-    def tools(self) -> list[Tool]:
+    def tools(self) -> list[Handler]:
         """The one list. Adding a tool to the default set is one line here."""
         return [
             *file_tools(),

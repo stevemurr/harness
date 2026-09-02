@@ -157,8 +157,8 @@ class LspIndex:
                 # caller must stop asking rather than spend the budget re-discovering it.
                 raise CodeIndexError(
                     f"{self.recipe.binary} is not set up for the harness. "
-                    f"Run `harness --install-servers` to provision it, "
-                    f"or use grep and read_file instead.",
+                    + "Run `harness --install-servers` to provision it, "
+                    + "or use grep and read_file instead.",
                     available=False,
                 ) from exc
 
@@ -188,7 +188,7 @@ class LspIndex:
                 await self.aclose()
                 raise CodeIndexError(
                     f"{self.name} did not finish starting in "
-                    f"{self.settings.startup_timeout:.0f}s"
+                    + f"{self.settings.startup_timeout:.0f}s"
                 ) from exc
             self._notify("initialized", {})
             self._warm = False
@@ -288,7 +288,7 @@ class LspIndex:
         except TimeoutError as exc:
             raise CodeIndexError(
                 f"{self.name} did not answer {method} in "
-                f"{self.settings.request_timeout:.0f}s"
+                + f"{self.settings.request_timeout:.0f}s"
             ) from exc
 
     async def _indexed(self, method: str, params: dict[str, Any]) -> Any:
@@ -404,8 +404,8 @@ class LspIndex:
         if column is None:
             raise CodeIndexError(
                 f"{needle!r} does not appear on {path.name}:{symbol.location.line}, "
-                f"which reads: {_line_text(path, symbol.location.line).strip()[:80]!r}. "
-                "Check the line, or call find_definition again if the file has changed."
+                + f"which reads: {_line_text(path, symbol.location.line).strip()[:80]!r}. "
+                + "Check the line, or call find_definition again if the file has changed."
             )
 
         await self._ensure()

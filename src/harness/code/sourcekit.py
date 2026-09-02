@@ -70,7 +70,7 @@ class SourceKit(LspIndex):
             binary="sourcekit-lsp",
             doc=(
                 "install Xcode (macOS) or a toolchain from swift.org, then make sure "
-                "`sourcekit-lsp` runs -- `xcrun --find sourcekit-lsp` shows where it is"
+                + "`sourcekit-lsp` runs -- `xcrun --find sourcekit-lsp` shows where it is"
             ),
         )
     )

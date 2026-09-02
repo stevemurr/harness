@@ -123,7 +123,7 @@ def load(path: Path | None = None) -> Config:
     if unknown := set(raw) - _TABLES:
         raise ConfigError(
             f"{resolved}: unknown section(s) {', '.join(sorted(unknown))}. "
-            f"Expected: {', '.join(sorted(_TABLES))}."
+            + f"Expected: {', '.join(sorted(_TABLES))}."
         )
 
     provider_table = _table(raw, "provider", _PROVIDER_KEYS, resolved)
@@ -139,7 +139,7 @@ def load(path: Path | None = None) -> Config:
     if provider_table.get("api_key") and _is_group_or_world_readable(resolved):
         raise ConfigError(
             f"{resolved} holds an api_key and is readable by other users. "
-            f"Run: chmod 600 {resolved}"
+            + f"Run: chmod 600 {resolved}"
         )
 
     return Config(
@@ -209,7 +209,7 @@ def _table(raw: dict, name: str, allowed: frozenset[str], path: Path) -> dict:
     if unknown := set(table) - allowed:
         raise ConfigError(
             f"{path}: unknown key(s) in [{name}]: {', '.join(sorted(unknown))}. "
-            f"Expected: {', '.join(sorted(allowed))}."
+            + f"Expected: {', '.join(sorted(allowed))}."
         )
     return table
 
@@ -250,45 +250,45 @@ def write_example(path: Path | None = None) -> Path:
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(
         "# harness settings. A flag beats an env var beats this file.\n"
-        "\n"
-        "[provider]\n"
-        f'base_url = "{DEFAULT_BASE_URL}"\n'
-        f'model = "{DEFAULT_MODEL}"\n'
-        'api_key = ""\n'
-        f"context_window = {DEFAULT_CONTEXT_WINDOW}\n"
-        "\n"
-        "# Sampling, from your model's own card. These are Qwen3.6's for non-thinking\n"
-        "# mode; a different model wants different numbers. temperature = 0 is greedy\n"
-        "# decoding, which several model cards warn produces endless repetition.\n"
-        "# temperature = 0.7\n"
-        "# top_p = 0.8\n"
-        "# presence_penalty = 1.5\n"
-        "\n"
-        "# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM\n"
-        "# answers with an empty string without this.\n"
-        "# [provider.extra_body.chat_template_kwargs]\n"
-        "# enable_thinking = false\n"
-        "\n"
-        "[server]\n"
-        f'host = "{DEFAULT_HOST}"\n'
-        f"port = {DEFAULT_PORT}\n"
-        '# token = ""   # set to require a bearer token; empty means no auth\n'
-        "\n"
-        "# Summarise and hand off to a smaller context at this fraction of the window.\n"
-        "# [compaction]\n"
-        "# enabled = true\n"
-        "# at = 0.8\n"
-        "# keep_turns = 2\n"
-        "\n"
-        "# How much a tool may say: one result, and one whole turn across all its calls.\n"
-        "# [output]\n"
-        "# per_result = 30000\n"
-        "# per_turn = 120000\n"
-        "\n"
-        "# How a run may end other than the model stopping.\n"
-        "# [limits]\n"
-        "# max_turns = 100\n"
-        "# max_consecutive_refusals = 10\n",
+        + "\n"
+        + "[provider]\n"
+        + f'base_url = "{DEFAULT_BASE_URL}"\n'
+        + f'model = "{DEFAULT_MODEL}"\n'
+        + 'api_key = ""\n'
+        + f"context_window = {DEFAULT_CONTEXT_WINDOW}\n"
+        + "\n"
+        + "# Sampling, from your model's own card. These are Qwen3.6's for non-thinking\n"
+        + "# mode; a different model wants different numbers. temperature = 0 is greedy\n"
+        + "# decoding, which several model cards warn produces endless repetition.\n"
+        + "# temperature = 0.7\n"
+        + "# top_p = 0.8\n"
+        + "# presence_penalty = 1.5\n"
+        + "\n"
+        + "# Deployment dialect the OpenAI schema does not cover. A Qwen3 behind LiteLLM\n"
+        + "# answers with an empty string without this.\n"
+        + "# [provider.extra_body.chat_template_kwargs]\n"
+        + "# enable_thinking = false\n"
+        + "\n"
+        + "[server]\n"
+        + f'host = "{DEFAULT_HOST}"\n'
+        + f"port = {DEFAULT_PORT}\n"
+        + '# token = ""   # set to require a bearer token; empty means no auth\n'
+        + "\n"
+        + "# Summarise and hand off to a smaller context at this fraction of the window.\n"
+        + "# [compaction]\n"
+        + "# enabled = true\n"
+        + "# at = 0.8\n"
+        + "# keep_turns = 2\n"
+        + "\n"
+        + "# How much a tool may say: one result, and one whole turn across all its calls.\n"
+        + "# [output]\n"
+        + "# per_result = 30000\n"
+        + "# per_turn = 120000\n"
+        + "\n"
+        + "# How a run may end other than the model stopping.\n"
+        + "# [limits]\n"
+        + "# max_turns = 100\n"
+        + "# max_consecutive_refusals = 10\n",
         encoding="utf-8",
     )
     os.chmod(resolved, 0o600)

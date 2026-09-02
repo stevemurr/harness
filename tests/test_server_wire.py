@@ -42,11 +42,12 @@ class Served:
 
     async def open_stream(self, path: str) -> Follow:
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
-        writer.write(
+        request = (
             f"GET /api/v1{path} HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{self.port}\r\n"
-            "Accept: text/event-stream\r\n\r\n".encode()
+            + f"Host: 127.0.0.1:{self.port}\r\n"
+            + "Accept: text/event-stream\r\n\r\n"
         )
+        writer.write(request.encode())
         await writer.drain()
         return await Follow.opened(reader, writer)
 

@@ -48,8 +48,8 @@ def test_heredoc_failure_reports_the_assertion(tmp_path: Path) -> None:
     rung = _rung(
         tmp_path,
         "#!/bin/sh\nset -eu\npython3 - <<'EOF'\n"
-        'assert 1 == 2, "the stated reason"\n'
-        "EOF\n",
+        + 'assert 1 == 2, "the stated reason"\n'
+        + "EOF\n",
     )
     passed, why = _runner().verify(rung, tmp_path / "work")
     assert not passed

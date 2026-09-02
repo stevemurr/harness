@@ -9,12 +9,12 @@ import jsonschema
 import pytest
 
 from harness.agent.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
-from harness.agent.runner import ToolRunner, describe
+from harness.agent.runner import ToolRunner
 from harness.providers.openai import decode_message, merge_tool_call_deltas
 from harness.settings import Output
-from harness.tools import Registry, ToolContext, new_registry
+from harness.tools import Registry, ToolContext, bind, new_registry
 from harness.tools.files import file_tools
-from harness.tools.shell import Shell, _program
+from harness.tools.shell import Command, Shell, _program
 from harness.types import ToolCall, ToolResult, ToolSpec
 from harness.workspace import PathEscape, PathRefused, Workspace, WorkspaceError
 
@@ -34,7 +34,7 @@ def ctx(ws: Workspace) -> ToolContext:
 
 @pytest.fixture
 def registry() -> Registry:
-    return new_registry([*file_tools(), Shell()])
+    return new_registry([*file_tools(), bind(Shell())])
 
 
 # --- the workspace boundary ------------------------------------------------------------
@@ -141,7 +141,10 @@ def test_a_malformed_schema_is_caught_at_registration() -> None:
     class Bad:
         spec = ToolSpec("bad", "d", {"type": "not-a-type"})
 
-        async def run(self, args, ctx):  # pragma: no cover
+        def preview(self, arguments, /):  # pragma: no cover
+            return "bad", "bad"
+
+        async def call(self, arguments, ctx, /):  # pragma: no cover
             return ToolResult("")
 
     with pytest.raises(jsonschema.SchemaError):
@@ -338,9 +341,9 @@ def test_a_shell_grant_covers_the_program_not_the_command_line() -> None:
     cover other git. The line is drawn at the program deliberately; approving whole command
     lines would never match twice."""
     shell = Shell()
-    assert shell.preview({"command": "git status"}) == ("run: git status", "run:git")
-    assert shell.preview({"command": "rm -rf build"})[1] == "run:rm"
-    assert describe(shell, {"command": "ls -la"})[1] == "run:ls"
+    assert shell.preview(Command("git status")) == ("run: git status", "run:git")
+    assert shell.preview(Command("rm -rf build"))[1] == "run:rm"
+    assert bind(shell).preview({"command": "ls -la"})[1] == "run:ls"
 
 
 def test_the_program_is_lexed_not_split() -> None:
@@ -593,7 +596,7 @@ async def test_a_command_verdict_at_the_tail_survives_the_loop(ctx) -> None:
         "python3 -c \"print('noise\\n' * 20000); print('FAIL: 5 of 200 tests failed')\""
     )
 
-    result = await Shell().run({"command": command}, ctx)
+    result = await bind(Shell()).call({"command": command}, ctx)
     final = result.truncated(out.per_result, out.split_floor)
 
     assert len(result.content) > out.per_result, "run must hand the loop the whole output"
@@ -614,7 +617,7 @@ async def test_a_background_command_answers_with_a_handle_not_its_output(tmp_pat
     run, read, stop, *_ = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path), call_id="call_1")
 
-    started = await run.run({"command": "echo up; sleep 5", "background": True}, ctx)
+    started = await run.call({"command": "echo up; sleep 5", "background": True}, ctx)
 
     assert started.ok
     assert "started (pid" in started.content
@@ -634,10 +637,10 @@ async def test_its_output_is_fetched_and_comes_back_as_a_tool_result(tmp_path) -
     run, read, stop, *_ = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path))
 
-    started = await run.run({"command": "echo hello", "background": True}, ctx)
+    started = await run.call({"command": "echo hello", "background": True}, ctx)
     process_id = started.content.split()[0]
     await asyncio.sleep(0.4)
-    seen = await read.run({"process_id": process_id}, ctx)
+    seen = await read.call({"process_id": process_id}, ctx)
 
     assert seen.ok and "hello" in seen.content
     await processes.aclose()
@@ -657,7 +660,7 @@ async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path)
     # A command whose OUTPUT does not appear in its own text, so the two can be told apart.
     # The notice quotes the command deliberately -- the model wrote that, and reading it
     # back is not an attribution problem. Its output would be.
-    started = await run.run(
+    started = await run.call(
         {"command": "echo $((6*7))", "background": True},
         ToolContext(paths=Workspace.at(tmp_path), call_id="call_7"),
     )
@@ -684,7 +687,7 @@ async def test_closing_reaps_what_the_run_started(tmp_path) -> None:
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
     run, *_ = shell_tools(processes=processes)
 
-    started = await run.run(
+    started = await run.call(
         {"command": "sleep 60", "background": True}, ToolContext(paths=Workspace.at(tmp_path))
     )
     process = processes.get(started.content.split()[0])
@@ -709,7 +712,7 @@ async def test_a_monitor_reports_its_lines_as_they_arrive(tmp_path) -> None:
     *_, watch, read, stop = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path), call_id="call_3")
 
-    started = await watch.run(
+    started = await watch.call(
         {"command": "echo one; sleep 0.5; echo two", "description": "a fake log"}, ctx
     )
     await asyncio.sleep(1.6)
@@ -737,7 +740,7 @@ async def test_a_monitor_that_matches_everything_is_stopped(tmp_path) -> None:
     processes = Processes(inbox=box, root=tmp_path / "out")
     *_, watch, _, _ = shell_tools(processes=processes)
 
-    started = await watch.run(
+    started = await watch.call(
         {"command": "while true; do echo spam; done", "description": "a bad filter"},
         ToolContext(paths=Workspace.at(tmp_path)),
     )
@@ -763,8 +766,8 @@ async def test_reading_and_stopping_a_monitor_that_is_not_there(tmp_path) -> Non
     *_, _, read, stop = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path))
 
-    missing = await read.run({"monitor_id": "mon_nope"}, ctx)
-    cannot = await stop.run({"monitor_id": "mon_nope"}, ctx)
+    missing = await read.call({"monitor_id": "mon_nope"}, ctx)
+    cannot = await stop.call({"monitor_id": "mon_nope"}, ctx)
 
     assert missing.refused and "no monitor" in missing.content
     assert cannot.refused and "no monitor" in cannot.content
@@ -784,8 +787,8 @@ async def test_a_command_that_detaches_itself_is_refused(tmp_path) -> None:
     run, *_ = shell_tools(processes=processes)
     ctx = ToolContext(paths=Workspace.at(tmp_path))
 
-    both = await run.run({"command": "bash x.sh &", "background": True}, ctx)
-    alone = await run.run({"command": "bash x.sh &"}, ctx)
+    both = await run.call({"command": "bash x.sh &", "background": True}, ctx)
+    alone = await run.call({"command": "bash x.sh &"}, ctx)
 
     assert both.refused and "Remove the `&`" in both.content
     assert alone.refused and "Use background=true instead" in alone.content

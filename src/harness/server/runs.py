@@ -55,7 +55,7 @@ def policy_for(name: str) -> Policy:
 #: contained by anything.
 _UNSANDBOXED = (
     "Not sandboxed. This runs with your own authority; the folder is its working "
-    "directory, not its boundary."
+    + "directory, not its boundary."
 )
 _CONTAINED = "Writes are contained to the folder and refuse the harness's own records."
 

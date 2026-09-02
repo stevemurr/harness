@@ -157,7 +157,7 @@ class AgentLoop:
                     StopReason(
                         "refused",
                         f"{consecutive_refusals} consecutive turns where every tool call "
-                        "was refused",
+                        + "was refused",
                     ),
                     turns,
                 )

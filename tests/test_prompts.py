@@ -33,23 +33,23 @@ RUN, _READ, _STOP, MONITOR, *_ = (t.spec.description for t in shell_tools())
         (
             "before your first edit",
             "Measured three runs with it (planned first, every time) against one without "
-            "(edited at turn 14 with no plan at all). Dropped once by accident in a rewrite.",
+            + "(edited at turn 14 with no plan at all). Dropped once by accident in a rewrite.",
         ),
         (
             "independent calls together",
             "Batching. 0 multi-call turns in a 441-turn run before this line; 37 of 49 in "
-            "the first run after it.",
+            + "the first run after it.",
         ),
         (
             "not a plan",
             "The model wrote its plan as a numbered list in prose and started work. Prose "
-            "is a satisfying substitute for the tool call unless something says it is not.",
+            + "is a satisfying substitute for the tool call unless something says it is not.",
         ),
         (
             "not an obstacle to clear",
             "An eval agent found port 8080 busy and ran `lsof -ti :8080 | xargs kill -9`, "
-            "killing the watch server. Codex has no equivalent guidance; it relies on a "
-            "sandbox, and this harness deliberately has none.",
+            + "killing the watch server. Codex has no equivalent guidance; it relies on a "
+            + "sandbox, and this harness deliberately has none.",
         ),
         (
             "`&` is how you lose it",

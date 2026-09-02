@@ -26,15 +26,23 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated
 
-from harness.tools.base import ToolContext, ToolSpec, schema
-from harness.types import ToolResult
+from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
+from harness.types import ToolResult, ToolSpec
 
 #: Given a question and the options offered (possibly none), return the person's answer.
 #: Returning an empty string means they declined to answer, which the model is told plainly
 #: rather than being left to infer from silence.
 Questioner = Callable[[str, tuple[str, ...]], Awaitable[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class Question(Arguments):
+    question: Annotated[str, "One clear question, in the user's terms."]
+    options: Annotated[list[str], "A short list to choose from, if the answer is a choice."] = (
+        field(default_factory=list)
+    )
 
 
 @dataclass
@@ -43,31 +51,16 @@ class AskUser:
 
     ask: Questioner | None = None
     spec: ToolSpec = field(
-        default=ToolSpec(
+        default=spec_for(
+            Question,
             name="ask_user",
             description=(
                 "Ask the user a question and wait for their answer. Use it when the work "
-                "genuinely forks on something only they can decide -- which of two designs, "
-                "which of several files they meant -- and not to confirm something you could "
-                "check yourself by reading. Offer `options` when the answer is a choice from "
-                "a short list; leave it out for an open question. Asking costs the user's "
-                "attention, so ask once, specifically, and proceed on the answer."
-            ),
-            parameters=schema(
-                {
-                    "question": {
-                        "type": "string",
-                        "description": "One clear question, in the user's terms.",
-                    },
-                    "options": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "A short list to choose from, if the answer is a choice."
-                        ),
-                    },
-                },
-                required=["question"],
+                + "genuinely forks on something only they can decide -- which of two designs, "
+                + "which of several files they meant -- and not to confirm something you could "
+                + "check yourself by reading. Offer `options` when the answer is a choice from "
+                + "a short list; leave it out for an open question. Asking costs the user's "
+                + "attention, so ask once, specifically, and proceed on the answer."
             ),
             # Asking changes nothing, so it is never routed through approval. A prompt asking
             # permission to ask a question is the purest form of the approval fatigue that
@@ -76,28 +69,27 @@ class AskUser:
         )
     )
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, args: Question, _ctx: ToolContext, /) -> ToolResult:
         if self.ask is None:
             # Fail closed and say why. A run with nobody attached cannot be asked anything,
             # and inventing an answer on the user's behalf is the one thing this tool must
             # never do.
             return ToolResult(
                 "There is nobody to ask: this run has no interactive front end. Decide it "
-                "yourself, say which way you went and why, or stop and explain what you need.",
+                + "yourself, say which way you went and why, or stop and explain what you "
+                + "need.",
                 ok=False,
             )
 
-        question = args["question"]
-        options = tuple(args.get("options") or ())
-        answer = (await self.ask(question, options)).strip()
+        answer = (await self.ask(args.question, tuple(args.options))).strip()
         if not answer:
             return ToolResult(
                 "The user did not answer. Do not ask again -- proceed on your own judgement "
-                "and say which way you went.",
+                + "and say which way you went.",
                 ok=False,
             )
         return ToolResult(answer)
 
 
-def ask_tools(ask: Questioner | None = None) -> list[Any]:
-    return [AskUser(ask)]
+def ask_tools(ask: Questioner | None = None) -> list[Handler]:
+    return [bind(AskUser(ask))]

@@ -83,13 +83,14 @@ def describe(root: Path, *, limit: int = 40) -> str:
         f"Working folder: {root}",
         "",
         "**Use relative paths.** `src/main.py`, not the absolute path above. Every file tool "
-        "resolves relative paths against that folder, and `run` already executes there -- you "
-        "never need to `cd` into it. The absolute path is given so you can recognise it in "
-        "output, not so you can retype it: one wrong character in a long path creates a "
-        "second folder you cannot see, and the work ends up split between them.",
+        + "resolves relative paths against that folder, and `run` already executes there -- "
+        + "you "
+        + "never need to `cd` into it. The absolute path is given so you can recognise it in "
+        + "output, not so you can retype it: one wrong character in a long path creates a "
+        + "second folder you cannot see, and the work ends up split between them.",
         "",
         "It is not a sandbox -- `run` executes with the user's own authority -- so if you do "
-        "need to leave the folder, say why first.",
+        + "need to leave the folder, say why first.",
         "",
         f"Platform: {platform.system().lower()} {platform.release()}",
         f"Python (this harness): {sys.version.split()[0]}",
@@ -148,7 +149,7 @@ def _python_note() -> str:
         return f"`python` on PATH is {version}."
     return (
         f"`python` on PATH is {version or 'not Python 3'} -- NOT Python 3. Use `python3` in "
-        "shell commands, and `sys.executable` when a Python program spawns another."
+        + "shell commands, and `sys.executable` when a Python program spawns another."
     )
 
 

@@ -13,11 +13,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Any
+from typing import Annotated
 
 from harness.mode import ModeState
-from harness.tools.base import ToolContext, ToolSpec, schema
-from harness.types import ToolResult
+from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
+from harness.types import ToolResult, ToolSpec
+
+
+@dataclass(frozen=True, slots=True)
+class Proposal(Arguments):
+    plan: Annotated[
+        str,
+        "The plan, as the user will read it. Concrete steps in order, "
+        + "naming files and the change to each.",
+    ]
 
 
 @dataclass
@@ -26,26 +35,15 @@ class ExitPlanMode:
 
     modes: ModeState
     spec: ToolSpec = field(
-        default=ToolSpec(
+        default=spec_for(
+            Proposal,
             name="exit_plan_mode",
             description=(
                 "Present your plan and ask the user to approve carrying it out. Call this "
-                "only once you have read enough to be specific: name the files you will "
-                "change and what you will do to each. If the user approves, the writing "
-                "and command tools become available and you should begin. If they reject "
-                "it, you stay in plan mode and should revise using the reason they gave."
-            ),
-            parameters=schema(
-                {
-                    "plan": {
-                        "type": "string",
-                        "description": (
-                            "The plan, as the user will read it. Concrete steps in order, "
-                            "naming files and the change to each."
-                        ),
-                    }
-                },
-                required=["plan"],
+                + "only once you have read enough to be specific: name the files you will "
+                + "change and what you will do to each. If the user approves, the writing "
+                + "and command tools become available and you should begin. If they reject "
+                + "it, you stay in plan mode and should revise using the reason they gave."
             ),
             # Not a filesystem change, but it is the gate to every filesystem change this
             # run will make, so it goes through the same approval path. `mutates` is the
@@ -54,8 +52,8 @@ class ExitPlanMode:
         )
     )
 
-    def preview(self, args: dict[str, Any]) -> tuple[str, str]:
-        plan = (args.get("plan") or "").strip()
+    def preview(self, args: Proposal, /) -> tuple[str, str]:
+        plan = args.plan.strip()
         # The whole plan, not a first line: this is the one prompt where the detail IS the
         # decision, and truncating it would ask someone to approve something they cannot
         # read.
@@ -69,16 +67,16 @@ class ExitPlanMode:
         digest = sha256(plan.encode()).hexdigest()[:16]
         return f"proceed with this plan?\n\n{plan}\n", f"exit_plan_mode:{digest}"
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def run(self, _args: Proposal, _ctx: ToolContext, /) -> ToolResult:
         # Reaching `run` at all means the approval already passed: the runner refuses
         # before dispatch otherwise. So this is the approved branch, and the only thing
         # left is to unlock.
         self.modes.leave_plan()
         return ToolResult(
             "The user approved the plan. The writing and command tools are now available; "
-            "carry it out."
+            + "carry it out."
         )
 
 
-def mode_tools(modes: ModeState) -> list[Any]:
-    return [ExitPlanMode(modes)]
+def mode_tools(modes: ModeState) -> list[Handler]:
+    return [bind(ExitPlanMode(modes))]

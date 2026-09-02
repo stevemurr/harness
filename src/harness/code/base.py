@@ -203,7 +203,7 @@ class Indexes:
         if not self.available:
             return (
                 "No code index is set up. Run `harness --install-servers`, or use grep "
-                "and read_file."
+                + "and read_file."
             )
         subject = f"{near.suffix} files" if near is not None and near.suffix else "that"
         return f"No code index for {subject}. Indexed here: {self.languages()}. Use grep."

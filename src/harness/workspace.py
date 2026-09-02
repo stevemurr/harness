@@ -96,7 +96,7 @@ class Workspace:
             if resolved == entry or resolved.is_relative_to(entry):
                 raise PathRefused(
                     f"refusing to write {path!r}: {entry} is this harness's own directory "
-                    "and is not writable from inside a run"
+                    + "and is not writable from inside a run"
                 )
         return resolved
 
@@ -112,7 +112,7 @@ class Workspace:
         if target.is_symlink():
             raise PathRefused(
                 f"refusing to write {path!r}: it is a symbolic link. Name the file it "
-                "points at, or delete the link first."
+                + "points at, or delete the link first."
             )
         data = content.encode("utf-8")
         tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")

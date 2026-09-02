@@ -117,9 +117,9 @@ class Monitor:
                     Envelope(
                         Source.HARNESS,
                         f"{process.process_id} was stopped: it sent {self.notices} notices, "
-                        "which is more than a monitor is allowed. Its filter is matching too "
-                        "much. Read it with read_monitor and start a narrower one if you "
-                        "still need it.",
+                        + "which is more than a monitor is allowed. Its filter is matching too "
+                        + "much. Read it with read_monitor and start a narrower one if you "
+                        + "still need it.",
                         sender=process.process_id,
                         call_id=process.call_id,
                     )
@@ -181,10 +181,10 @@ class Monitor:
         )
         advice = (
             " That command finished on its own straight away, so monitoring it gained you "
-            "nothing -- a monitor is for output that keeps arriving. Use `run` for a one-off "
-            "answer, or `run` with background=true and a command that exits when a "
-            "condition holds, like `until grep -q Ready log; do sleep 0.5; done`, to be "
-            "told once."
+            + "nothing -- a monitor is for output that keeps arriving. Use `run` for a one-off "
+            + "answer, or `run` with background=true and a command that exits when a "
+            + "condition holds, like `until grep -q Ready log; do sleep 0.5; done`, to be "
+            + "told once."
             if wasted
             else ""
         )
@@ -192,7 +192,7 @@ class Monitor:
             Envelope(
                 Source.HARNESS,
                 f"{process.process_id} ({self.description}) ended with code {process.code} "
-                f"after {self.seen} lines.{flooded}{advice}",
+                + f"after {self.seen} lines.{flooded}{advice}",
                 sender=process.process_id,
                 call_id=process.call_id,
             )

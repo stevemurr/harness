@@ -21,7 +21,7 @@ import httpx
 import pytest
 
 from harness.settings import Web as WebSettings
-from harness.tools.base import ToolContext
+from harness.tools.base import ToolContext, bind
 from harness.tools.web import (
     Open,
     Search,
@@ -264,7 +264,7 @@ async def test_search_returns_ranked_results_with_their_urls(ctx: ToolContext) -
         seen.append(request)
         return httpx.Response(200, text=RESULTS_PAGE)
 
-    result = await Search(transport=transport(handler)).run({"query": "qwen3"}, ctx)
+    result = await bind(Search(transport=transport(handler))).call({"query": "qwen3"}, ctx)
 
     assert result.ok
     assert "1. GitHub - QwenLM/Qwen3" in result.content
@@ -278,7 +278,7 @@ async def test_search_honours_the_result_count_it_was_asked_for(ctx: ToolContext
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=RESULTS_PAGE)
 
-    result = await Search(transport=transport(handler)).run(
+    result = await bind(Search(transport=transport(handler))).call(
         {"query": "qwen3", "max_results": 1}, ctx
     )
 
@@ -292,7 +292,7 @@ async def test_being_rate_limited_does_not_read_as_no_results(ctx: ToolContext) 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(202, text=CHALLENGE_PAGE)
 
-    result = await Search(transport=transport(handler)).run({"query": "qwen3"}, ctx)
+    result = await bind(Search(transport=transport(handler))).call({"query": "qwen3"}, ctx)
 
     assert not result.ok
     assert "rate-limiting" in result.content
@@ -305,14 +305,14 @@ async def test_a_query_that_matches_nothing_is_a_successful_search(ctx: ToolCont
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="<div id='links' class='results'></div>")
 
-    result = await Search(transport=transport(handler)).run({"query": "zxqw"}, ctx)
+    result = await bind(Search(transport=transport(handler))).call({"query": "zxqw"}, ctx)
 
     assert result.ok
     assert "no results" in result.content
 
 
 async def test_a_blank_query_is_refused_rather_than_searched_for(ctx: ToolContext) -> None:
-    result = await Search().run({"query": "   "}, ctx)
+    result = await bind(Search()).call({"query": "   "}, ctx)
 
     assert result.refused and not result.ok
 
@@ -324,7 +324,7 @@ async def test_open_url_returns_the_page_as_readable_text(ctx: ToolContext) -> N
         )
 
     opener = Open(OPEN_ANYWHERE, transport(handler))
-    result = await opener.run({"url": "https://example.com/a"}, ctx)
+    result = await bind(opener).call({"url": "https://example.com/a"}, ctx)
 
     assert result.ok
     assert "How wrapping works" in result.content
@@ -340,7 +340,7 @@ async def test_a_redirect_into_the_private_network_is_refused(ctx: ToolContext) 
             return httpx.Response(302, headers={"location": "http://127.0.0.1:8080/watch"})
         return httpx.Response(200, text="<html><body><p>secret</p></body></html>")
 
-    result = await Open(transport=transport(handler)).run(
+    result = await bind(Open(transport=transport(handler))).call(
         {"url": "http://93.184.216.34/start"}, ctx
     )
 
@@ -359,7 +359,7 @@ async def test_a_redirect_to_another_public_page_is_followed(ctx: ToolContext) -
             headers={"content-type": "text/html"},
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/start"}, ctx
     )
 
@@ -374,7 +374,7 @@ async def test_a_pdf_says_it_cannot_be_read_rather_than_returning_bytes(
             200, content=b"%PDF-1.7 ...", headers={"content-type": "application/pdf"}
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/a.pdf"}, ctx
     )
 
@@ -390,7 +390,7 @@ async def test_plain_text_is_returned_without_being_parsed_as_html(
             200, text="a < b and c > d", headers={"content-type": "text/plain"}
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/a.txt"}, ctx
     )
 
@@ -407,7 +407,7 @@ async def test_a_long_page_is_cut_and_says_so(ctx: ToolContext) -> None:
             headers={"content-type": "text/html"},
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/long", "max_chars": 500}, ctx
     )
 
@@ -425,7 +425,7 @@ async def test_a_page_with_no_text_says_which_kind_of_empty_it_is(ctx: ToolConte
             headers={"content-type": "text/html"},
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/app"}, ctx
     )
 
@@ -437,7 +437,7 @@ async def test_an_unreachable_host_is_a_failure_not_a_crash(ctx: ToolContext) ->
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("nope", request=request)
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/a"}, ctx
     )
 
@@ -450,8 +450,8 @@ async def test_an_empty_main_does_not_beat_the_prose_beside_it() -> None:
     plainly has some."""
     _, text = readable(
         "<html><body><main id='app'></main>"
-        "<div id='real'><p>" + "Actual prose that goes on for a while. " * 8 + "</p></div>"
-        "</body></html>"
+        + "<div id='real'><p>" + "Actual prose that goes on for a while. " * 8 + "</p></div>"
+        + "</body></html>"
     )
 
     assert "Actual prose" in text
@@ -474,7 +474,7 @@ async def test_a_page_served_without_a_content_type_is_still_read(
             headers={"content-type": ""},
         )
 
-    result = await Open(OPEN_ANYWHERE, transport(handler)).run(
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
         {"url": "https://example.com/bare"}, ctx
     )
 

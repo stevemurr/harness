@@ -116,7 +116,7 @@ class Approvals:
             # somebody exactly once.
             return False, (
                 f"{spec.name} needs approval and no approver is configured. "
-                "Nothing was done."
+                + "Nothing was done."
             )
 
         decision = await self.ask(request)

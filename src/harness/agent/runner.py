@@ -9,26 +9,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any
 
 from harness.agent.approval import Approvals, Request
 from harness.mode import ModeState
-from harness.tools import Registry, Tool, ToolContext
+from harness.tools import Registry, ToolContext
 from harness.types import ToolCall, ToolResult
-
-
-def describe(tool: Tool, args: dict[str, Any]) -> tuple[str, str]:
-    """One line a person can read, and the key a session grant would cover.
-
-    A tool may define `preview(args) -> (summary, grant_key)` to say this properly; the
-    fallback below is deliberately plain rather than clever, because a wrong-but-confident
-    summary is worse than an obviously generic one.
-    """
-    preview = getattr(tool, "preview", None)
-    if preview is not None:
-        return preview(args)
-    compact = json.dumps(args)[:160]
-    return f"{tool.spec.name} {compact}", tool.spec.name
 
 
 @dataclass
@@ -48,12 +33,14 @@ class ToolRunner:
         if (again := self._looping(call)) is not None:
             return again
 
+        # Unknown names and invalid arguments are refused before anyone is asked to approve
+        # the call -- a person asked to approve a call that could not run has been asked
+        # for nothing -- and before the preview, which reads the arguments as typed.
+        if (unsound := self.registry.check(call)) is not None:
+            return self._remember(call, unsound)
         tool = self.registry.get(call.name)
-        if tool is None:
-            known = ", ".join(sorted(self.registry.names())) or "none"
-            return ToolResult(
-                f"no tool named {call.name!r}. Available: {known}", ok=False, refused=True
-            )
+        if tool is None:  # `check` just found it; a race here is a bug, not a refusal
+            raise LookupError(call.name)
 
         # The mode is checked here, not only where tools are offered. Withholding a tool
         # from the offer list is a hint; this is the boundary. A model can ask for a tool
@@ -64,12 +51,12 @@ class ToolRunner:
             if not mode.permits(tool.spec.name, tool.spec.mutates):
                 return ToolResult(
                     f"{tool.spec.name} is not available in {mode.name} mode. "
-                    "Call exit_plan_mode with a plan to ask the user to unlock it.",
+                    + "Call exit_plan_mode with a plan to ask the user to unlock it.",
                     ok=False,
                     refused=True,
                 )
 
-        summary, grant_key = describe(tool, call.arguments)
+        summary, grant_key = tool.preview(call.arguments)
         allowed, refusal = await self.approvals.check(
             tool.spec,
             Request(
@@ -130,9 +117,9 @@ class ToolRunner:
             return None
         return ToolResult(
             f"You have already called {call.name} with exactly these arguments and it was "
-            f"refused: {why.rstrip('.')}. Nothing has changed since, so asking again cannot "
-            "give a different answer. Do something else: fix the arguments, use a relative "
-            "path, or try another approach.",
+            + f"refused: {why.rstrip('.')}. Nothing has changed since, so asking again cannot "
+            + "give a different answer. Do something else: fix the arguments, use a relative "
+            + "path, or try another approach.",
             ok=False,
             refused=True,
         )

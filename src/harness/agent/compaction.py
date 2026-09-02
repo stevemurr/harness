@@ -57,7 +57,7 @@ from harness.types import Message, Role, Source, Transcript
 MODE_NOTES = {
     True: (
         "The agent is in PLAN MODE and may not write files or run commands until the user "
-        "approves a plan."
+        + "approves a plan."
     ),
     False: "The agent may write files and run commands.",
 }

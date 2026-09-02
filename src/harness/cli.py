@@ -98,7 +98,7 @@ def report_compaction(summary: str, before: int, after: int) -> None:
     print(
         dim(
             f"\ncompacted context · ~{tokens(before):,} → ~{tokens(after):,} tokens · "
-            "the transcript still holds every turn\n"
+            + "the transcript still holds every turn\n"
         )
     )
 
@@ -151,7 +151,7 @@ async def main_async(args: argparse.Namespace) -> int:
     if not args.api_key and not args.base_url.startswith("http://localhost"):
         print(
             red("no API key.") + " Set HARNESS_API_KEY or pass --api-key "
-            "(not needed for a local endpoint).",
+            + "(not needed for a local endpoint).",
             file=sys.stderr,
         )
         return 2
@@ -220,7 +220,7 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.plan and args.yes:
         print(
             red("--plan with --yes approves the plan unread, which is the one approval "
-                "worth reading."),
+                + "worth reading."),
             file=sys.stderr,
         )
 
@@ -278,17 +278,17 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="How much context the model has. At 80%% of it the agent summarises what has "
-        "happened and carries on in a smaller one; nothing is removed from the transcript. "
-        "(env: HARNESS_CONTEXT_WINDOW, or provider.context_window in config.toml)",
+        + "happened and carries on in a smaller one; nothing is removed from the transcript. "
+        + "(env: HARNESS_CONTEXT_WINDOW, or provider.context_window in config.toml)",
     )
     parser.add_argument("--config", default="", help="Path to config.toml.")
     parser.add_argument(
         "--extra-body",
         default=os.environ.get("HARNESS_EXTRA_BODY", ""),
         help="JSON merged into every request body, for deployment dialect the OpenAI schema "
-        "does not cover \u2014 e.g. "
-        "'{\"chat_template_kwargs\": {\"enable_thinking\": false}}' for Qwen3, which "
-        "otherwise answers with an empty string. (env: HARNESS_EXTRA_BODY)",
+        + "does not cover \u2014 e.g. "
+        + "'{\"chat_template_kwargs\": {\"enable_thinking\": false}}' for Qwen3, which "
+        + "otherwise answers with an empty string. (env: HARNESS_EXTRA_BODY)",
     )
     parser.add_argument(
         "--resume", metavar="SESSION", help="Continue a thread instead of starting one."
@@ -300,14 +300,14 @@ def main(argv: list[str] | None = None) -> int:
         "--init-agents",
         action="store_true",
         help="Write a starter AGENTS.md in the folder, if it has none. The harness reads "
-        "that file at the start of every run; it is never written without this flag.",
+        + "that file at the start of every run; it is never written without this flag.",
     )
     parser.add_argument(
         "--install-servers",
         action="store_true",
         help="Set up the language servers code search uses, under ~/.harness/servers/bin. "
-        "Adopts what is already installed by linking it, and only downloads what is not "
-        "there. Run once; never happens during a run.",
+        + "Adopts what is already installed by linking it, and only downloads what is not "
+        + "there. Run once; never happens during a run.",
     )
     parser.add_argument(
         "--init",
@@ -319,14 +319,14 @@ def main(argv: list[str] | None = None) -> int:
         "--plan",
         action="store_true",
         help="Start read-only. The agent researches and proposes a plan; nothing changes "
-        "until you approve it.",
+        + "until you approve it.",
     )
     parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
         help="Approve everything without asking. Nothing stands between the agent and "
-        "your filesystem -- there is no sandbox.",
+        + "your filesystem -- there is no sandbox.",
     )
     args = parser.parse_args(argv)
     if not args.prompt and not (
@@ -334,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error(
             "a prompt is required unless --init, --init-agents, --threads or "
-            "--install-servers is given"
+            + "--install-servers is given"
         )
 
     if args.init_agents:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
 
 class Role(StrEnum):
@@ -75,7 +75,7 @@ class ToolCall:
 
     call_id: str
     name: str
-    arguments: dict[str, Any]
+    arguments: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,8 +165,8 @@ class ToolResult:
             tail = limit - head
             body = (
                 f"{self.content[:head]}"
-                f"\n\n[{dropped} characters truncated]\n\n"
-                f"{self.content[-tail:]}"
+                + f"\n\n[{dropped} characters truncated]\n\n"
+                + f"{self.content[-tail:]}"
             )
         return ToolResult(body, self.ok, self.refused)
 
@@ -175,14 +175,14 @@ class ToolResult:
 class ToolSpec:
     """What the model is told about a tool.
 
-    `parameters` is JSON Schema, and it is the single source of truth for what the tool
-    accepts: the provider sees it, and the registry validates against it. There is no
-    second place that says what the arguments are.
+    `parameters` is JSON Schema, rendered from the tool's arguments class -- see
+    `tools/base.py`. The provider sees it and the registry validates against it, and the
+    class it came from is the one place that says what the arguments are.
     """
 
     name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: dict[str, object]
     #: Whether running this can change anything outside the harness -- the filesystem, the
     #: network, another process. Declared by the tool rather than listed centrally, so
     #: adding a tool cannot forget to say, and so the approval layer never has to know what
@@ -246,7 +246,7 @@ class StopReason:
         return self.kind == "done"
 
 
-def parse_arguments(raw: str) -> dict:
+def parse_arguments(raw: str) -> dict[str, object]:
     """Provider tool arguments, which arrive as a JSON string and are not always valid.
 
     Here rather than in the loop because it is about the wire shape of a call, and the
