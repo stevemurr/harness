@@ -30,6 +30,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
     "mypy>=1.11",
+    "basedpyright>=1.29",
     # `jsonschema` ships no inline types, and the one place it is used is the boundary
     # where a model's arguments are validated -- the last place worth checking blind.
     "types-jsonschema",
