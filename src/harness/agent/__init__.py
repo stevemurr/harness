@@ -54,7 +54,7 @@ from harness.state.approval import Approvals
 from harness.state.board import Board
 from harness.state.inbox import Inbox, render
 from harness.state.mode import ModeState
-from harness.state.skills import expand, load_skills, skills_block
+from harness.state.skills import expand, load_skills, skills_block, trigger, trigger_note
 from harness.store.base import Store
 from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner
@@ -127,10 +127,14 @@ class _Agent:
 
     def tell(self, envelope: Envelope) -> None:
         if envelope.source is Source.PERSON:
-            # A person may invoke a skill mid-run the same way as at the start.
-            envelope = replace(
-                envelope, text=expand(envelope.text, load_skills(self.workspace.root))
-            )
+            # A person may invoke a skill mid-run the same way as at the start, and a
+            # trigger word mid-run points the model at one the same way too.
+            skills = load_skills(self.workspace.root)
+            envelope = replace(envelope, text=expand(envelope.text, skills))
+            self.inbox.post(envelope)
+            if (hit := trigger(envelope.text, skills)) is not None:
+                self.inbox.post(Envelope(Source.HARNESS, trigger_note(hit)))
+            return
         self.inbox.post(envelope)
 
     async def widen(self, folder: Path | str) -> tuple[Path, ...]:
@@ -239,8 +243,14 @@ class _Agent:
         if set(remembered) - set(self.workspace.extra):
             self._reach(tuple(dict.fromkeys((*self.workspace.extra, *remembered))))
         # `/name …` is the person invoking a skill: the model reads its instructions as
-        # the request, and the rest of the line as what to apply them to.
-        transcript.append(user(expand(prompt, load_skills(self.workspace.root))))
+        # the request, and the rest of the line as what to apply them to. A request that
+        # names a skill's trigger word gets a note from the harness, through the inbox
+        # so it arrives as the harness's words and not the person's, saying which skill
+        # to read first -- a model that only has the index will sometimes not look.
+        skills = load_skills(self.workspace.root)
+        transcript.append(user(expand(prompt, skills)))
+        if (hit := trigger(prompt, skills)) is not None:
+            self.inbox.post(Envelope(Source.HARNESS, trigger_note(hit)))
 
         # The opening messages, before the first turn -- so a run that dies during that
         # turn still leaves a thread showing what was asked.

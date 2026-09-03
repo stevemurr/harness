@@ -139,7 +139,7 @@ class Toolkit:
             *symbol_tools(self.indexes),
             *(mode_tools(self.modes) if self.lineage is None else []),
             *ask_tools(self.ask),
-            *(skill_tools(self.root) if self.root is not None else []),
+            *(skill_tools(self.root, self.plan) if self.root is not None else []),
             *(agent_tools(self.children) if self.children is not None else []),
             *(report_tools(self.lineage) if self.lineage is not None else []),
             *(board_tools(self.board, self.identity) if self.board is not None else []),

@@ -2,6 +2,12 @@
 name: {skill}
 description: One line saying when this skill applies, for the model to match against.
 pinned: false
+# Words in a request that mean this skill applies; the harness points the model at it.
+# triggers: [deploy, release, ship]
+# The workflow, if this is one: using the skill seeds the run's checklist with these.
+# steps:
+#   - First thing to do
+#   - Then this
 ---
 
 # {skill}

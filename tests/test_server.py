@@ -168,7 +168,13 @@ async def test_a_workspace_id_is_derived_from_its_path(folder, tmp_path) -> None
 
     assert workspace_id == workspace_id_for(folder)
     assert [w["root_path"] for w in listed.json()] == [str(folder)]
-    assert listed.json()[0]["skills"] == []
+    # The built-in skills, with nothing beside the folder yet.
+    assert [s["name"] for s in listed.json()[0]["skills"]] == [
+        "architecture",
+        "debugging",
+        "design",
+        "testing",
+    ]
 
 
 async def test_a_workspace_lists_the_skills_beside_it(folder, tmp_path) -> None:
@@ -181,7 +187,8 @@ async def test_a_workspace_lists_the_skills_beside_it(folder, tmp_path) -> None:
         (home / "SKILL.md").write_text("---\ndescription: Ship a release.\n---\nStep one.\n")
         listed = await client.get("/workspaces")
 
-    assert listed.json()[0]["skills"] == [{"name": "deploy", "summary": "Ship a release."}]
+    assert listed.json()[0]["skills"][0] == {"name": "deploy", "summary": "Ship a release."}
+    assert len(listed.json()[0]["skills"]) == 5
 
 
 async def test_registering_the_same_root_twice_is_a_conflict(folder, tmp_path) -> None:

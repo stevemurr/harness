@@ -34,7 +34,7 @@ def test_skills_are_read_from_the_folder_and_the_person_and_the_folder_wins(
     (home / "skills" / "review").mkdir(parents=True)
     (home / "skills" / "review" / "SKILL.md").write_text("# Review\n\nRead every diff twice.")
 
-    found = load_skills(root, user_home=home / "skills")
+    found = load_skills(root, user_home=home / "skills", builtin=tmp_path / "none")
 
     assert [s.name for s in found] == ["deploy", "review"]
     assert found[0].description == "Ship a release."
@@ -143,3 +143,98 @@ def test_a_starter_skill_is_written_once_and_a_bad_name_is_refused(tmp_path: Pat
     assert found is not None and found.name == "deploy"
     with pytest.raises(ValueError, match="Not A Name"):
         _ = write_skill(tmp_path, "Not A Name")
+
+
+def test_a_frontmatter_list_reads_inline_or_as_lines(tmp_path: Path) -> None:
+    folder = tmp_path / "deploy"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(
+        "---\nname: deploy\ntriggers: [Ship, release]\nsteps:\n  - Build it\n"
+        + "  - \"Push it\"\n---\nGo.\n"
+    )
+
+    found = read_skill(folder)
+
+    assert found is not None
+    assert found.triggers == ("ship", "release")
+    assert found.steps == ("Build it", "Push it")
+
+
+def test_the_built_in_skills_ship_and_a_nearer_one_replaces_them(tmp_path: Path) -> None:
+    from harness.state.skills import BUILTIN_SKILLS
+
+    names = [s.name for s in load_skills(tmp_path, user_home=tmp_path / "nowhere")]
+    assert names == ["architecture", "debugging", "design", "testing"]
+    for found in load_skills(tmp_path, user_home=tmp_path / "nowhere"):
+        assert found.steps and found.triggers and found.description
+        assert found.path.is_relative_to(BUILTIN_SKILLS)
+
+    skill(tmp_path, "debugging", "Our way.", description="Ours.")
+    again = load_skills(tmp_path, user_home=tmp_path / "nowhere")
+    mine = next(s for s in again if s.name == "debugging")
+    assert mine.body == "Our way."
+    assert not mine.steps
+
+
+def test_a_trigger_word_names_the_skill_and_a_slash_or_plain_request_does_not(
+    tmp_path: Path,
+) -> None:
+    from harness.state.skills import trigger, trigger_note
+
+    skills = load_skills(tmp_path, user_home=tmp_path / "nowhere")
+
+    hit = trigger("There's a bug in the parser: it crashes on empty input.", skills)
+    assert hit is not None and hit.name == "debugging"
+    refactor = trigger("Please refactor the loader.", skills)
+    assert refactor is not None and refactor.name == "architecture"
+    assert trigger("Rename the variable.", skills) is None
+    # A word inside another word is not the word.
+    assert trigger("Debugger output attached.", skills) is None
+    assert trigger("/debugging the parser", skills) is None
+    assert 'use_skill("debugging")' in trigger_note(hit)
+
+
+async def test_a_triggered_request_gets_the_harness_note_before_the_first_turn(
+    tmp_path: Path,
+) -> None:
+    model = ScriptedModel(says("done"))
+    agent = new_agent(
+        tmp_path, model, approvals=Approvals(policy=Policy(approve_everything=True))
+    )
+
+    await agent.run("the tests are failing after my change")
+
+    seen = [m for m in model.seen[0].messages if "use_skill" in m.content]
+    assert seen and seen[-1].role is not Role.SYSTEM
+    assert "`debugging`" in seen[-1].content
+    await agent.aclose()
+
+
+async def test_using_a_workflow_seeds_an_empty_plan_and_leaves_a_written_one(
+    tmp_path: Path,
+) -> None:
+    from harness.state.plan import Plan, Step
+
+    plan = Plan()
+    tool = bind(UseSkill(tmp_path, plan))
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+
+    result = await tool.call({"name": "testing"}, ctx)
+
+    assert result.ok and "in your plan now" in result.content
+    assert [step.text for step in plan.steps][0].startswith("Read how this project tests")
+    assert "testing" in plan.explanation
+
+    plan.replace([Step("my own")])
+    _ = await tool.call({"name": "debugging"}, ctx)
+    assert [step.text for step in plan.steps] == ["my own"]
+
+
+def test_a_slash_on_a_workflow_tells_the_model_the_steps(tmp_path: Path) -> None:
+    skills = load_skills(tmp_path, user_home=tmp_path / "nowhere")
+
+    text = expand("/design a picker for threads", skills)
+
+    assert "1. State the problem" in text
+    assert "update_plan" in text
+    assert "The user's request: a picker for threads" in text

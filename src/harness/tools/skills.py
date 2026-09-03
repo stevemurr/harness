@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
-from harness.state.skills import load_skills
+from harness.state.plan import Plan, Step
+from harness.state.skills import load_skills, steps_note
 from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
 from harness.types import ToolResult, ToolSpec
 
@@ -27,6 +28,9 @@ class UseSkill:
     """Return a skill's instructions to the model."""
 
     root: Path
+    #: The run's checklist, seeded with a workflow's steps when one is read and the list
+    #: is empty -- a plan the model already wrote is its own, and is left alone.
+    plan: Plan | None = None
     spec: ToolSpec = field(
         default=spec_for(
             Named,
@@ -50,8 +54,19 @@ class UseSkill:
             return ToolResult(
                 f"no skill named {args.name!r}. Available: {known}", ok=False, refused=True
             )
-        return ToolResult(f"# Skill: {skill.name}\nFolder: {skill.path}\n\n{skill.body}")
+        seeded = ""
+        if skill.steps and self.plan is not None and not self.plan.steps:
+            self.plan.replace(
+                [Step(step) for step in skill.steps], f"the steps of the {skill.name} skill"
+            )
+            seeded = "\n\n" + steps_note(skill).replace(
+                "Record them with update_plan before you start and keep it current",
+                "They are in your plan now; keep it current",
+            )
+        return ToolResult(
+            f"# Skill: {skill.name}\nFolder: {skill.path}\n\n{skill.body}{seeded}".rstrip()
+        )
 
 
-def skill_tools(root: Path) -> list[Handler]:
-    return [bind(UseSkill(root))]
+def skill_tools(root: Path, plan: Plan | None = None) -> list[Handler]:
+    return [bind(UseSkill(root, plan))]
