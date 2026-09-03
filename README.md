@@ -122,7 +122,7 @@ thread), `boards/` (one work board per folder), `servers/` (language servers), a
 one; what the model sees is the transcript rendered for a provider. There is no second
 representation to disagree with it.
 
-**Tools.** Twenty-eight, each an `Arguments` dataclass and a class with `spec` and `run`.
+**Tools.** Twenty-nine, each an `Arguments` dataclass and a class with `spec` and `run`.
 The dataclass is the schema the model sees; arguments are validated against it before
 `run` is called, and `run` receives the class rather than a dict.
 
@@ -134,7 +134,7 @@ The dataclass is the schema the model sees; arguments are validated against it b
 | code search | `find_definition`, `find_references` (Python, Go and Swift, via language servers) |
 | the person | `ask_user`, `update_plan`, `exit_plan_mode` |
 | other agents | `delegate`, `wait_agents`, `tell_agent`, `read_agent`, `stop_agent`, `report` |
-| the board | `post_task`, `list_tasks`, `claim_task`, `finish_task` |
+| the board | `post_task`, `list_tasks`, `claim_task`, `release_task`, `finish_task` |
 
 **Approval, and no sandbox.** Reads are never asked about. What else asks is the approval
 policy, which a person names -- `ask` about anything that changes the machine, `edits` to
@@ -166,8 +166,9 @@ delegate in turn. Whether a model reaches for this is measured in the evals, not
 across runs and restarts. The agent reads it before it plans: an open task that is what
 was asked for is claimed, a task someone else holds is left alone, a done task's result is
 built on rather than redone. When the work has several pieces, the agent posts one task
-per piece, claims each as it starts and finishes it saying what it did, and leaves the
-rest posted if it stops early, so the next run picks up where it left off. A person can
+per piece, claims each as it starts and finishes it saying what it did. Told to stop, it
+releases what it holds with a note of where things stand rather than finishing it, so the
+next run picks up from the note and not from a task that claims to be done. A person can
 leave work for a run that has not started through the server. The board is not the plan:
 the plan is one agent's checklist for the piece it is on, and does not survive the run.
 

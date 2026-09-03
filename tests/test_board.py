@@ -120,3 +120,55 @@ async def test_a_parent_delegates_and_the_child_runs_in_its_own_thread(tmp_path:
     (child_thread,) = [t for t in threads if t.parent]
     assert child_thread.parent == thread
     assert "delegate" in parent_model.tools_offered[0]
+
+
+async def test_a_released_task_is_open_again_with_its_note_kept() -> None:
+    """Stopping is not finishing. Told to stop, an agent put its task down as `done` with a
+    result saying the work was not done, because done and failed were its only two moves."""
+    from harness.state.board import MemoryBoard, Status
+
+    board = MemoryBoard()
+    task = await board.post("fix the hang", by="a")
+    _ = await board.claim(task.task_id, by="thr_1")
+
+    stranger = await board.release(task.task_id, by="thr_2", note="mine now")
+    released = await board.release(
+        task.task_id, by="thr_1", note="the reporter is fixed; the tests still hang"
+    )
+    again = await board.release(task.task_id, by="thr_1")
+
+    assert isinstance(stranger, str) and "held by thr_1" in stranger
+    assert not isinstance(released, str)
+    assert released.status is Status.OPEN and released.owner == ""
+    assert released.note == "the reporter is fixed; the tests still hang"
+    assert isinstance(again, str) and "not claimed" in again
+
+    # The next holder starts from the note, and finishing keeps it beside the result.
+    claimed = await board.claim(task.task_id, by="thr_3")
+    assert not isinstance(claimed, str) and claimed.note == released.note
+    done = await board.finish(task.task_id, by="thr_3", result="fixed")
+    assert not isinstance(done, str) and done.note == released.note and done.result == "fixed"
+
+
+async def test_the_release_tool_speaks_as_its_holder_and_shows_the_note(tmp_path: Path) -> None:
+    from harness.store.boards import JsonlBoard
+    from harness.tools.base import ToolContext
+    from harness.tools.board import board_tools
+    from harness.workspace import Workspace
+
+    board = JsonlBoard(path=tmp_path / "board.jsonl")
+    post, listing, claim, release, _finish = board_tools(board, "thr_1")
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    posted = await post.call({"title": "fix the hang"}, ctx)
+    task_id = posted.content.split()[1].rstrip(":")  # "posted task_xxx: fix the hang"
+    _ = await claim.call({"task_id": task_id}, ctx)
+
+    put_back = await release.call({"task_id": task_id, "note": "half done"}, ctx)
+    shown = await listing.call({}, ctx)
+
+    assert put_back.ok and "open again" in put_back.content
+    assert "[open]" in shown.content and "so far: half done" in shown.content
+    # Written down: a new board over the same file reads it back.
+    reloaded = JsonlBoard(path=tmp_path / "board.jsonl")
+    fetched = await reloaded.get(task_id)
+    assert fetched is not None and fetched.note == "half done"

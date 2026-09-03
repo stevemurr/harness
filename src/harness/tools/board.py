@@ -1,4 +1,10 @@
-"""The board, as four tools. Post, list, claim, finish.
+"""The board, as five tools. Post, list, claim, release, finish.
+
+Release exists because of what happened without it. Told "stop working", an agent holding
+a claimed task had two ways to record that and both were endings: it chose `done`, with a
+result saying the tests still hung, and the next run would have read the board, seen a
+finished task, and built on it. Stopping is not finishing, and a tool set that cannot say
+so makes the model lie to the board to obey the person. (2026-09-03)
 
 None of them is asked about: a task is a note about work, not a change to the machine, and
 a prompt on every one is the approval fatigue that makes people stop reading prompts. The
@@ -28,9 +34,7 @@ class Posting(Arguments):
 
 @dataclass(frozen=True, slots=True)
 class Listing(Arguments):
-    status: Annotated[
-        str, "open, claimed, done or failed. Empty lists everything."
-    ] = ""
+    status: Annotated[str, "open, claimed, done or failed. Empty lists everything."] = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,10 +49,22 @@ class Finishing(Arguments):
     failed: Annotated[bool, "True if the work could not be done."] = False
 
 
+@dataclass(frozen=True, slots=True)
+class Releasing(Arguments):
+    task_id: Annotated[str, "The id you claimed."]
+    note: Annotated[
+        str,
+        "Where it stands: what was done, what was found, what is left. Whoever picks it "
+        + "up next starts from this.",
+    ] = ""
+
+
 def _shown(task: Task) -> str:
     lines = [task.line()]
     if task.detail:
         lines.append(f"    {task.detail}")
+    if task.note:
+        lines.append(f"    so far: {task.note}")
     if task.result:
         lines.append(f"    result: {task.result}")
     return "\n".join(lines)
@@ -144,8 +160,10 @@ class FinishTask:
             Finishing,
             name="finish_task",
             description=(
-                "Mark a task you claimed as done, or as failed with why. Only its holder "
-                + "may finish it."
+                "Mark a task you claimed as done -- the work is complete -- or as failed "
+                + "with why. Only its holder may finish it. Stopping is not finishing: if "
+                + "you are stopping with the work unfinished, use release_task instead, so "
+                + "the next run does not read it as done."
             ),
         )
     )
@@ -159,10 +177,35 @@ class FinishTask:
         return ToolResult(f"{finished.task_id} {finished.status.value}")
 
 
+@dataclass
+class ReleaseTask:
+    board: Board
+    identity: str
+    spec: ToolSpec = field(
+        default=spec_for(
+            Releasing,
+            name="release_task",
+            description=(
+                "Put a task you claimed back on the board, open for whoever comes next, "
+                + "with a note of where it stands. Use it when you stop before the work is "
+                + "done -- because the user said to stop, or because you are handing it on. "
+                + "Only its holder may release it."
+            ),
+        )
+    )
+
+    async def run(self, args: Releasing, _ctx: ToolContext, /) -> ToolResult:
+        released = await self.board.release(args.task_id, by=self.identity, note=args.note)
+        if isinstance(released, str):
+            return ToolResult(released, ok=False, refused=True)
+        return ToolResult(f"{released.task_id} open again")
+
+
 def board_tools(board: Board, identity: str) -> list[Handler]:
     return [
         bind(PostTask(board, identity)),
         bind(ListTasks(board)),
         bind(ClaimTask(board, identity)),
+        bind(ReleaseTask(board, identity)),
         bind(FinishTask(board, identity)),
     ]

@@ -57,6 +57,9 @@ class Task:
     depends_on: tuple[str, ...] = ()
     #: What the owner said on finishing it.
     result: str = ""
+    #: Where it stands, said by the last holder when putting it back. Kept when the task is
+    #: claimed again, so the next holder starts from it rather than from nothing.
+    note: str = ""
     posted_at: str = ""
     updated_at: str = ""
 
@@ -81,6 +84,7 @@ class Task:
             "owner": self.owner,
             "depends_on": list(self.depends_on),
             "result": self.result,
+            "note": self.note,
             "posted_at": self.posted_at,
             "updated_at": self.updated_at,
         }
@@ -101,6 +105,7 @@ class Task:
             owner=as_str(row.get("owner")),
             depends_on=tuple(as_str(d) for d in as_list(row.get("depends_on"))),
             result=as_str(row.get("result")),
+            note=as_str(row.get("note")),
             posted_at=as_str(row.get("posted_at")),
             updated_at=as_str(row.get("updated_at")),
         )
@@ -128,6 +133,11 @@ class Board(Protocol):
         self, task_id: str, *, by: str, result: str = "", failed: bool = False
     ) -> Task | str:
         """The task, done or failed -- or why not. Only its owner may finish it."""
+        ...
+
+    async def release(self, task_id: str, *, by: str, note: str = "") -> Task | str:
+        """Put a claimed task back on the board, open, with a note of where it stands.
+        Only its holder may. The way to stop without saying the work is done."""
         ...
 
     async def get(self, task_id: str) -> Task | None: ...
@@ -210,6 +220,24 @@ class MemoryBoard:
         )
         await self._put(finished)
         return finished
+
+    async def release(self, task_id: str, *, by: str, note: str = "") -> Task | str:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return f"no task {task_id!r}"
+        if task.status is not Status.CLAIMED:
+            return f"{task_id} is {task.status.value}, not claimed"
+        if task.owner != by:
+            return f"{task_id} is held by {task.owner}, not you"
+        released = replace(
+            task,
+            status=Status.OPEN,
+            owner="",
+            note=note.strip() or task.note,
+            updated_at=_now(),
+        )
+        await self._put(released)
+        return released
 
     async def get(self, task_id: str) -> Task | None:
         return self.tasks.get(task_id)

@@ -87,3 +87,8 @@ class JsonlBoard(MemoryBoard):
     ) -> Task | str:
         await self.load()
         return await super().finish(task_id, by=by, result=result, failed=failed)
+
+    @override
+    async def release(self, task_id: str, *, by: str, note: str = "") -> Task | str:
+        await self.load()
+        return await super().release(task_id, by=by, note=note)

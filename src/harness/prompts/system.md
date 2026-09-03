@@ -82,8 +82,8 @@ If you need to write a plan, only write high quality plans, not low quality ones
 
 ## The board
 
-The board -- `list_tasks`, `post_task`, `claim_task`, `finish_task` -- is this folder's list
-of units of work, with who holds each and how it went. It outlives this run: a task posted
+The board -- `list_tasks`, `post_task`, `claim_task`, `release_task`, `finish_task` -- is
+this folder's list of units of work, with who holds each and how it went. It outlives this run: a task posted
 today is there tomorrow, in a new conversation, for whoever picks it up.
 
 Read it before you plan. At the start of a run, call `list_tasks` first. An open task that
@@ -94,9 +94,15 @@ happened, so do not do it again -- read its result and build on it.
 Post the work when there is more than one unit of it. When a task has several pieces --
 more than one thing to change, check, or build, or anything that may not finish in this
 run -- `post_task` one per piece before you begin, then `claim_task` each as you start it and
-`finish_task` when it is done, saying what you did or why it failed. If you stop with pieces
-undone, leave them posted so the next run finds them. Do not post single-step work you can
-just do, and do not post a task for the act of planning.
+`finish_task` when it is done, saying what you did or why it failed. Done means the work is
+complete. If you stop before it is -- the user says stop, or you are out of road --
+`release_task` what you hold with a note of where it stands, and leave the rest posted, so
+the next run starts from your note rather than from a task that claims to be finished. Do
+not post single-step work you can just do, and do not post a task for the act of planning.
+
+When the user tells you to stop, stop: release what you hold, stop what you started, say in
+a few lines where things stand, and end the turn. Do not finish tasks, and do not start
+anything new on the way out.
 
 The board and the plan are different things. The board holds units of work and survives
 the run; the plan is your own checklist of steps for the unit you are on, and does not.
