@@ -11,8 +11,16 @@ from pathlib import Path
 from harness.agent import new_agent, spawning
 from harness.cli.person import approve, ask_user
 from harness.cli.resolve import Commands, provider_flags, require_key, resolve
-from harness.cli.terminal import dim, red, render, render_child, report_compaction, yellow
+from harness.cli.terminal import (
+    Narrator,
+    dim,
+    red,
+    render_child,
+    report_compaction,
+    yellow,
+)
 from harness.config import BOARDS, THREADS, Config, bool_flag, flag, int_flag
+from harness.mcp import connect_all
 from harness.providers.openai import OpenAICompatible
 from harness.state.approval import Approvals, Policy
 from harness.state.board import board_id_for
@@ -92,12 +100,17 @@ async def _run(args: Flags, config: Config) -> int:
     # stdin nobody is typing into, and the tool's own refusal ("there is nobody to ask")
     # is a better answer than a hang.
     asker = ask_user if sys.stdin.isatty() else None
+    narrator = Narrator()
+    # Before the agent, so a server that does not answer is reported before any work
+    # starts rather than discovered as a missing tool mid-run.
+    servers = await connect_all(list(config.mcp))
     agent = new_agent(
         folder,
         provider,
         store=store,
         approvals=approvals,
-        observers=[render],
+        observers=[narrator.render],
+        listen=narrator.listen,
         modes=ModeState(current=PLAN if args.plan else NORMAL),
         ask=asker,
         # A child renders set in from its parent, asks the same person, shares the board,
@@ -114,9 +127,12 @@ async def _run(args: Flags, config: Config) -> int:
         board=board,
         settings=config.settings,
         on_compaction=report_compaction,
+        extra_tools=[tool for server in servers for tool in server.tools()],
     )
 
     print(dim(f"harness · {provider.name} · {folder}"))
+    if servers:
+        print(dim("mcp: " + ", ".join(server.name for server in servers)))
     if args.plan:
         print(dim("plan mode: read-only until you approve a plan."))
     if args.yes:
@@ -148,6 +164,8 @@ async def _run(args: Flags, config: Config) -> int:
         # provider connection is the one thing here that closes itself when the process
         # ends.
         await agent.aclose()
+        for server in servers:
+            await server.aclose()
         await provider.aclose()
 
     print(dim(f"\n{outcome.turns} turns · {outcome.stop.kind} · thread {thread_id}"))

@@ -118,6 +118,24 @@ async def test_narration_across_turns_accumulates_rather_than_replacing(
     assert {d["effect_id"] for d in deltas} == {run.run_id}
 
 
+async def test_a_streaming_model_is_published_chunk_by_chunk(folder, tmp_path) -> None:
+    """The listener publishes the words as they arrive, the observer then leaves the prose
+    out, and the separator between turns is still exactly one blank line."""
+    runtime = runtime_for(
+        ScriptedModel(
+            Message(Role.ASSISTANT, "reading first", (ToolCall("c1", "list_dir", {}),)),
+            says("all done"),
+            streaming=True,
+        ),
+        tmp_path,
+    )
+
+    run = await drive(runtime, folder, "go")
+
+    deltas = [d["text"] for d in payloads(run, "answer.delta")]
+    assert deltas == ["reading", "first", "\n\nall", "done"]
+
+
 async def test_a_silent_first_turn_does_not_open_the_answer_with_a_blank_line(
     folder, tmp_path
 ) -> None:

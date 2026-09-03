@@ -75,12 +75,20 @@ MARKERS = (
 )
 
 
-def describe(root: Path, *, limit: int = 40) -> str:
+def describe(root: Path, *, limit: int = 40, extra: tuple[Path, ...] = ()) -> str:
     """The environment block, as the model will read it."""
     lines = [
         "# Environment",
         "",
         f"Working folder: {root}",
+        *(
+            [
+                "Also open, and reachable by absolute path: "
+                + ", ".join(str(folder) for folder in extra)
+            ]
+            if extra
+            else []
+        ),
         "",
         "**Use relative paths.** `src/main.py`, not the absolute path above. Every file tool "
         + "resolves relative paths against that folder, and `run` already executes there -- "

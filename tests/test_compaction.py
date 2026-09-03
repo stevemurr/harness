@@ -57,7 +57,7 @@ class Model:
         self.seen: list[Transcript] = []
         self.summarised: list[Transcript] = []
 
-    async def complete(self, transcript: Transcript, tools=()) -> Completion:
+    async def complete(self, transcript: Transcript, tools=(), *, listen=None) -> Completion:
         if not tools:
             self.summarised.append(Transcript(list(transcript.messages)))
             if self._summary_error is not None:

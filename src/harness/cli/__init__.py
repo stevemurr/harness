@@ -2,6 +2,7 @@
 
     harness run "fix the parser" -C ~/proj --plan
     harness serve --port 8080
+    harness acp
     harness threads
     harness init | init-agents | install-servers
     harness evals run ... | evals report ...
@@ -27,7 +28,7 @@ import sys
 from collections.abc import Callable
 from typing import cast
 
-from harness.cli import evals, run, serve, setup, threads
+from harness.cli import acp, evals, run, serve, setup, threads
 from harness.cli.resolve import CliError
 from harness.cli.terminal import red
 
@@ -39,6 +40,7 @@ def parser() -> argparse.ArgumentParser:
     commands = made.add_subparsers(dest="command", required=True, metavar="command")
     run.configure(commands)
     serve.configure(commands)
+    acp.configure(commands)
     threads.configure(commands)
     setup.configure(commands)
     evals.configure(commands)

@@ -250,9 +250,7 @@ async def test_a_read_only_tool_is_never_asked_about(
     assert asked == []
 
 
-async def test_a_mutating_tool_is_asked_about(
-    registry: Registry, ctx: ToolContext
-) -> None:
+async def test_a_mutating_tool_is_asked_about(registry: Registry, ctx: ToolContext) -> None:
     asked: list[Request] = []
 
     async def record(request: Request) -> Decision:
@@ -443,7 +441,6 @@ async def test_a_cancelled_command_is_killed_not_orphaned(
     assert not marker.exists(), "the command outlived the cancellation of the run that owned it"
 
 
-
 # --- provider parsing ------------------------------------------------------------------
 
 
@@ -543,25 +540,19 @@ async def test_a_missing_file_failed_but_was_not_refused(
     assert not result.refused
 
 
-async def test_a_timeout_is_a_real_tool_failure(
-    registry: Registry, ctx: ToolContext
-) -> None:
+async def test_a_timeout_is_a_real_tool_failure(registry: Registry, ctx: ToolContext) -> None:
     """The line: a command that ran and said no is an answer; a command that never finished
     is the tool not doing its job."""
     runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
 
-    result = await runner.run(
-        ToolCall("1", "run", {"command": "sleep 30", "timeout": 1})
-    )
+    result = await runner.run(ToolCall("1", "run", {"command": "sleep 30", "timeout": 1}))
 
     assert not result.ok
     assert not result.refused
     assert "timed out" in result.content
 
 
-async def test_a_declined_approval_is_refused(
-    registry: Registry, ctx: ToolContext
-) -> None:
+async def test_a_declined_approval_is_refused(registry: Registry, ctx: ToolContext) -> None:
     runner = ToolRunner(registry, ctx, Approvals(ask=deny_all))
 
     result = await runner.run(ToolCall("1", "run", {"command": "ls"}))
@@ -592,9 +583,7 @@ async def test_a_command_verdict_at_the_tail_survives_the_loop(ctx) -> None:
     two rules. (2026-08-31)
     """
     out = Output()
-    command = (
-        "python3 -c \"print('noise\\n' * 20000); print('FAIL: 5 of 200 tests failed')\""
-    )
+    command = "python3 -c \"print('noise\\n' * 20000); print('FAIL: 5 of 200 tests failed')\""
 
     result = await bind(Shell()).call({"command": command}, ctx)
     final = result.truncated(out.per_result, out.split_floor)
@@ -670,11 +659,11 @@ async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path)
 
     assert len(arrived) == 1
     assert arrived[0].source is Source.HARNESS
-    assert "42" not in arrived[0].text          # the output stayed in the file
-    assert "echo $((6*7))" in arrived[0].text   # the command it was asked to run did not
+    assert "42" not in arrived[0].text  # the output stayed in the file
+    assert "echo $((6*7))" in arrived[0].text  # the command it was asked to run did not
     assert "exited 0" in arrived[0].text
     assert arrived[0].call_id == "call_7"
-    assert "42" in processes.read(process_id)   # and is there when the model asks for it
+    assert "42" in processes.read(process_id)  # and is there when the model asks for it
     await processes.aclose()
 
 
@@ -824,8 +813,10 @@ async def test_a_monitor_on_a_command_that_just_exits_says_it_was_the_wrong_tool
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
 
     await processes.monitor(
-        "grep -F ERROR app.log", "look for errors",
-        cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
+        "grep -F ERROR app.log",
+        "look for errors",
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
     )
     await asyncio.sleep(1.2)
     ending = [e.text for e in box.drain() if "ended with code" in e.text]
@@ -843,11 +834,71 @@ async def test_a_monitor_that_actually_streams_is_left_alone(tmp_path) -> None:
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
 
     await processes.monitor(
-        "for i in 1 2 3; do echo line $i; sleep 0.3; done", "a real stream",
-        cwd=tmp_path, env={"PATH": "/usr/bin:/bin"},
+        "for i in 1 2 3; do echo line $i; sleep 0.3; done",
+        "a real stream",
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
     )
     await asyncio.sleep(2.0)
     ending = [e.text for e in box.drain() if "ended with code" in e.text]
 
     assert ending and "gained you nothing" not in ending[-1]
     await processes.aclose()
+
+
+# -- more than one folder -----------------------------------------------------------------
+
+
+def test_an_extra_folder_is_reachable_by_absolute_path(tmp_path: Path) -> None:
+    """An editor's project may be several folders. The root stays the one relative paths
+    mean; the others are reachable, and named by their absolute paths."""
+    root = tmp_path / "main"
+    other = tmp_path / "lib"
+    root.mkdir()
+    other.mkdir()
+    (other / "x.py").write_text("x = 1\n")
+    ws = Workspace.at(root, extra=(other,))
+
+    assert ws.roots == (root, other)
+    assert ws.resolve(str(other / "x.py")) == other / "x.py"
+    assert ws.read(str(other / "x.py")) == "x = 1\n"
+    assert ws.relative(other / "x.py") == str(other / "x.py")
+    assert ws.resolve("x.py") == root / "x.py"  # relative means the root
+
+
+def test_an_extra_folder_does_not_widen_the_boundary_beyond_itself(tmp_path: Path) -> None:
+    root = tmp_path / "main"
+    other = tmp_path / "lib"
+    root.mkdir()
+    other.mkdir()
+    ws = Workspace.at(root, extra=(other,))
+
+    with pytest.raises(PathEscape):
+        _ = ws.resolve(str(tmp_path / "elsewhere.txt"))
+    with pytest.raises(PathEscape):
+        _ = ws.resolve("../lib/../elsewhere.txt")
+
+
+def test_an_extra_folder_that_is_not_one_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(WorkspaceError, match="not a directory"):
+        _ = Workspace.at(tmp_path, extra=(tmp_path / "missing",))
+
+
+async def test_glob_and_grep_reach_the_extra_folders(tmp_path: Path) -> None:
+    root = tmp_path / "main"
+    other = tmp_path / "lib"
+    root.mkdir()
+    other.mkdir()
+    (root / "a.py").write_text("needle\n")
+    (other / "b.py").write_text("needle\n")
+    ctx = ToolContext(paths=Workspace.at(root, extra=(other,)))
+    registry = new_registry(file_tools())
+
+    found = await registry.run(ToolCall("g", "glob", {"pattern": "*.py"}), ctx)
+    matched = await registry.run(ToolCall("r", "grep", {"pattern": "needle"}), ctx)
+
+    assert found.content.splitlines() == ["a.py", str(other / "b.py")]
+    assert [line.split(":")[0] for line in matched.content.splitlines()] == [
+        "a.py",
+        str(other / "b.py"),
+    ]

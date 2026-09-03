@@ -11,9 +11,12 @@ should make one.
 What varies between front ends is not the agent -- it is the collaborators handed to
 `new_agent`:
 
-  a CLI      an asker that prints a prompt, an observer that renders turns
+  a CLI      an asker that prints a prompt, an observer that renders turns, a listener
+             that prints words as they arrive
   a server   an asker that suspends until a client answers, an observer that publishes
              events, and every tool wrapped so its activity is visible while it runs
+  an editor  the same three as the server, over the Agent Client Protocol on stdin and
+             stdout, with the file tools reading the editor's unsaved buffers
   a script   `approve_all`, and no observer
 
 The state a front end needs to *reach* -- the plan, the mode, the things to close -- is not
@@ -45,7 +48,7 @@ from harness.agent.loop import AgentLoop, Observer, Turn, system, user
 from harness.agent.runner import ToolRunner
 from harness.exec.children import Children, Lineage, Spawner
 from harness.prompts import prompt
-from harness.providers.base import Provider
+from harness.providers.base import Chunk, Listener, Provider
 from harness.settings import Settings
 from harness.state.approval import Approvals
 from harness.state.board import Board
@@ -90,6 +93,11 @@ class _Agent:
     settings: Settings = field(default_factory=Settings)
     system_prompt: str = SYSTEM_PROMPT
     on_compaction: CompactionObserver | None = None
+    #: Told each chunk of the model's output as it arrives, for a front end that shows
+    #: words as they come. Optional like the observers, and unlike them it is told about
+    #: the turn in flight rather than the one just finished. The transcript is unchanged
+    #: by it: the loop still appends one whole message per turn.
+    listen: Listener | None = None
     #: The thread that delegated this agent, recorded in its own thread's header.
     parent_thread: str = ""
     #: The agents this one may delegate to. Held so `open_thread` can tell them which
@@ -236,11 +244,32 @@ class _Agent:
                 log.error("compacted view has unanswered tool calls; sending it whole")
                 rendered = transcript
 
-            completion = await self.provider.complete(rendered, self._specs())
+            completion = await self.provider.complete(
+                rendered, self._specs(), listen=self._listener()
+            )
             state.meter.record(completion.prompt_tokens, completion.sent_chars)
             return completion.message
 
         return complete
+
+    def _listener(self) -> Listener | None:
+        """The listener, guarded the way observers are.
+
+        A listener is a spectator, and one that raises must not end a run -- but it is
+        called from inside a provider's read loop, which is the wrong place to teach that
+        rule. So it is taught here, once, for whatever the front end supplied.
+        """
+        listen = self.listen
+        if listen is None:
+            return None
+
+        def guarded(chunk: Chunk) -> None:
+            try:
+                listen(chunk)
+            except Exception:
+                log.exception("listener failed")
+
+        return guarded
 
     async def _compact(
         self, transcript: Transcript, thread_id: str, state: State, window: int
@@ -372,7 +401,7 @@ class _Agent:
             part
             for part in (
                 self.system_prompt + self.modes.current.prompt,
-                describe(self.workspace.root),
+                describe(self.workspace.root, extra=self.workspace.extra),
             )
             if part.strip()
         )
@@ -434,6 +463,9 @@ def new_agent(
     settings: Settings | None = None,
     system_prompt: str = SYSTEM_PROMPT,
     on_compaction: CompactionObserver | None = None,
+    listen: Listener | None = None,
+    extra_tools: Iterable[Handler] = (),
+    folders: Sequence[Path | str] = (),
 ) -> Agent:
     """An agent over a folder. The composition root, and the only way to get one.
 
@@ -441,7 +473,11 @@ def new_agent(
     it. With `tools`, the caller made them -- wrapped, filtered, or invented -- and so the
     caller also made the `modes` and `inbox` those tools share, and must pass both: a kit
     on one `ModeState` and an agent reading another fails silently, with plan mode approved
-    and nothing unlocked. `ask` only reaches the default kit, for the same reason.
+    and nothing unlocked. `ask` only reaches the default kit, for the same reason, and so
+    do `extra_tools` -- an MCP server's, offered beside the built-in ones.
+
+    `folders` are other directories the agent may reach, for an editor whose project is
+    several; the folder given first stays the one it works in.
     """
     root = Path(folder).expanduser().resolve()
     settings = settings or Settings()
@@ -481,6 +517,7 @@ def new_agent(
             lineage=lineage,
             board=board,
             identity=identity,
+            extra=extra_tools,
         )
         tools = kit.tools()
         closers.append(kit.aclose)
@@ -489,14 +526,14 @@ def new_agent(
             "tools were supplied without the modes and inbox they share; "
             + "pass the Toolkit's modes= and inbox= as well"
         )
-    elif ask is not None or spawner is not None or board is not None:
+    elif ask is not None or spawner is not None or board is not None or extra_tools:
         raise ValueError(
-            "ask=, spawner= and board= apply to the default toolkit; "
+            "ask=, spawner=, board= and extra_tools= apply to the default toolkit; "
             + "give them to the Toolkit instead"
         )
 
     return _Agent(
-        workspace=Workspace.at(root, protected=protected_in(root)),
+        workspace=Workspace.at(root, protected=protected_in(root), extra=tuple(folders)),
         provider=provider,
         registry=new_registry(tools),
         approvals=approvals,
@@ -507,6 +544,7 @@ def new_agent(
         settings=settings,
         system_prompt=system_prompt,
         on_compaction=on_compaction,
+        listen=listen,
         parent_thread=lineage.parent_thread if lineage is not None else "",
         children=children,
         closers=closers,

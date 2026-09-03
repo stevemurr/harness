@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from harness.providers.base import Completion
+from harness.providers.base import Chunk, Completion, Listener
 from harness.tools.base import ToolSpec
 from harness.types import Message, Role, ToolCall, Transcript
 
@@ -45,8 +45,18 @@ class ScriptedModel:
     #: that omits `usage`, which is a case worth being able to script.
     context_window: int = 0
 
-    def __init__(self, *replies: Message, prompt_tokens: int | None = None) -> None:
+    def __init__(
+        self,
+        *replies: Message,
+        prompt_tokens: int | None = None,
+        streaming: bool = False,
+    ) -> None:
         self._replies = list(replies)
+        #: Whether a reply is told to the listener word by word before it is returned,
+        #: the way a real endpoint would. Off by default: most tests are about what the
+        #: loop does with a whole message, and a fake that streams unasked makes every
+        #: front end test exercise the streamed path and never the whole-message one.
+        self._streaming = streaming
         #: A copy per call, not a reference: the transcript is mutated in place as the run
         #: goes on, so holding the live object would make every entry show the final state.
         self.seen: list[Transcript] = []
@@ -57,11 +67,18 @@ class ScriptedModel:
         self.closed = False
 
     async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
     ) -> Completion:
         self.seen.append(Transcript(list(transcript.messages)))
         self.tools_offered.append(tuple(t.name for t in tools))
         reply = self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
+        if listen is not None and self._streaming:
+            for word in reply.content.split(" "):
+                listen(Chunk(word))
         return Completion(reply, self._prompt_tokens, 1)
 
     async def aclose(self) -> None:
@@ -85,7 +102,11 @@ class Broken:
         self._error = error
 
     async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
     ) -> Completion:
         raise self._error
 

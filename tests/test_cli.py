@@ -18,6 +18,7 @@ def test_every_subcommand_parses_and_names_its_handler() -> None:
         ["run", "do it"],
         ["run", "do it", "-C", "/tmp", "--plan", "-y", "--resume", "thr_1", "--model", "m"],
         ["serve", "--port", "9"],
+        ["acp", "--model", "m"],
         ["threads"],
         ["init"],
         ["init-agents", "-C", "/tmp"],
@@ -90,3 +91,33 @@ def test_evals_says_where_it_lives_when_the_package_is_not_there(
     monkeypatch.setitem(sys.modules, "evals", None)  # what an installed wheel would see
 
     assert main(["evals", "run", "--label", "x"]) == 2
+
+
+# -- streaming on a terminal ------------------------------------------------------------
+
+
+def test_the_narrator_prints_words_as_they_come_and_not_again_at_the_turn(capsys) -> None:
+    from harness.agent.loop import Turn
+    from harness.cli.terminal import Narrator
+    from harness.providers.base import Chunk
+    from harness.types import Message, Role
+
+    narrator = Narrator()
+    narrator.listen(Chunk("thinking hard", thought=True))
+    narrator.listen(Chunk("Hello"))
+    narrator.listen(Chunk(", world"))
+    narrator.render(Turn(Message(Role.ASSISTANT, "Hello, world")))
+
+    out = capsys.readouterr().out
+    assert out.count("Hello, world") == 1
+    assert "thinking hard" not in out
+
+
+def test_the_narrator_prints_the_prose_whole_when_nothing_was_streamed(capsys) -> None:
+    from harness.agent.loop import Turn
+    from harness.cli.terminal import Narrator
+    from harness.types import Message, Role
+
+    Narrator().render(Turn(Message(Role.ASSISTANT, "Hello, world")))
+
+    assert "Hello, world" in capsys.readouterr().out

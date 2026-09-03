@@ -39,7 +39,7 @@ from harness.agent import new_agent, spawning
 from harness.agent.loop import Observer, Turn
 from harness.config import bool_flag, flag, int_flag, load
 from harness.exec.children import Children
-from harness.providers.base import Completion
+from harness.providers.base import Completion, Listener
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
 from harness.state.approval import Approvals, Policy
@@ -84,10 +84,14 @@ class Recording:
         return self.inner.context_window
 
     async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
     ) -> Completion:
         started = time.monotonic()
-        completion = await self.inner.complete(transcript, tools)
+        completion = await self.inner.complete(transcript, tools, listen=listen)
         self.calls.append(
             Call(
                 prompt_tokens=completion.prompt_tokens,

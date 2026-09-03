@@ -1,9 +1,9 @@
 # harness
 
 A coding-agent harness: one loop, real tools, and a person's approval before anything on
-the machine changes. It runs any OpenAI-compatible model over a folder, from a terminal or
-behind an HTTP server, and it keeps every run as an append-only transcript you can read,
-follow live, and resume.
+the machine changes. It runs any OpenAI-compatible model over a folder, from a terminal,
+behind an HTTP server, or inside an editor that speaks the Agent Client Protocol, and it
+keeps every run as an append-only transcript you can read, follow live, and resume.
 
 ```
 while True:
@@ -52,20 +52,21 @@ uv run harness threads                                   # what has been run
 |---|---|
 | `harness run PROMPT` | one exchange with the agent, in `-C FOLDER` (default: here) |
 | `harness serve` | the HTTP server and the browser watch pages |
+| `harness acp` | the agent over the Agent Client Protocol on stdin and stdout, for an editor to run |
 | `harness threads` | list recent threads, with delegated threads under their parent |
 | `harness init` | write a starter `~/.harness/config.toml` |
 | `harness init-agents` | write a starter `AGENTS.md` in the folder, read at the start of every run |
 | `harness install-servers` | provision the language servers code search uses |
 | `harness evals run` / `report` | the eval ladder, from a checkout of this repository |
 
-`run` and `serve` share the provider flags (`--model`, `--base-url`, `--api-key`,
+`run`, `serve` and `acp` share the provider flags (`--model`, `--base-url`, `--api-key`,
 `--context-window`, `--extra-body`, `--config`). A flag beats an environment variable
 (`HARNESS_MODEL`, `HARNESS_BASE_URL`, `HARNESS_API_KEY`, `HARNESS_EXTRA_BODY`, ...) beats
 the config file beats the built-in default, for every setting, in both commands.
 
 ## Configuration
 
-`~/.harness/config.toml` has five tables. Unknown tables and keys are errors, so a typo
+`~/.harness/config.toml` has six tables. Unknown tables and keys are errors, so a typo
 cannot become a setting that silently does nothing.
 
 ```toml
@@ -97,6 +98,10 @@ per_turn = 120000          # shared across every call in one turn
 [limits]
 max_turns = 100            # 0 means no limit
 max_consecutive_refusals = 10
+
+[mcp.servers.files]        # a tool server, one table each; see "Tool servers" below
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 ```
 
 The file holds the API key on purpose: a server started at boot has nobody to prompt, and a
@@ -162,6 +167,47 @@ working and a model the harness keeps saying no to is stuck.
 its calls, keeping both ends so a test run's verdict survives. Tool calls run one at a
 time. Every call gets an answer, even when the tool raises.
 
+**Streaming.** A front end may listen to the model's words as they arrive; the terminal
+prints them, the server and the editor forward them. The transcript is unchanged by it:
+the loop still appends one whole message per turn, and a provider only streams when
+someone is listening.
+
+**Tool servers.** Any MCP server named in `[mcp.servers.<name>]`, or handed over by an
+editor, joins the registry: each of its tools is offered as `<name>__<tool>`, validated
+against the schema the server sent, asked about before it runs unless the server marks it
+read-only, and its result is fenced as someone else's text. A server that is down is
+logged and left out rather than keeping the agent from starting. stdio transport only, so
+far.
+
+## The editor
+
+```sh
+uv run harness acp                       # an editor runs this; nothing to type by hand
+```
+
+The same agent as an [Agent Client Protocol](https://agentclientprotocol.com) server:
+JSON-RPC on stdin and stdout, one message per line, protocol version 1. In Zed, add it
+under `agent_servers` in settings and it appears in the agent panel:
+
+```json
+"agent_servers": {
+  "harness": {
+    "type": "custom",
+    "command": "uv",
+    "args": ["run", "--directory", "/path/to/harness", "harness", "acp"]
+  }
+}
+```
+
+A session is a thread, so the editor can come back to one. The editor's mode picker is
+the person choosing between normal and plan mode; every approval is the editor's
+permission prompt, with the diff shown before a write; the plan is the editor's plan
+view. When the editor offers its buffers, `read_file`, `write_file` and `edit_file` go
+through it, so the agent reads what a person has not saved yet and its edits show up in
+the editor's review. A project of several folders gives the agent the first as its
+working folder and the rest by absolute path. Nothing but protocol goes to stdout;
+everything else is on stderr, which the editor keeps as the agent's log.
+
 ## The server
 
 ```sh
@@ -215,8 +261,9 @@ tools in, a `Completion` out. Wire shapes live there and nowhere else.
 in `tests/test_store.py` runs against every implementation.
 
 **A front end** supplies five things, all plain callables or protocols: an approver, a
-questioner, an observer, a store, and a spawner for child agents. The terminal and the HTTP
-server are the two that exist, and they share an unmodified core.
+questioner, an observer, a store, and a spawner for child agents -- and a listener, if it
+wants the words as they come. The terminal, the HTTP server and the editor are the three
+that exist, and they share an unmodified core.
 
 ## Evals
 
@@ -246,6 +293,7 @@ has shown, retractions included, is in `evals/FINDINGS.md`.
 ```
 src/harness/
   types.py  workspace.py  config.py  settings.py    the vocabulary
+  jsonrpc.py  JSON-RPC over streams, one line each: the editor's wire and the tool servers'
   state/      approval, mode, plan, inbox, board    what a run carries
   agent/      the loop, the runner, compaction, and new_agent
   tools/      the tool contract, the kit, and every tool
@@ -254,6 +302,8 @@ src/harness/
   providers/  the model contract and the OpenAI-compatible client
   store/      the transcript contract, the JSONL store, the board file
   server/     routes, runs, events, streams, and the pages
+  acp/        the editor front end: sessions, the protocol's words, files through the editor
+  mcp/        tool servers: what one is, and connecting to one
   cli/        the harness command and its subcommands
   prompts/    the system prompt, with attribution
 evals/        rungs, the runner, results, and findings

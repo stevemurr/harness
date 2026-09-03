@@ -26,11 +26,35 @@ Every provider owes the same three guarantees, because the loop above depends on
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from harness.types import Message, ToolSpec, Transcript
+
+
+@dataclass(frozen=True, slots=True)
+class Chunk:
+    """A piece of the model's output, as it arrives.
+
+    Streaming changes nothing about the transcript: the loop still appends one whole
+    assistant message per turn, and that message is the state. A chunk is for whoever is
+    watching -- a terminal printing words as they come, a client rendering them -- and it
+    carries no identity because the turn it belongs to is the one in flight.
+
+    `thought` marks reasoning rather than the answer. The two are kept apart because they
+    are read differently: a front end shows the answer and may fold the thinking away, and
+    the transcript keeps only the answer, since `reasoning_content` is not sent back.
+    """
+
+    text: str
+    thought: bool = False
+
+
+#: Told about each chunk as it arrives. Synchronous, because it is called from inside a
+#: provider's read loop and a listener that blocks there stalls the stream; a front end
+#: that needs to await something hands the chunk to a queue.
+Listener = Callable[[Chunk], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +107,19 @@ class Provider(Protocol):
         ...
 
     async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
     ) -> Completion:
-        """One assistant turn. Raises `ProviderError` when the endpoint cannot answer."""
+        """One assistant turn. Raises `ProviderError` when the endpoint cannot answer.
+
+        With `listen`, the provider streams and tells the listener each chunk on the way;
+        the `Completion` it returns is the same whole message either way. Without one it
+        may ask for the message whole, which is the cheaper request and the one every
+        endpoint supports.
+        """
         ...
 
     async def aclose(self) -> None:

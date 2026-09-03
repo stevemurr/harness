@@ -127,6 +127,10 @@ class Run:
     #: called tools says nothing, and the next turn's prose would then open the answer with
     #: a blank line the model did not write.
     narrated: bool = False
+    #: Whether the turn in flight has streamed any prose. The listener sets it and the
+    #: observer clears it, so a turn's words go out once: as they arrive when the provider
+    #: streams, whole at the end of the turn when it does not.
+    streamed: bool = False
     #: Rows the tool wrapper already settled, so the observer does not restate them.
     _settled: set[str] = field(default_factory=set)
     _pending: dict[str, asyncio.Future[Decision]] = field(default_factory=dict)

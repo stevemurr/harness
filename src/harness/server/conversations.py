@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -36,7 +37,8 @@ from uuid import uuid4
 from harness.agent import new_agent
 from harness.agent.loop import Observer, Turn
 from harness.exec.children import Children, Lineage
-from harness.providers.base import Provider
+from harness.mcp import McpServer, Server, connect_all
+from harness.providers.base import Chunk, Listener, Provider
 from harness.server.events import Visibility
 from harness.server.runs import (
     CommandRefused,
@@ -177,11 +179,40 @@ def publish_plan(run: Run, plan: Plan) -> None:
     )
 
 
+def listener_for(live: Live) -> Listener:
+    """The listener. Publishes the model's words as they arrive.
+
+    The stream identity is the run, so the narration accumulates across turns instead of
+    each turn replacing the last, and a new turn's first chunk opens with the same blank
+    line the per-turn path puts between turns. Reasoning is not published: the client
+    contract has no slot for it, and an answer stream that carried the thinking would show
+    a person the wrong text.
+    """
+
+    def listen(chunk: Chunk) -> None:
+        run = live.run
+        if run is None or chunk.thought:
+            return
+        opening = run.narrated and not run.streamed
+        run.publish(
+            "answer.delta",
+            {
+                "effect_id": run.run_id,
+                "model_call_id": run.run_id,
+                "text": f"\n\n{chunk.text}" if opening else chunk.text,
+            },
+        )
+        run.narrated = True
+        run.streamed = True
+
+    return listen
+
+
 def observer_for(live: Live) -> Observer:
     """The observer. Publishes what a completed turn added that no tool call could.
 
-    Three things: the model's prose, the activity rows for calls that never reached a tool,
-    and one developer row per turn.
+    Three things: the model's prose when it was not already streamed, the activity rows for
+    calls that never reached a tool, and one developer row per turn.
     """
 
     def publish(turn: Turn) -> None:
@@ -190,11 +221,10 @@ def observer_for(live: Live) -> Observer:
             return
 
         prose = turn.assistant.content.strip()
-        if prose:
-            # One delta per turn, because `Provider.complete` answers with a whole message --
-            # there is no streaming below this. The stream identity is the run, so the
-            # model's narration accumulates across turns instead of each turn replacing
-            # the last; the terminal event's summary replaces the lot.
+        streamed, run.streamed = run.streamed, False
+        if prose and not streamed:
+            # One delta for the whole turn, for a provider that answers with a whole
+            # message. A streaming one already published the words through the listener.
             run.publish(
                 "answer.delta",
                 {
@@ -298,6 +328,7 @@ def open_conversation(
     store: Store,
     settings: Settings | None = None,
     board: Board | None = None,
+    extra: Sequence[Handler] = (),
 ) -> Conversation:
     """Build the agent for one conversation, with the front end's collaborators in place.
 
@@ -327,6 +358,7 @@ def open_conversation(
             modes=ModeState(current=lineage.mode),
             lineage=lineage,
             board=board,
+            extra=extra,
         )
         child_kits.append(child_kit)
         return new_agent(
@@ -363,6 +395,7 @@ def open_conversation(
         children=children,
         board=board,
         identity=thread_id,
+        extra=extra,
     )
     agent = new_agent(
         root,
@@ -375,6 +408,7 @@ def open_conversation(
         observers=[observer_for(live)],
         settings=settings,
         on_compaction=compaction_reporter(live),
+        listen=listener_for(live),
     )
     return Conversation(
         thread_id=thread_id,
@@ -408,6 +442,11 @@ class Runtime:
     #: Where boards are kept, one file per folder. `None` keeps them in memory, which is
     #: what a test wants and what a server that should leave nothing behind wants.
     boards: Path | None = None
+    #: Tool servers named in the config. Connected once, at startup, and shared by every
+    #: conversation: a server is a process, and one per conversation would be one per
+    #: thread a client ever opened.
+    mcp: tuple[McpServer, ...] = ()
+    servers: list[Server] = field(default_factory=list)
     conversations: dict[str, Conversation] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
     _boards: dict[str, Board] = field(default_factory=dict, repr=False)
@@ -442,9 +481,15 @@ class Runtime:
             self.store,
             self.settings,
             board=self.board_for(root),
+            extra=[tool for server in self.servers for tool in server.tools()],
         )
         self.conversations[thread_id] = opened
         return opened
+
+    async def connect(self) -> None:
+        """Connect the config's tool servers. One that does not answer is logged and left
+        out, so a server that is down does not keep this one from starting."""
+        self.servers = await connect_all(list(self.mcp))
 
     def start(
         self,
@@ -555,6 +600,9 @@ class Runtime:
             await conversation.kit.aclose()
             for child_kit in conversation.child_kits:
                 await child_kit.aclose()
+        servers, self.servers = self.servers, []
+        for server in servers:
+            await server.aclose()
         await self.provider.aclose()
 
     def for_thread(self, thread_id: str) -> list[Run]:

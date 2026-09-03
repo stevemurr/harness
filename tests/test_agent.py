@@ -298,3 +298,39 @@ def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
 
     assert named, "the prompt should name the tools it tells the model to use"
     assert named <= registered, f"prompt names tools that do not exist: {named - registered}"
+
+
+# -- streaming -----------------------------------------------------------------------------
+
+
+async def test_a_listener_hears_the_words_before_the_turn_is_observed(folder: Path) -> None:
+    """The listener is told about the turn in flight; the observer about the one just
+    finished. The transcript is the same either way."""
+    model = ScriptedModel(Message(Role.ASSISTANT, "all done here"), streaming=True)
+    heard: list[str] = []
+    seen: list[str] = []
+
+    agent = agent_over(
+        folder,
+        model,
+        listen=lambda chunk: heard.append(chunk.text),
+        observers=[lambda turn: seen.append("observed " + " ".join(heard))],
+    )
+    outcome = await agent.run("go")
+
+    assert heard == ["all", "done", "here"]
+    assert seen == ["observed all done here"]
+    assert outcome.answer == "all done here"
+
+
+async def test_a_listener_that_raises_does_not_end_the_run(folder: Path) -> None:
+    """A spectator, like an observer: loud in the log, never fatal."""
+    model = ScriptedModel(Message(Role.ASSISTANT, "fine"), streaming=True)
+
+    def broken(_chunk) -> None:
+        raise RuntimeError("display fell over")
+
+    outcome = await agent_over(folder, model, listen=broken).run("go")
+
+    assert outcome.stop.ok
+    assert outcome.answer == "fine"

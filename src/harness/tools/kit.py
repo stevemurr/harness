@@ -13,6 +13,7 @@ needs lives on the tool, and the kit is where the tools are made.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -74,6 +75,9 @@ class Toolkit:
     #: Who this kit's agent is on the board and to its children. A child's is its agent
     #: id; a front end that knows the thread id passes that.
     identity: str = field(default_factory=lambda: f"agent_{uuid4().hex[:8]}")
+    #: Tools from outside this repository -- an MCP server's -- offered beside the
+    #: built-in ones. The kit does not own them: whoever connected the server closes it.
+    extra: list[Handler] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.processes is None:
@@ -96,6 +100,7 @@ class Toolkit:
         lineage: Lineage | None = None,
         board: Board | None = None,
         identity: str = "",
+        extra: Iterable[Handler] = (),
     ) -> Toolkit:
         """A kit whose code tools can answer for the languages in `root`."""
         settings = settings or Settings()
@@ -108,6 +113,7 @@ class Toolkit:
             children=children,
             lineage=lineage,
             board=board,
+            extra=list(extra),
         )
         if identity and lineage is None:
             made.identity = identity
@@ -126,6 +132,7 @@ class Toolkit:
             *(agent_tools(self.children) if self.children is not None else []),
             *(report_tools(self.lineage) if self.lineage is not None else []),
             *(board_tools(self.board, self.identity) if self.board is not None else []),
+            *self.extra,
         ]
 
     async def aclose(self) -> None:

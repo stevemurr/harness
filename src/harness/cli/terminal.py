@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 
 from harness.agent.loop import Turn
+from harness.providers.base import Chunk
 from harness.settings import Compaction
 
 _COLOUR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -40,9 +42,13 @@ def yellow(text: str) -> str:
 PLAN_TOOLS = {"update_plan"}
 
 
-def render(turn: Turn, indent: str = "") -> None:
-    """One turn, as the person watching sees it."""
-    if turn.assistant.content.strip():
+def render(turn: Turn, indent: str = "", *, prose: bool = True) -> None:
+    """One turn, as the person watching sees it.
+
+    `prose=False` leaves the model's words out, for a caller that has already printed them
+    as they arrived.
+    """
+    if prose and turn.assistant.content.strip():
         said = turn.assistant.content.strip().replace("\n", f"\n{indent}")
         print(f"\n{indent}{said}\n")
     for call, result in turn.results:
@@ -61,6 +67,38 @@ def render(turn: Turn, indent: str = "") -> None:
         summary = first[0][:100] if first else ""
         extra = f" {dim(f'(+{len(first) - 1} lines)')}" if len(first) > 1 else ""
         print(f"{indent}  {mark} {bold(call.name)} {dim(summary)}{extra}")
+
+
+@dataclass
+class Narrator:
+    """The root agent's turns, with the prose printed as it is written.
+
+    Two callables over one fact: whether this turn's words have already gone to the screen.
+    The listener prints them as they arrive; the observer then prints everything else and
+    leaves the prose out, so a person never reads the answer twice. Without a streaming
+    provider the listener is never called and `render` prints the prose whole, which is
+    the same screen a little later.
+
+    Reasoning is not printed. It can run to thousands of characters a turn, and a terminal
+    that scrolls the thinking past faster than it can be read is showing activity rather
+    than an answer.
+    """
+
+    _streamed: bool = False
+
+    def listen(self, chunk: Chunk) -> None:
+        if chunk.thought:
+            return
+        if not self._streamed:
+            print()
+            self._streamed = True
+        print(chunk.text, end="", flush=True)
+
+    def render(self, turn: Turn) -> None:
+        streamed, self._streamed = self._streamed, False
+        if streamed:
+            print("\n")
+        render(turn, prose=not streamed)
 
 
 def render_child(turn: Turn) -> None:

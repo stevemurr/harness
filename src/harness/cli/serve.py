@@ -40,6 +40,7 @@ def handle(args: argparse.Namespace) -> int:
         token=config.server.token,
         settings=config.settings,
         boards=BOARDS.expanduser(),
+        mcp=config.mcp,
     )
     if config.path is not None:
         log.info("settings from %s", config.path)

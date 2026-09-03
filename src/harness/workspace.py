@@ -53,13 +53,38 @@ class Workspace:
 
     root: Path
     protected: tuple[Path, ...] = ()
+    #: Other folders this run may reach, for an editor whose project is several. The
+    #: `root` stays the one folder: relative paths resolve against it, commands run in
+    #: it, and its files are shown relative; a file in another folder is named by its
+    #: absolute path, which is the only name that says which folder it is in.
+    extra: tuple[Path, ...] = ()
 
     @classmethod
-    def at(cls, root: Path | str, protected: tuple[Path, ...] = ()) -> Workspace:
+    def at(
+        cls,
+        root: Path | str,
+        protected: tuple[Path, ...] = (),
+        extra: tuple[Path | str, ...] = (),
+    ) -> Workspace:
         resolved = Path(root).resolve()
         if not resolved.is_dir():
             raise WorkspaceError(f"workspace root is not a directory: {resolved}")
-        return cls(resolved, tuple(p.resolve() for p in protected))
+        others: list[Path] = []
+        for folder in extra:
+            other = Path(folder).resolve()
+            if not other.is_dir():
+                raise WorkspaceError(f"workspace folder is not a directory: {other}")
+            if other != resolved and other not in others:
+                others.append(other)
+        return cls(resolved, tuple(p.resolve() for p in protected), tuple(others))
+
+    @property
+    def roots(self) -> tuple[Path, ...]:
+        """Every folder this run may reach, the root first."""
+        return (self.root, *self.extra)
+
+    def _inside(self, resolved: Path) -> bool:
+        return any(resolved == r or resolved.is_relative_to(r) for r in self.roots)
 
     def resolve(self, path: str) -> Path:
         """Resolve for reading. Containment only."""
@@ -73,10 +98,9 @@ class Workspace:
         except ValueError as exc:
             raise WorkspaceError(f"not a usable path: {path!r} ({exc})") from exc
 
-        if resolved != self.root and not resolved.is_relative_to(self.root):
-            raise PathEscape(
-                f"path {path!r} resolves to {resolved}, outside {self.root}"
-            )
+        if not self._inside(resolved):
+            where = self.root if not self.extra else ", ".join(str(r) for r in self.roots)
+            raise PathEscape(f"path {path!r} resolves to {resolved}, outside {where}")
         if resolved.is_symlink():
             # `resolve()` follows links, so an ordinary link is already its target here.
             # What survives is a cycle (a -> b -> a), where resolution gives up. `os.stat`

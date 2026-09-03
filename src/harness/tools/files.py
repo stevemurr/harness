@@ -22,13 +22,15 @@ from harness.workspace import PathEscape, PathRefused, WorkspaceError
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache"}
 
 
-def _walk(root: Path) -> list[Path]:
+def _walk(roots: tuple[Path, ...]) -> list[Path]:
+    """Every file under every folder of the workspace, the root's first."""
     found: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        if any(part in SKIP for part in path.parts):
-            continue
-        if path.is_file():
-            found.append(path)
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if any(part in SKIP for part in path.parts):
+                continue
+            if path.is_file():
+                found.append(path)
     return found
 
 
@@ -57,20 +59,28 @@ class ReadFile:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
+        return numbered(args.path, text, args.offset, args.limit)
 
-        lines = text.splitlines()
-        offset = max(1, args.offset)
-        window = lines[offset - 1 : offset - 1 + args.limit]
-        if not window:
-            return ToolResult(
-                f"{args.path} has {len(lines)} lines; offset {offset} is past the end"
-            )
 
-        body = "\n".join(f"{offset + i:6d}\t{line}" for i, line in enumerate(window))
-        tail = ""
-        if offset - 1 + len(window) < len(lines):
-            tail = f"\n\n[{len(lines) - (offset - 1 + len(window))} more lines]"
-        return ToolResult(body + tail)
+def numbered(path: str, text: str, offset: int, limit: int) -> ToolResult:
+    """A window of a file, with 1-based line numbers, as the model reads it.
+
+    Split from the tool so a front end that reads files another way -- an editor handing
+    over the buffer a person has not saved yet -- renders them exactly as the disk tool
+    does. The numbers are what `edit_file` and the person both refer to, so two renderings
+    would be two numberings.
+    """
+    lines = text.splitlines()
+    offset = max(1, offset)
+    window = lines[offset - 1 : offset - 1 + limit]
+    if not window:
+        return ToolResult(f"{path} has {len(lines)} lines; offset {offset} is past the end")
+
+    body = "\n".join(f"{offset + i:6d}\t{line}" for i, line in enumerate(window))
+    tail = ""
+    if offset - 1 + len(window) < len(lines):
+        tail = f"\n\n[{len(lines) - (offset - 1 + len(window))} more lines]"
+    return ToolResult(body + tail)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,43 +138,63 @@ class EditFile:
         return f"edit {args.path}", "edit_file"
 
     async def run(self, args: Edit, ctx: ToolContext, /) -> ToolResult:
-        path, old, new = args.path, args.old, args.new
-        if old == new:
-            return ToolResult("old and new are identical; nothing to do", ok=False)
         try:
-            text = ctx.paths.read(path)
+            text = ctx.paths.read(args.path)
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
 
-        count = text.count(old)
-        if count == 0:
-            return ToolResult(
-                f"{path} does not contain that text. Read the file and copy the exact "
-                + "text including indentation.",
-                ok=False,
-            )
-        # Refusing rather than picking is the whole point: replacing the first of five
-        # matches edits a line the model did not look at, and it will not notice.
-        if count > 1 and not args.replace_all:
-            return ToolResult(
-                f"that text appears {count} times in {path}. Include surrounding lines to "
-                + "make it unique, or pass replace_all.",
-                ok=False,
-                # The harness declining to guess, which is policy rather than the world
-                # saying no -- so it counts towards a stall the way a schema mismatch does.
-                # A model that cannot land an edit is stuck; one watching a test fail is not.
-                refused=True,
-            )
-
+        edited = replaced(args.path, text, args)
+        if isinstance(edited, ToolResult):
+            return edited
         try:
-            _ = ctx.paths.write(path, text.replace(old, new))
+            _ = ctx.paths.write(args.path, edited.text)
         except (PathEscape, PathRefused) as exc:
             return ToolResult(str(exc), ok=False, refused=True)
         except WorkspaceError as exc:
             return ToolResult(str(exc), ok=False)
-        return ToolResult(f"replaced {count} occurrence(s) in {path}")
+        return ToolResult(edited.report)
+
+
+@dataclass(frozen=True, slots=True)
+class Replacement:
+    """An edit that can be made: the text after it, and what to tell the model."""
+
+    text: str
+    report: str
+
+
+def replaced(path: str, text: str, args: Edit) -> Replacement | ToolResult:
+    """The file after the edit, or the result saying why there is no such file.
+
+    The rule -- `old` appears exactly once, or `replace_all` was passed -- is the whole of
+    what makes this tool safe, and it lives here so a front end that reads and writes files
+    another way applies the same rule rather than a copy of it.
+    """
+    old, new = args.old, args.new
+    if old == new:
+        return ToolResult("old and new are identical; nothing to do", ok=False)
+    count = text.count(old)
+    if count == 0:
+        return ToolResult(
+            f"{path} does not contain that text. Read the file and copy the exact "
+            + "text including indentation.",
+            ok=False,
+        )
+    # Refusing rather than picking is the whole point: replacing the first of five
+    # matches edits a line the model did not look at, and it will not notice.
+    if count > 1 and not args.replace_all:
+        return ToolResult(
+            f"that text appears {count} times in {path}. Include surrounding lines to "
+            + "make it unique, or pass replace_all.",
+            ok=False,
+            # The harness declining to guess, which is policy rather than the world
+            # saying no -- so it counts towards a stall the way a schema mismatch does.
+            # A model that cannot land an edit is stuck; one watching a test fail is not.
+            refused=True,
+        )
+    return Replacement(text.replace(old, new), f"replaced {count} occurrence(s) in {path}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +245,7 @@ class Glob:
         pattern = args.pattern
         hits = [
             ctx.paths.relative(p)
-            for p in _walk(ctx.paths.root)
+            for p in _walk(ctx.paths.roots)
             if fnmatch.fnmatch(ctx.paths.relative(p), pattern)
             or fnmatch.fnmatch(p.name, pattern)
         ]
@@ -250,7 +280,7 @@ class Grep:
 
         restrict = args.glob
         rows: list[str] = []
-        for path in _walk(ctx.paths.root):
+        for path in _walk(ctx.paths.roots):
             name = ctx.paths.relative(path)
             if restrict and not (
                 fnmatch.fnmatch(name, restrict) or fnmatch.fnmatch(path.name, restrict)

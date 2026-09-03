@@ -31,3 +31,4 @@ decision gets a new file, and an old one is never edited into saying something e
 | [0019](0019-one-command-with-subcommands.md) | One command, with subcommands |
 | [0020](0020-method.md) | Method: what to believe, and when |
 | [0021](0021-every-sweep-runs-with-every-tool.md) | Every sweep runs with every tool; a control withholds by name |
+| [0022](0022-the-editor-is-a-front-end-and-the-wire-is-shared.md) | The editor is a front end, and the wire is shared with the tool servers |

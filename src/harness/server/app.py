@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from harness.mcp import McpServer
 from harness.providers.base import Provider
 from harness.server.conversations import Conversation, Runtime
 from harness.server.runs import DECISIONS, CommandRefused, Run
@@ -95,6 +96,7 @@ def create_app(
     heartbeat: float = HEARTBEAT,
     settings: Settings | None = None,
     boards: Path | None = None,
+    mcp: tuple[McpServer, ...] = (),
 ) -> Starlette:
     """The server, with its collaborators handed in.
 
@@ -103,7 +105,11 @@ def create_app(
     design one.
     """
     runtime = Runtime(
-        provider=provider, store=store, settings=settings or Settings(), boards=boards
+        provider=provider,
+        store=store,
+        settings=settings or Settings(),
+        boards=boards,
+        mcp=mcp,
     )
     folders = workspaces or Workspaces()
     identity = (
@@ -698,9 +704,12 @@ def create_app(
         event logs never got a terminal row, and a following client waited for an ending
         that could not come.
 
-        Nothing happens on startup. A server that has to warm something up before it can
-        answer is a server that can be half-ready, and there is nothing here to warm.
+        Startup connects the config's tool servers, and that is all. A server that has
+        to warm something up before it can answer is a server that can be half-ready, so
+        the rule is that startup finishes with whatever answered: a tool server that is
+        down is logged and left out, not waited for.
         """
+        await runtime.connect()
         yield
         await runtime.aclose()
 

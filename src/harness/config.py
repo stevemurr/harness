@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from harness.mcp.base import McpServer
 from harness.settings import Compaction, Limits, Output, Settings
 from harness.types import JSON
 
@@ -69,7 +70,9 @@ _SERVER_KEYS = frozenset({"host", "port", "token"})
 _COMPACTION_KEYS = frozenset({"enabled", "at", "keep_turns"})
 _OUTPUT_KEYS = frozenset({"per_result", "per_turn"})
 _LIMITS_KEYS = frozenset({"max_turns", "max_consecutive_refusals"})
-_TABLES = frozenset({"provider", "server", "compaction", "output", "limits"})
+_MCP_KEYS = frozenset({"servers"})
+_MCP_SERVER_KEYS = frozenset({"command", "args", "env", "url", "headers"})
+_TABLES = frozenset({"provider", "server", "compaction", "output", "limits", "mcp"})
 
 
 class ConfigError(Exception):
@@ -111,6 +114,9 @@ class Config:
     #: two places that had to be kept in step by hand -- which is the bug this module opens
     #: by describing. One type, read here, handed to `Agent` whole.
     settings: Settings = field(default_factory=Settings)
+    #: Tool servers to connect to, from `[mcp.servers.<name>]`. Every front end connects
+    #: to the same ones, for the reason every front end reads the same provider.
+    mcp: tuple[McpServer, ...] = ()
     #: Where this came from, or None. Front ends print it so a surprising setting is
     #: traceable to a file rather than guessed at.
     path: Path | None = None
@@ -143,6 +149,7 @@ def load(path: Path | None = None) -> Config:
     compaction = _table(raw, "compaction", _COMPACTION_KEYS, resolved)
     output = _table(raw, "output", _OUTPUT_KEYS, resolved)
     limits = _table(raw, "limits", _LIMITS_KEYS, resolved)
+    mcp = _mcp_servers(_table(raw, "mcp", _MCP_KEYS, resolved))
 
     extra = provider.values.get("extra_body", {})
     if not isinstance(extra, dict):
@@ -189,8 +196,50 @@ def load(path: Path | None = None) -> Config:
                 ),
             ),
         ),
+        mcp=mcp,
         path=resolved,
     )
+
+
+def _mcp_servers(table: _Table) -> tuple[McpServer, ...]:
+    """`[mcp.servers.<name>]`, one server each. A name is the sub-table's key, so it
+    cannot be missing, and a server that is both a command and a URL is refused here
+    rather than guessed at."""
+    servers = table.values.get("servers", {})
+    if not isinstance(servers, dict):
+        raise ConfigError(f"{table.path}: mcp.servers must be a table of tables")
+    found: list[McpServer] = []
+    for name, raw in cast("JSON", servers).items():
+        entry = _table(cast("JSON", servers), name, _MCP_SERVER_KEYS, table.path)
+        _ = raw
+        try:
+            found.append(
+                McpServer(
+                    name=name,
+                    command=entry.text("command", ""),
+                    args=tuple(str(a) for a in _strings(entry, "args")),
+                    env=_mapping(entry, "env"),
+                    url=entry.text("url", ""),
+                    headers=_mapping(entry, "headers"),
+                )
+            )
+        except ValueError as exc:
+            raise ConfigError(f"{table.path}: {exc}") from exc
+    return tuple(found)
+
+
+def _strings(table: _Table, key: str) -> list[object]:
+    value = table.values.get(key, [])
+    if not isinstance(value, list):
+        raise ConfigError(f"{table.path}: {table.name}.{key} must be a list")
+    return cast("list[object]", value)
+
+
+def _mapping(table: _Table, key: str) -> dict[str, str]:
+    value = table.values.get(key, {})
+    if not isinstance(value, dict):
+        raise ConfigError(f"{table.path}: {table.name}.{key} must be a table")
+    return {str(k): str(v) for k, v in cast("JSON", value).items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,7 +394,16 @@ def write_example(path: Path | None = None) -> Path:
         + "# How a run may end other than the model stopping.\n"
         + "# [limits]\n"
         + "# max_turns = 100\n"
-        + "# max_consecutive_refusals = 10\n",
+        + "# max_consecutive_refusals = 10\n"
+        + "\n"
+        + "# Tool servers (MCP), one table each. Their tools join the built-in ones as\n"
+        + "# <server>__<tool>, and each is asked about before it runs unless the server\n"
+        + "# says it only reads. stdio only for now: a url is refused with a sentence.\n"
+        + "# [mcp.servers.files]\n"
+        + '# command = "npx"\n'
+        + '# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]\n'
+        + "# [mcp.servers.files.env]\n"
+        + '# API_KEY = ""\n',
         encoding="utf-8",
     )
     os.chmod(resolved, 0o600)

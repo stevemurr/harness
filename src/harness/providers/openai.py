@@ -20,7 +20,7 @@ from typing import cast
 import httpx
 
 from harness.config import Provider as ProviderSettings
-from harness.providers.base import Completion, ProviderError
+from harness.providers.base import Chunk, Completion, Listener, ProviderError
 from harness.types import (
     JSON,
     Message,
@@ -128,7 +128,11 @@ class OpenAICompatible:
             self._client = None
 
     async def complete(
-        self, transcript: Transcript, tools: Sequence[ToolSpec] = ()
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
     ) -> Completion:
         body: JSON = {
             **self.extra_body,
@@ -144,10 +148,18 @@ class OpenAICompatible:
             body["top_p"] = self.top_p
         if self.presence_penalty is not None:
             body["presence_penalty"] = self.presence_penalty
+        if listen is not None:
+            body["stream"] = True
+            # Usage arrives on one last event, and only when asked for. A gateway that
+            # ignores the option reports no usage, which the compaction meter already
+            # tolerates -- it is the same as an endpoint that omits the field.
+            body["stream_options"] = {"include_usage": True}
 
         last: Exception | None = None
         for attempt in range(self.max_retries):
             try:
+                if listen is not None:
+                    return await self._stream(body, listen)
                 return await self._once(body)
             except ProviderError as exc:
                 last = exc
@@ -189,6 +201,78 @@ class OpenAICompatible:
         return Completion(
             decode_message(as_dict(as_dict(choices[0]).get("message"))),
             prompt_tokens if isinstance(prompt_tokens, int) else None,
+            _body_size(body),
+        )
+
+
+    async def _stream(self, body: JSON, listen: Listener) -> Completion:
+        """The same turn, read as server-sent events and told to the listener on the way.
+
+        Only with a listener. The whole-message request is the one every endpoint speaks
+        and the one the evals were measured on, so it stays the path when nobody is
+        watching -- streaming for its own sake would be a second wire shape to keep right
+        for no one.
+
+        A failure before anything was delivered is retried like any other. One after the
+        listener has already been told part of the answer is not: a retry would say the
+        same words again to whoever is reading, and the honest report is that the stream
+        broke.
+        """
+        content: list[str] = []
+        deltas: list[JSON] = []
+        prompt_tokens: int | None = None
+        delivered = False
+        choices_seen = False
+        try:
+            async with self._http().stream("POST", "/chat/completions", json=body) as response:
+                if response.status_code >= 400:
+                    text = (await response.aread()).decode("utf-8", errors="replace")
+                    raise ProviderError(
+                        f"{response.status_code} from {self.base_url}: {text[:500]}",
+                        retryable=response.status_code in {408, 409, 429}
+                        or response.status_code >= 500,
+                    )
+                async for line in response.aiter_lines():
+                    # Comments, blank separators and `event:` lines carry nothing here.
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = as_dict(cast("object", json.loads(data)))
+                    except json.JSONDecodeError:
+                        log.warning("dropping a stream event that is not JSON: %s", data[:200])
+                        continue
+                    usage = as_dict(event.get("usage")).get("prompt_tokens")
+                    if isinstance(usage, int):
+                        prompt_tokens = usage
+                    for choice in as_list(event.get("choices")):
+                        choices_seen = True
+                        delta = as_dict(as_dict(choice).get("delta"))
+                        if text := as_str(delta.get("content")):
+                            content.append(text)
+                            listen(Chunk(text))
+                            delivered = True
+                        if thought := as_str(delta.get("reasoning_content")):
+                            listen(Chunk(thought, thought=True))
+                            delivered = True
+                        if delta.get("tool_calls"):
+                            deltas.append(delta)
+        except httpx.TimeoutException as exc:
+            raise ProviderError(
+                f"timed out after {self.timeout}s", retryable=not delivered
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"cannot reach {self.base_url}: {exc}", retryable=not delivered
+            ) from exc
+
+        if not choices_seen:
+            raise ProviderError("stream carried no choices")
+        return Completion(
+            Message(Role.ASSISTANT, "".join(content), tuple(merge_tool_call_deltas(deltas))),
+            prompt_tokens,
             _body_size(body),
         )
 
