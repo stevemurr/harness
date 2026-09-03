@@ -56,6 +56,7 @@ uv run harness threads                                   # what has been run
 | `harness threads` | list recent threads, with delegated threads under their parent |
 | `harness init` | write a starter `~/.harness/config.toml` |
 | `harness init-agents` | write a starter `AGENTS.md` in the folder, read at the start of every run |
+| `harness init-skill NAME` | write a starter skill under `.harness/skills/NAME`, offered to the model when it applies |
 | `harness install-servers` | provision the language servers code search uses |
 | `harness install-browser` | fetch the headless Chromium `open_url` falls back to, after `uv sync --extra browser` |
 | `harness evals run` / `report` | the eval ladder, from a checkout of this repository |
@@ -132,6 +133,7 @@ The dataclass is the schema the model sees; arguments are validated against it b
 | files | `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep` |
 | commands | `run`, `read_process`, `stop_process`, `monitor`, `read_monitor`, `stop_monitor` |
 | web | `web_search`, `open_url` |
+| skills | `use_skill` |
 | code search | `find_definition`, `find_references` (Python, Go and Swift, via language servers) |
 | the person | `ask_user`, `update_plan`, `exit_plan_mode` |
 | other agents | `delegate`, `wait_agents`, `tell_agent`, `read_agent`, `stop_agent`, `report` |
@@ -146,6 +148,15 @@ for a command that is the program (`git`, not the command line), for a write too
 write, and the prompt says which. `run` executes with your authority and is not sandboxed:
 structured writes are contained to the folder and to unprotected paths, but nothing can see
 inside `bash -c`. The boundary is the person reading the command.
+
+**Skills.** A folder under `.harness/skills/<name>/` or `~/.harness/skills/<name>/` with a
+`SKILL.md`: a name, a one-line description, and instructions, with any scripts and
+references beside it. The model is told the names and descriptions at the start of a run
+and reads a skill with `use_skill` when it applies, so a long skill costs one line of
+context until it is needed; `pinned: true` puts one in the prompt from the start. A
+message beginning `/name` invokes one. A skill's scripts run through the ordinary tools
+under the ordinary approval policy, and a delegated agent sees the same skills as its
+parent. The folder's skills win a name clash with the person's.
 
 **Plan mode.** `harness run --plan` starts read-only. The agent reads, proposes a plan with
 `exit_plan_mode`, and nothing changes until you approve it. A person sets the mode, never
@@ -296,8 +307,13 @@ an approval waits for the person, and approvals, questions and steering arrive a
 | `POST` | `/api/v1/threads/{id}/runs` | start a run; answers with a run id at once |
 | `POST` | `/api/v1/threads/{id}/folders` | widen the thread to another folder, now and for every later run |
 | `GET` | `/api/v1/runs`, `/api/v1/runs/{id}/events` | runs, and one run's event stream |
-| `POST` | `/api/v1/runs/{id}/commands` | `pause`, `resume`, `cancel`, `resolve_approval`, `answer`, `steer` |
+| `POST` | `/api/v1/runs/{id}/commands` | `pause`, `resume`, `cancel`, `stop`, `resolve_approval`, `answer`, `steer` |
 | `GET` | `/watch`, `/watch/{thread}`, `/console` | browser pages, no build step |
+
+`stop` is the command between `steer` and `cancel`: its `content` reaches the model as a
+steer -- "write your work to the board" -- and the run then has two turns before the loop
+ends it as cancelled, whatever it is doing. Asking the model to stop is not the same as
+stopping it; the harness does the second.
 
 Stopping the server ends every open stream within a moment with `stream.end` reason
 `server_stopping`, which a client reads as "reconnect from the cursor", and any

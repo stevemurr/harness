@@ -47,6 +47,7 @@ from harness.settings import Settings
 from harness.state.approval import POLICIES, POLICY_NAMES, named_policy
 from harness.state.board import Status
 from harness.state.mode import MODE_NAMES, MODES, NORMAL, mode_for
+from harness.state.skills import skills_wire
 from harness.store.base import OnDisk, Store, StoreError
 from harness.types import JSON, Envelope, Source
 from harness.workspace import WorkspaceError
@@ -55,6 +56,21 @@ log = logging.getLogger(__name__)
 
 API = "/api/v1"
 PROTOCOL_VERSION = "1"
+
+#: How many turns a run gets after a person says stop: enough to write the board and put
+#: down what it holds, not enough to start anything. Two, because the first turn is where
+#: the steer lands and the second is the one it acts in.
+STOP_TURNS = 2
+
+
+def described(record: WorkspaceRecord) -> JSON:
+    """A workspace as a client lists it, with the skills reachable from its folder.
+
+    Skills are per folder, so they ride here rather than on `/capabilities`: the same
+    rule -- a vocabulary the client puts in front of a person -- at the scope it has.
+    Read fresh, so a skill written since the folder was registered is offered.
+    """
+    return {**record.wire(), "skills": skills_wire(Path(record.root_path))}
 
 
 def capabilities_payload() -> JSON:
@@ -166,7 +182,7 @@ def create_app(
     # -- workspaces ------------------------------------------------------------------------
 
     async def list_workspaces(_request: Request) -> Response:
-        return JSONResponse([record.wire() for record in folders.list()])
+        return JSONResponse([described(record) for record in folders.list()])
 
     async def create_workspace(request: Request) -> Response:
         body = await read_json(request)
@@ -192,7 +208,7 @@ def create_app(
             )
         except WorkspaceTaken as exc:
             raise ApiError(409, "workspace_exists", str(exc)) from exc
-        return JSONResponse(record.wire(), status_code=201)
+        return JSONResponse(described(record), status_code=201)
 
     async def list_folders(request: Request) -> Response:
         """Directories under one path, so a browser can offer a folder picker.
@@ -624,6 +640,8 @@ def create_app(
         if kind == "cancel":
             run.cancel()
             return {"status": "cancelling"}
+        if kind == "stop":
+            return stop(run, body)
         if kind == "resolve_approval":
             return resolve(run, body)
         if kind == "answer":
@@ -650,6 +668,32 @@ def create_app(
                 f"{approval_id or 'that approval'} is not waiting. Open: {open_now}.",
             )
         return {"status": decision.value}
+
+    def stop(run: Run, body: JSON) -> JSON:
+        """Put things down and stop: a steer the model reads, and an ending it cannot miss.
+
+        `content` is what the person wants done first -- "write your work to the board" --
+        and reaches the model as a steer at its next turn. The run then has `STOP_TURNS`
+        turns, and the loop ends it as cancelled whatever it is doing. `cancel` is for
+        stopping now; this is for stopping properly, and the harness rather than the model
+        is what makes it stop.
+        """
+        conversation = runtime.conversations.get(run.thread_id)
+        if conversation is None:
+            raise ApiError(
+                409, "run_finished", "That run is no longer held by this process."
+            )
+        asked = str(body.get("content") or "").strip()
+        words = (
+            f"Stop. {asked} You have {STOP_TURNS} turns to do that and put down what you "
+            + "hold; then this run ends."
+            if asked
+            else f"Stop. Put down what you hold; this run ends after {STOP_TURNS} turns."
+        )
+        conversation.agent.tell(Envelope(Source.PERSON, words))
+        run.stop_after(STOP_TURNS)
+        run.publish("run.stopping", {"content": asked, "turns": STOP_TURNS})
+        return {"status": "stopping"}
 
     def steer(run: Run, body: JSON) -> JSON:
         """Add to a run already going.

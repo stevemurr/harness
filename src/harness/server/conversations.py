@@ -209,6 +209,16 @@ class Gated:
         return None
 
 
+def halt_for(live: Live):
+    """The loop's stop question, answered by the run in flight. Nothing in flight: go on."""
+
+    def halt() -> str:
+        run = live.run
+        return run.halt() if run is not None else ""
+
+    return halt
+
+
 def compaction_reporter(live: Live):
     """Tell a following client that the context was handed off.
 
@@ -447,6 +457,7 @@ def open_conversation(
             settings=settings,
             lineage=lineage,
             on_compaction=compaction_reporter(live),
+            halt=halt_for(live),
         )
 
     children = Children(
@@ -480,6 +491,7 @@ def open_conversation(
         settings=settings,
         on_compaction=compaction_reporter(live),
         listen=listener_for(live),
+        halt=halt_for(live),
     )
     return Conversation(
         thread_id=thread_id,

@@ -135,13 +135,13 @@ async def test_a_released_task_is_open_again_with_its_note_kept() -> None:
     released = await board.release(
         task.task_id, by="thr_1", note="the reporter is fixed; the tests still hang"
     )
-    again = await board.release(task.task_id, by="thr_1")
+    again = await board.release(task.task_id, by="thr_1")  # open already: the note stays
 
     assert isinstance(stranger, str) and "held by thr_1" in stranger
     assert not isinstance(released, str)
     assert released.status is Status.OPEN and released.owner == ""
     assert released.note == "the reporter is fixed; the tests still hang"
-    assert isinstance(again, str) and "not claimed" in again
+    assert not isinstance(again, str) and again.note == released.note
 
     # The next holder starts from the note, and finishing keeps it beside the result.
     claimed = await board.claim(task.task_id, by="thr_3")
@@ -172,3 +172,25 @@ async def test_the_release_tool_speaks_as_its_holder_and_shows_the_note(tmp_path
     reloaded = JsonlBoard(path=tmp_path / "board.jsonl")
     fetched = await reloaded.get(task_id)
     assert fetched is not None and fetched.note == "half done"
+
+
+async def test_a_note_on_a_task_nobody_holds_needs_no_claim() -> None:
+    """Told to write its work down and stop, a run was refused here for not holding the
+    task, read the refusal as "claim it", and worked on. A note is not a claim."""
+    from harness.state.board import MemoryBoard, Status
+
+    board = MemoryBoard()
+    task = await board.post("fix the hang", by="a")
+
+    noted = await board.release(task.task_id, by="thr_1", note="hangs only under xctest")
+
+    assert not isinstance(noted, str)
+    assert noted.status is Status.OPEN and noted.owner == ""
+    assert noted.note == "hangs only under xctest"
+
+    _ = await board.claim(task.task_id, by="thr_2")
+    theirs = await board.release(task.task_id, by="thr_1", note="mine")
+    assert isinstance(theirs, str) and "held by thr_2" in theirs and "post a task" in theirs
+    _ = await board.finish(task.task_id, by="thr_2", result="fixed")
+    finished = await board.release(task.task_id, by="thr_2", note="again")
+    assert isinstance(finished, str) and "already done" in finished

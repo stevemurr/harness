@@ -36,6 +36,7 @@ from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
 from harness.tools.plan import plan_tools
 from harness.tools.shell import shell_tools
+from harness.tools.skills import skill_tools
 from harness.tools.symbols import symbol_tools
 from harness.tools.web import web_tools
 
@@ -82,6 +83,8 @@ class Toolkit:
     #: The browser `open_url` falls back to. Made here and closed here, because it is a
     #: process nothing else knows about, like the language servers.
     renderer: Renderer | None = None
+    #: The folder, when the kit was made for one: `use_skill` reads the skills beside it.
+    root: Path | None = None
 
     def __post_init__(self) -> None:
         if self.processes is None:
@@ -111,6 +114,7 @@ class Toolkit:
         """A kit whose code tools can answer for the languages in `root`."""
         settings = settings or Settings()
         made = cls(
+            root=root,
             modes=modes or ModeState(),
             inbox=inbox or Inbox(),
             indexes=servers.for_workspace(root, settings.symbols),
@@ -135,6 +139,7 @@ class Toolkit:
             *symbol_tools(self.indexes),
             *(mode_tools(self.modes) if self.lineage is None else []),
             *ask_tools(self.ask),
+            *(skill_tools(self.root) if self.root is not None else []),
             *(agent_tools(self.children) if self.children is not None else []),
             *(report_tools(self.lineage) if self.lineage is not None else []),
             *(board_tools(self.board, self.identity) if self.board is not None else []),

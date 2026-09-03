@@ -20,7 +20,7 @@ from harness.server.runs import RunStatus, progress_id
 from harness.settings import Limits, Settings
 from harness.state.approval import Decision
 from harness.tools.shell import Shell
-from harness.types import Message, Role, ToolCall
+from harness.types import Envelope, Message, Role, Source, ToolCall
 
 
 @pytest.fixture
@@ -872,3 +872,43 @@ async def test_a_run_cut_off_mid_way_replays_as_failed(folder, tmp_path) -> None
     assert run.status is RunStatus.FAILED
     assert types_of(run)[-1] == "run.failed"
     assert "without an answer" in payloads(run, "run.failed")[0]["summary"]
+
+
+# -- stop: put things down, then the harness ends it ---------------------------------------
+
+
+class _Slow(ScriptedModel):
+    """A scripted model that takes a moment per call, so a stop can land mid-run."""
+
+    async def complete(self, transcript, tools=(), *, listen=None):
+        await asyncio.sleep(0.05)
+        return await super().complete(transcript, tools, listen=listen)
+
+
+async def test_stop_reaches_the_model_and_then_ends_the_run_whatever_it_does(
+    folder, tmp_path
+) -> None:
+    """Told to write its work down and stop, a run claimed a task, made a plan, worked on,
+    and finished the task before a second stop reached it. Now the model gets its two
+    turns for the bookkeeping and the loop ends the run, cancelled, however many turns the
+    model had left in it."""
+    replies = [calls((f"c{i}", "list_dir", {"path": "."})) for i in range(12)] + [says("done")]
+    model = _Slow(*replies)
+    runtime = runtime_for(model, tmp_path)
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+    run = runtime.start(conversation, "go", mode="auto", policy="full-access")
+    while run.turns < 2:
+        await asyncio.sleep(0.01)
+
+    conversation.agent.tell(Envelope(Source.PERSON, "Stop. Write your work to the board."))
+    run.stop_after(2)
+    assert run.task is not None
+    await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
+
+    assert run.status is RunStatus.CANCELLED
+    assert payloads(run, "run.cancelled")[0]["summary"] == "stopped by the user"
+    # The steer landed, the model had its two turns, and no more.
+    steered = [m for m in model.seen[-1].messages if m.role is Role.ARRIVAL]
+    assert any("Write your work to the board" in m.content for m in steered)
+    assert run.turns <= 4
+    assert len(model.seen) < len(replies)

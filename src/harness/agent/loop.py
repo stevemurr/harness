@@ -78,6 +78,12 @@ class AgentLoop:
     #: Given the turn about to run, so an arrival can say when it landed rather than only
     #: what it said -- which is what stops a pinned instruction reading as a new one.
     pending: Callable[[int], Awaitable[Sequence[Message]]] | None = None
+    #: Asked before every turn whether to stop, and why. Empty means go on. A front end
+    #: that has been told "stop" by a person sets this to answer once the model has had
+    #: its turn or two to put things down -- so the stop is the harness's to enforce and
+    #: not the model's to remember. Injected like `pending`, for the same reason: the loop
+    #: learns that runs sometimes end early, not who decided.
+    halt: Callable[[], str] | None = None
 
     async def run(self, transcript: Transcript) -> Outcome:
         turns = 0
@@ -90,6 +96,8 @@ class AgentLoop:
                     StopReason("max_turns", f"stopped after {turns} turns"),
                     turns,
                 )
+            if self.halt is not None and (why := self.halt()):
+                return Outcome(transcript, StopReason("cancelled", why), turns)
 
             # Refuse to send a transcript the provider will reject, and say which call is
             # dangling. Reaching here means a tool result was lost between turns, which is

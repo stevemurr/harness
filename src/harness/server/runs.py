@@ -117,6 +117,9 @@ class Run:
     #: observer clears it, so a turn's words go out once: as they arrive when the provider
     #: streams, whole at the end of the turn when it does not.
     streamed: bool = False
+    #: The turn after which the loop ends this run, once a person has said stop. `None`
+    #: until then. See `stop_after` and `halt`.
+    _halt_at: int | None = None
     #: Rows the tool wrapper already settled, so the observer does not restate them.
     _settled: set[str] = field(default_factory=set)
     _pending: dict[str, asyncio.Future[Decision]] = field(default_factory=dict)
@@ -235,6 +238,25 @@ class Run:
         if self.task is not None:
             _ = self.task.cancel()
         self._running.set()
+
+    def stop_after(self, turns: int) -> None:
+        """Let the model have `turns` more turns, then end the run whatever it is doing.
+
+        The difference from `cancel` is the difference between "stop now" and "put your
+        things down and stop". A person who says the second wants the board written, so
+        the model gets a turn or two for that -- and no more, because a stop the model is
+        merely asked to observe is one it can fail to, and did: told to write its work to
+        the board and stop, a run claimed the task, made a fresh plan, worked on, and
+        finished the task as failed before a second "stop" reached it. (2026-09-03)
+        """
+        self._halt_at = self.turns + max(turns, 1)
+        self._running.set()
+
+    def halt(self) -> str:
+        """Why the loop should end before its next turn, or empty. `AgentLoop.halt`."""
+        if self._halt_at is None or self.turns < self._halt_at:
+            return ""
+        return "stopped by the user"
 
     def resolve_approval(self, approval_id: str, decision: Decision) -> bool:
         waiting = self._pending.get(approval_id)

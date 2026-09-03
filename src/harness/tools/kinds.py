@@ -30,10 +30,12 @@ _KINDS: dict[str, str] = {
     "open_url": "fetch",
     "update_plan": "think",
     "exit_plan_mode": "switch_mode",
+    "use_skill": "skill",
 }
 
 
 def kind_for(tool: str) -> str:
-    """`read`, `search`, `edit`, `execute`, `fetch`, `think`, `switch_mode`, or `other` --
+    """`read`, `search`, `edit`, `execute`, `fetch`, `think`, `switch_mode`, `skill`, or
+    `other` --
     which is what a tool server's tool is, since nothing here knows what it does."""
     return _KINDS.get(tool, "other")

@@ -25,6 +25,15 @@ def configure(commands: Commands) -> None:
     _ = agents.add_argument("-C", "--folder", default=".", help="The folder (default: here).")
     agents.set_defaults(handler=handle_init_agents)
 
+    skill = commands.add_parser(
+        "init-skill",
+        help="Write a starter skill under .harness/skills/NAME in the folder. The harness "
+        + "lists every skill there in the model's instructions and reads one when it applies.",
+    )
+    _ = skill.add_argument("name", help="The skill's name: lowercase, digits, hyphens.")
+    _ = skill.add_argument("-C", "--folder", default=".", help="The folder (default: here).")
+    skill.set_defaults(handler=handle_init_skill)
+
     servers = commands.add_parser(
         "install-servers",
         help="Set up the language servers code search uses, under ~/.harness/servers/bin. "
@@ -61,6 +70,22 @@ def handle_init_agents(args: argparse.Namespace) -> int:
     else:
         print(f"wrote {written}")
         print(dim("say how to run the tests, and what a newcomer would have to be told"))
+    return 0
+
+
+def handle_init_skill(args: argparse.Namespace) -> int:
+    from harness.state.skills import write_skill
+
+    folder = Path(flag(args, "folder") or ".").expanduser().resolve()
+    try:
+        written = write_skill(folder, str(getattr(args, "name", "")))
+    except ValueError as exc:
+        raise CliError(str(exc)) from exc
+    if written is None:
+        print(dim(f"{folder} already has that skill; leaving it alone"))
+    else:
+        print(f"wrote {written}")
+        print(dim("say when it applies in `description`, then write the instructions"))
     return 0
 
 

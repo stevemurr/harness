@@ -186,10 +186,11 @@ class ReleaseTask:
             Releasing,
             name="release_task",
             description=(
-                "Put a task you claimed back on the board, open for whoever comes next, "
-                + "with a note of where it stands. Use it when you stop before the work is "
-                + "done -- because the user said to stop, or because you are handing it on. "
-                + "Only its holder may release it."
+                "Put a task back on the board, open for whoever comes next, with a note of "
+                + "where it stands: one you claimed, or an open one nobody holds. Use it "
+                + "when you stop before the work is done -- because the user said to stop, "
+                + "or because you are handing it on -- and to record what you found about a "
+                + "task without claiming it. A task someone else holds is theirs."
             ),
         )
     )

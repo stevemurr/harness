@@ -136,8 +136,9 @@ class Board(Protocol):
         ...
 
     async def release(self, task_id: str, *, by: str, note: str = "") -> Task | str:
-        """Put a claimed task back on the board, open, with a note of where it stands.
-        Only its holder may. The way to stop without saying the work is done."""
+        """Put a task back on the board, open, with a note of where it stands: a claimed
+        task by its holder, or an open one by anyone. The way to stop without saying the
+        work is done."""
         ...
 
     async def get(self, task_id: str) -> Task | None: ...
@@ -225,10 +226,16 @@ class MemoryBoard:
         task = self.tasks.get(task_id)
         if task is None:
             return f"no task {task_id!r}"
-        if task.status is not Status.CLAIMED:
-            return f"{task_id} is {task.status.value}, not claimed"
-        if task.owner != by:
-            return f"{task_id} is held by {task.owner}, not you"
+        if task.status in (Status.DONE, Status.FAILED):
+            return f"{task_id} is already {task.status.value}; post a new task for what is left"
+        if task.status is Status.CLAIMED and task.owner != by:
+            return (
+                f"{task_id} is held by {task.owner}, not you; leave it, or post a task "
+                + "for what you found"
+            )
+        # An open task nobody holds takes the note and stays open. Recording where a piece
+        # of work stands must not require claiming it first: told to write its work down
+        # and stop, a run was refused here, read the refusal as "claim it", and worked on.
         released = replace(
             task,
             status=Status.OPEN,

@@ -168,6 +168,20 @@ async def test_a_workspace_id_is_derived_from_its_path(folder, tmp_path) -> None
 
     assert workspace_id == workspace_id_for(folder)
     assert [w["root_path"] for w in listed.json()] == [str(folder)]
+    assert listed.json()[0]["skills"] == []
+
+
+async def test_a_workspace_lists_the_skills_beside_it(folder, tmp_path) -> None:
+    """Per folder, so on the workspace rather than under /capabilities, and read fresh so
+    a skill written after registering is offered."""
+    async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
+        await register(client, folder)
+        home = folder / ".harness" / "skills" / "deploy"
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text("---\ndescription: Ship a release.\n---\nStep one.\n")
+        listed = await client.get("/workspaces")
+
+    assert listed.json()[0]["skills"] == [{"name": "deploy", "summary": "Ship a release."}]
 
 
 async def test_registering_the_same_root_twice_is_a_conflict(folder, tmp_path) -> None:
@@ -1065,3 +1079,40 @@ async def test_a_thread_can_be_widened_to_another_folder(folder, tmp_path) -> No
 
     assert [d["type"] for d in rows][:2] == ["run.created", "folder.added"]
     assert rows[1]["payload"]["path"] == str(other)
+
+
+class _Slow(ScriptedModel):
+    """A scripted model that takes a moment per call, so a stop can land mid-run."""
+
+    async def complete(self, transcript, tools=(), *, listen=None):
+        await asyncio.sleep(0.05)
+        return await super().complete(transcript, tools, listen=listen)
+
+
+async def test_the_stop_command_steers_then_ends_the_run(folder, tmp_path) -> None:
+    replies = [calls((f"c{i}", "list_dir", {"path": "."})) for i in range(12)] + [says("done")]
+    model = _Slow(*replies)
+    async with client_for(app_for(model, tmp_path)) as client:
+        _, _thread_id, run = await start(client, folder, "go", approval_policy="full-access")
+        run_id = run.json()["run_id"]
+        await asyncio.sleep(0.05)
+
+        answer = await client.post(
+            f"/runs/{run_id}/commands",
+            json={
+                "type": "stop",
+                "content": "write your work to the board",
+                "command_id": "s1",
+            },
+        )
+        assert answer.json() == {"status": "stopping"}
+        for _ in range(100):
+            listed = await client.get("/runs", params={"thread_id": _thread_id})
+            if listed.json()["runs"][0]["status"] == "cancelled":
+                break
+            await asyncio.sleep(0.05)
+
+    assert listed.json()["runs"][0]["status"] == "cancelled"
+    assert len(model.seen) < len(replies)
+    steered = [m for m in model.seen[-1].messages if m.role is Role.ARRIVAL]
+    assert any("write your work to the board" in m.content for m in steered)

@@ -32,7 +32,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from harness.agent.compaction import (
@@ -54,6 +54,7 @@ from harness.state.approval import Approvals
 from harness.state.board import Board
 from harness.state.inbox import Inbox, render
 from harness.state.mode import ModeState
+from harness.state.skills import expand, load_skills, skills_block
 from harness.store.base import Store
 from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner
@@ -107,6 +108,8 @@ class _Agent:
     #: the turn in flight rather than the one just finished. The transcript is unchanged
     #: by it: the loop still appends one whole message per turn.
     listen: Listener | None = None
+    #: Asked before every turn whether to stop. See `AgentLoop.halt`.
+    halt: Callable[[], str] | None = None
     #: The thread that delegated this agent, recorded in its own thread's header.
     parent_thread: str = ""
     #: The agents this one may delegate to. Held so `open_thread` can tell them which
@@ -123,6 +126,11 @@ class _Agent:
     running: bool = False
 
     def tell(self, envelope: Envelope) -> None:
+        if envelope.source is Source.PERSON:
+            # A person may invoke a skill mid-run the same way as at the start.
+            envelope = replace(
+                envelope, text=expand(envelope.text, load_skills(self.workspace.root))
+            )
         self.inbox.post(envelope)
 
     async def widen(self, folder: Path | str) -> tuple[Path, ...]:
@@ -230,7 +238,9 @@ class _Agent:
         )
         if set(remembered) - set(self.workspace.extra):
             self._reach(tuple(dict.fromkeys((*self.workspace.extra, *remembered))))
-        transcript.append(user(prompt))
+        # `/name …` is the person invoking a skill: the model reads its instructions as
+        # the request, and the rest of the line as what to apply them to.
+        transcript.append(user(expand(prompt, load_skills(self.workspace.root))))
 
         # The opening messages, before the first turn -- so a run that dies during that
         # turn still leaves a thread showing what was asked.
@@ -252,6 +262,7 @@ class _Agent:
             output=self.settings.output,
             observers=[*self.observers, self._recorder(thread_id)],
             pending=self._arrivals(thread_id),
+            halt=self.halt,
         )
         self.running = True
         try:
@@ -473,6 +484,7 @@ class _Agent:
             for part in (
                 self.system_prompt + self.modes.current.prompt,
                 describe(self.workspace.root, extra=self.workspace.extra),
+                skills_block(load_skills(self.workspace.root)),
             )
             if part.strip()
         )
@@ -543,6 +555,7 @@ def new_agent(
     listen: Listener | None = None,
     extra_tools: Iterable[Handler] = (),
     folders: Sequence[Path | str] = (),
+    halt: Callable[[], str] | None = None,
 ) -> Agent:
     """An agent over a folder. The composition root, and the only way to get one.
 
@@ -622,6 +635,7 @@ def new_agent(
         system_prompt=system_prompt,
         on_compaction=on_compaction,
         listen=listen,
+        halt=halt,
         parent_thread=lineage.parent_thread if lineage is not None else "",
         children=children,
         closers=closers,

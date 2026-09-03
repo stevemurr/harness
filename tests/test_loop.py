@@ -28,9 +28,7 @@ def scripted(*replies: Message):
 
 
 def calls(*specs: tuple[str, str, dict]) -> Message:
-    return Message(
-        Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs)
-    )
+    return Message(Role.ASSISTANT, "", tuple(ToolCall(c, n, a) for c, n, a in specs))
 
 
 async def ok_tool(call: ToolCall) -> ToolResult:
@@ -345,9 +343,9 @@ async def test_an_identical_refused_call_is_told_it_is_repeating(tmp_path: Path)
     from harness.workspace import Workspace
 
     runner = ToolRunner(
-        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
-            policy=Policy(approve_everything=True)
-        )
+        new_registry(file_tools()),
+        ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)),
     )
     outside = ToolCall("c1", "read_file", {"path": "/etc/passwd"})
 
@@ -368,9 +366,9 @@ async def test_a_different_call_is_not_caught_by_it(tmp_path: Path) -> None:
 
     (tmp_path / "here.txt").write_text("fine")
     runner = ToolRunner(
-        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
-            policy=Policy(approve_everything=True)
-        )
+        new_registry(file_tools()),
+        ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)),
     )
 
     await runner.run(ToolCall("c1", "read_file", {"path": "/etc/passwd"}))
@@ -390,9 +388,9 @@ async def test_a_successful_call_may_be_repeated(tmp_path: Path) -> None:
 
     (tmp_path / "here.txt").write_text("fine")
     runner = ToolRunner(
-        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)), Approvals(
-            policy=Policy(approve_everything=True)
-        )
+        new_registry(file_tools()),
+        ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)),
     )
     call = ToolCall("c1", "read_file", {"path": "here.txt"})
 
@@ -411,8 +409,10 @@ async def test_leaving_plan_mode_lets_a_withheld_call_through(tmp_path: Path) ->
 
     modes = ModeState(current=PLAN)
     runner = ToolRunner(
-        new_registry(file_tools()), ToolContext(paths=Workspace.at(tmp_path)),
-        Approvals(policy=Policy(approve_everything=True)), modes=modes,
+        new_registry(file_tools()),
+        ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)),
+        modes=modes,
     )
     write = {"path": "new.txt", "content": "x"}
 
@@ -455,6 +455,7 @@ async def test_an_arrival_is_appended_before_the_next_model_call() -> None:
 async def test_an_arrival_resets_the_refusal_count() -> None:
     """A person intervening is the clearest sign a stall may now be breakable, so the run
     should not carry on towards the cap as though nothing had happened."""
+
     async def refused(_call: ToolCall) -> ToolResult:
         return ToolResult("no", ok=False, refused=True)
 
@@ -500,3 +501,36 @@ async def test_a_zero_turn_limit_is_no_limit() -> None:
 
     assert outcome.stop.kind == "done"
     assert outcome.turns == 151
+
+
+async def test_a_halt_ends_the_run_before_the_next_turn_whatever_the_model_wanted() -> None:
+    """A stop the model is merely asked to observe is one it can fail to. This one is the
+    harness's: asked before every turn, and the loop ends the run when it answers."""
+    from harness.agent.loop import assistant_with_calls
+
+    replies = iter(
+        [
+            assistant_with_calls(("c1", "noop", {})),
+            assistant_with_calls(("c2", "noop", {})),
+            assistant_with_calls(("c3", "noop", {})),
+        ]
+    )
+    seen = 0
+
+    async def complete(_transcript: Transcript) -> Message:
+        nonlocal seen
+        seen += 1
+        return next(replies)
+
+    async def run_tool(_call: ToolCall) -> ToolResult:
+        return ToolResult("ok")
+
+    loop = AgentLoop(
+        complete=complete, run_tool=run_tool, halt=lambda: "stopped" if seen >= 2 else ""
+    )
+    outcome = await loop.run(Transcript([Message(Role.USER, "go")]))
+
+    assert outcome.stop.kind == "cancelled" and outcome.stop.detail == "stopped"
+    assert outcome.turns == 2 and seen == 2
+    # Every call made was answered: the transcript is still one a provider would accept.
+    assert not outcome.transcript.unanswered_calls()

@@ -22,6 +22,7 @@ def test_every_subcommand_parses_and_names_its_handler() -> None:
         ["threads"],
         ["init"],
         ["init-agents", "-C", "/tmp"],
+        ["init-skill", "deploy", "-C", "/tmp"],
         ["install-servers"],
         ["install-browser"],
         ["evals", "run", "--label", "x", "--both"],
@@ -51,6 +52,12 @@ def test_init_agents_writes_a_conventions_file_once(tmp_path: Path) -> None:
     assert main(["init-agents", "-C", str(tmp_path)]) == 0
     assert (tmp_path / "AGENTS.md").exists()
     assert main(["init-agents", "-C", str(tmp_path)]) == 0  # leaves it alone
+
+
+def test_init_skill_writes_a_starter_under_the_folder(tmp_path: Path) -> None:
+    assert main(["init-skill", "deploy", "-C", str(tmp_path)]) == 0
+    assert (tmp_path / ".harness" / "skills" / "deploy" / "SKILL.md").exists()
+    assert main(["init-skill", "deploy", "-C", str(tmp_path)]) == 0  # leaves it alone
 
 
 def test_a_key_is_required_for_a_remote_endpoint_and_not_a_local_one() -> None:
