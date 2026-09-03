@@ -105,6 +105,7 @@ def render(envelope: Envelope, turn: int | None = None) -> Message:
             when="" if turn is None else f" at turn {turn}",
         ),
         source=envelope.source,
+        folder=envelope.folder,
     )
 
 

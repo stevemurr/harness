@@ -194,12 +194,15 @@ class Run:
         self._commands[command_id] = response
 
     async def gate(self) -> None:
-        """Where a paused run stops: before the next tool call.
+        """Where a paused run stops: before the next model call, and before the next tool.
 
         A real boundary rather than a flag somebody checks -- but say what it is, because a
         person who pauses expects everything to stop. The model call already in flight
         finishes, and a tool already running runs to completion. An approval already on
-        screen is answered first, because the runner asks before it dispatches.
+        screen is answered first, because the runner asks before it dispatches -- and if
+        the answer is no, nothing dispatches, which is why the model call is gated too:
+        until 2026-09-03 only the tool was, and a paused run whose next call was denied
+        went on spending model calls until one was approved.
         """
         _ = await self._running.wait()
 
@@ -271,6 +274,7 @@ class Run:
         # was on screen must not be thrown away here.
         self.status = previous if self._running.is_set() else RunStatus.PAUSED
         self.publish("question.resolved", {"question_id": question_id})
+        self._restate_pause()
         return answer
 
     async def ask(self, request: Request) -> Decision:
@@ -320,7 +324,21 @@ class Run:
             "approval.resolved",
             {"approval_id": approval_id, "decision": decision.value},
         )
+        self._restate_pause()
         return decision
+
+    def _restate_pause(self) -> None:
+        """Say `run.paused` again after an answer lands on a paused run.
+
+        A client reads `approval.resolved` as "running again" -- orca's reducer does, and
+        the contract gives it no reason not to -- so a run that was paused before or during
+        the question came back to the screen as running while it was parked at the gate
+        waiting for a resume nobody would send. Found 2026-09-03: the status on
+        `GET /runs` was right and the stream was wrong, and the stream is what a person
+        watches. The event goes out after the resolution so the last word is the true one.
+        """
+        if not self._running.is_set():
+            self.publish("run.paused")
 
 
 def _allowed_decisions(request: Request) -> list[str]:

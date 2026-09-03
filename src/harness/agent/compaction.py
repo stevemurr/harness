@@ -136,11 +136,17 @@ def view(transcript: Transcript) -> Transcript:
     # boundary, because pinning that reaches back only one boundary carries a steer across
     # the first compaction and drops it at the second -- passing every short test and
     # failing only in the runs long enough to need it.
+    # A folder added to the workspace is pinned too: it is a fact about what the run may
+    # reach, not an event a summary can be trusted to mention, and a model that forgets
+    # the folder exists stops using it while the tools still can.
     pinned = [
         message
         for message in messages[1:start]
         if message.role is Role.USER
-        or (message.role is Role.ARRIVAL and message.source in (Source.PERSON, Source.PARENT))
+        or (
+            message.role is Role.ARRIVAL
+            and (message.source in (Source.PERSON, Source.PARENT) or message.folder)
+        )
     ]
     rendered = [
         messages[0],

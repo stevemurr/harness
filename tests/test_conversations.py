@@ -277,10 +277,12 @@ async def test_a_plan_tool_publishes_the_whole_checklist_and_no_activity_row(
                 (
                     "c1",
                     "update_plan",
-                    {"plan": [
-                        {"step": "read it", "status": "in_progress"},
-                        {"step": "fix it", "status": "pending"},
-                    ]},
+                    {
+                        "plan": [
+                            {"step": "read it", "status": "in_progress"},
+                            {"step": "fix it", "status": "pending"},
+                        ]
+                    },
                 )
             ),
             says("done"),
@@ -302,22 +304,30 @@ async def test_each_plan_event_carries_the_whole_list(folder, tmp_path) -> None:
     step."""
     runtime = runtime_for(
         ScriptedModel(
-            calls((
-                "c1",
-                "update_plan",
-                {"plan": [
-                    {"step": "a", "status": "pending"},
-                    {"step": "b", "status": "pending"},
-                ]},
-            )),
-            calls((
-                "c2",
-                "update_plan",
-                {"plan": [
-                    {"step": "a", "status": "completed"},
-                    {"step": "b", "status": "in_progress"},
-                ]},
-            )),
+            calls(
+                (
+                    "c1",
+                    "update_plan",
+                    {
+                        "plan": [
+                            {"step": "a", "status": "pending"},
+                            {"step": "b", "status": "pending"},
+                        ]
+                    },
+                )
+            ),
+            calls(
+                (
+                    "c2",
+                    "update_plan",
+                    {
+                        "plan": [
+                            {"step": "a", "status": "completed"},
+                            {"step": "b", "status": "in_progress"},
+                        ]
+                    },
+                )
+            ),
             says("done"),
         ),
         tmp_path,
@@ -466,9 +476,7 @@ async def test_a_paused_run_stops_before_the_next_tool_and_resumes(folder, tmp_p
 # -- conversations -----------------------------------------------------------------------
 
 
-async def test_a_conversation_and_its_transcript_share_one_id(
-    folder, tmp_path
-) -> None:
+async def test_a_conversation_and_its_transcript_share_one_id(folder, tmp_path) -> None:
     """The store wrapper's whole reason: `Agent.run` returns the id only at the end."""
     runtime = runtime_for(ScriptedModel(says("done")), tmp_path)
     conversation = runtime.conversation("thr_1", folder, "ws_1")
@@ -617,9 +625,7 @@ async def test_the_server_propagates_shutdown_to_its_runs(folder, tmp_path) -> N
 # -- delegation -----------------------------------------------------------------------------
 
 
-async def test_a_delegated_child_works_inside_the_parents_run(
-    folder, tmp_path
-) -> None:
+async def test_a_delegated_child_works_inside_the_parents_run(folder, tmp_path) -> None:
     """The server's spawner: a child's tools are wrapped and labelled, so its activity
     streams into the parent's run, and its thread names the parent as its own.
 
@@ -651,3 +657,203 @@ async def test_a_delegated_child_works_inside_the_parents_run(
     assert conversation.child_kits and "delegate" in model.tools_offered[0]
     offered_to_child = model.tools_offered[1]
     assert "delegate" not in offered_to_child and "report" in offered_to_child
+
+
+# -- a pause, and the answer that lands on it ----------------------------------------------
+
+
+async def test_an_approval_answered_while_paused_restates_the_pause(folder, tmp_path) -> None:
+    """orca reads `approval.resolved` as running again. A run paused before the question
+    is still parked at the gate afterwards, and until 2026-09-03 nothing said so: the
+    person saw a running run that would never move until a resume nobody would send."""
+    runtime = runtime_for(
+        ScriptedModel(calls(("c1", "write_file", {"path": "a", "content": "1"})), says("done")),
+        tmp_path,
+    )
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    while not run.approvals_open():
+        await asyncio.sleep(0.01)
+    run.pause()
+
+    assert run.resolve_approval(run.approvals_open()[0], Decision.ALLOW)
+    await asyncio.sleep(0.05)
+
+    assert run.status is RunStatus.PAUSED
+    tail = types_of(run)[-2:]
+    assert tail == ["approval.resolved", "run.paused"]
+    assert run.task is not None and not run.task.done()
+
+    run.resume()
+    await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
+    assert run.status is RunStatus.COMPLETED
+    assert (folder / "a").exists()
+
+
+async def test_a_paused_run_stops_before_the_next_model_call_too(folder, tmp_path) -> None:
+    """A denial dispatches no tool, so the tool gate is never met. The model call is gated
+    as well, or a paused run keeps spending calls until one is approved."""
+    model = ScriptedModel(
+        calls(("c1", "write_file", {"path": "a", "content": "1"})),
+        calls(("c2", "write_file", {"path": "b", "content": "2"})),
+        says("done"),
+    )
+    runtime = runtime_for(model, tmp_path)
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    while not run.approvals_open():
+        await asyncio.sleep(0.01)
+    run.pause()
+    calls_before = len(model.seen)
+
+    assert run.resolve_approval(run.approvals_open()[0], Decision.DENY)
+    await asyncio.sleep(0.1)
+
+    assert len(model.seen) == calls_before  # parked before the next model call
+    assert run.status is RunStatus.PAUSED
+
+    run.resume()
+    while not run.approvals_open():
+        await asyncio.sleep(0.01)
+    assert run.resolve_approval(run.approvals_open()[0], Decision.ALLOW)
+    assert run.task is not None
+    await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
+    assert run.status is RunStatus.COMPLETED
+
+
+# -- the summary of a completed run ----------------------------------------------------
+
+
+async def test_the_summary_is_what_the_model_said_not_what_a_tool_returned(
+    folder, tmp_path
+) -> None:
+    """A thinking model's final message can be empty. The summary then has to be the last
+    thing the *model* said, not the last tool result, and not the person's own prompt."""
+    (folder / "notes.md").write_text("the tool's output\n")
+    runtime = runtime_for(
+        ScriptedModel(
+            Message(
+                Role.ASSISTANT,
+                "reading it",
+                (ToolCall("c1", "read_file", {"path": "notes.md"}),),
+            ),
+            says(""),
+        ),
+        tmp_path,
+    )
+
+    run = await drive(runtime, folder, "what does it say")
+
+    assert payloads(run, "run.completed")[0]["summary"] == "reading it"
+
+
+# -- replay: the runs a transcript holds -------------------------------------------------
+
+
+async def test_a_thread_replays_its_runs_after_a_restart(folder, tmp_path) -> None:
+    """The event log is in memory and the transcript is on disk. A new process opening
+    the thread rebuilds the runs from the transcript: the same ids, the same events, so a
+    client coming back finds the history it saw live."""
+    model = ScriptedModel(
+        Message(
+            Role.ASSISTANT,
+            "planning",
+            (
+                ToolCall(
+                    "c0", "update_plan", {"plan": [{"step": "read", "status": "in_progress"}]}
+                ),
+            ),
+        ),
+        Message(
+            Role.ASSISTANT,
+            "reading",
+            (
+                ToolCall("c1", "read_file", {"path": "notes.md"}),
+                ToolCall("c2", "read_file", {"path": "missing.md"}),
+            ),
+        ),
+        says("all read"),
+    )
+    (folder / "notes.md").write_text("hello\n")
+    before = runtime_for(model, tmp_path)
+    live = await drive(before, folder, "read the notes")
+    second = runtime_for(ScriptedModel(says("again")), tmp_path)
+    second_live = await drive(second, folder, "and again")
+    _ = second_live
+    await before.aclose()
+    await second.aclose()
+
+    after = runtime_for(ScriptedModel(says("never called")), tmp_path)
+    conversation = await after.open("thr_1", folder, "ws_1")
+
+    assert [r.run_id for r in conversation.runs] == [live.run_id, "run_thr_1_2"]
+    assert live.run_id == "run_thr_1_1"
+    replayed = after.runs[live.run_id]
+    assert replayed.status is RunStatus.COMPLETED
+    assert types_of(replayed) == [
+        "run.created",
+        "answer.delta",
+        "plan.progress",
+        "answer.delta",
+        "run.progress",
+        "run.progress",
+        "answer.delta",
+        "run.completed",
+    ]
+    assert payloads(replayed, "run.created")[0]["message"] == "read the notes"
+    assert [d["text"] for d in payloads(replayed, "answer.delta")] == [
+        "planning",
+        "\n\nreading",
+        "\n\nall read",
+    ]
+    assert payloads(replayed, "plan.progress")[0]["plan"] == [
+        {"step": "read", "status": "in_progress"}
+    ]
+    rows = payloads(replayed, "run.progress")
+    assert [(r["text"], r["status"]) for r in rows] == [
+        ('read_file {"path": "notes.md"}', "completed"),
+        ('read_file {"path": "missing.md"}', "failed"),
+    ]
+    # The same row identities the live wrapper used, so a client's upserts line up.
+    assert rows[0]["update_id"] == progress_id(1, "read_file", {"path": "notes.md"})
+    assert (
+        payloads(replayed, "run.completed")[0]["summary"] == "planning\n\nreading\n\nall read"
+    )
+
+    # The next live run continues the numbering, and the same cursor yields the same rows.
+    again = after.start(conversation, "once more", mode="auto", policy="safe")
+    assert again.run_id == "run_thr_1_3"
+    assert again.task is not None
+    await asyncio.wait_for(asyncio.shield(again.task), timeout=5)
+    twice = await runtime_for(ScriptedModel(says("x")), tmp_path).open("thr_1", folder, "ws_1")
+    # Sequences and payloads, which are what a cursor promises. Event ids are minted per
+    # log and are not part of that promise.
+    assert [(e.seq, e.type, e.payload) for e in twice.runs[0].events.since(0)] == [
+        (e.seq, e.type, e.payload) for e in replayed.events.since(0)
+    ]
+
+
+async def test_a_run_cut_off_mid_way_replays_as_failed(folder, tmp_path) -> None:
+    """A restart mid-run leaves a transcript ending in a tool result. Whatever ended it,
+    the person reading it back was not given an answer."""
+    from harness.store import JsonlStore
+
+    store = JsonlStore(tmp_path / "sessions")
+    _ = await store.create(folder, "thr_cut")
+    await store.append(
+        "thr_cut",
+        [
+            Message(Role.SYSTEM, "system"),
+            Message(Role.USER, "do it"),
+            Message(Role.ASSISTANT, "", (ToolCall("c1", "list_dir", {"path": "."}),)),
+            Message(Role.TOOL, "notes.md", call_id="c1"),
+        ],
+    )
+    runtime = Runtime(provider=ScriptedModel(says("x")), store=store)
+
+    conversation = await runtime.open("thr_cut", folder, "ws_1")
+
+    (run,) = conversation.runs
+    assert run.status is RunStatus.FAILED
+    assert types_of(run)[-1] == "run.failed"
+    assert "without an answer" in payloads(run, "run.failed")[0]["summary"]

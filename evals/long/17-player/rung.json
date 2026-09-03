@@ -1,0 +1,4 @@
+{
+  "tests": "Building a native macOS Emby client to a written spec: a Swift package with a library the seeded tests are the contract for, and an app the checks can only inspect structurally. Five rules stated once in the spec's preamble -- the auth header, ticks, the `/emby` prefix, the play session id, the transcode target -- are the probe for whether a compaction boundary loses what came before it. The hardware-decoding requirement is checked for real: the built executable must report VideoToolbox support from the machine it runs on.",
+  "verify_timeout": 1200
+}

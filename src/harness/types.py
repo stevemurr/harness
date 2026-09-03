@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, Protocol, cast, runtime_checkable
 
 
@@ -93,6 +94,13 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     #: Set only on TOOL messages: which call this answers.
     call_id: str | None = None
+    #: Set only on TOOL messages: the outcome, as `ToolResult` had it. The content alone
+    #: cannot say whether a call worked -- "5 failed, 200 passed" is a success -- and a
+    #: replay of the transcript that has to show a person what happened needs to know.
+    #: Added 2026-09-03; a row written before then reads as ok, which is the honest
+    #: default for a record that did not say.
+    ok: bool = True
+    refused: bool = False
     #: Set only on COMPACTION messages: identifies the message the verbatim kept tail begins
     #: at, as a digest of that message rather than its index.
     #:
@@ -102,6 +110,11 @@ class Message:
     #: with the next run's first append is one unparseable line where two messages were, so
     #: every index after it shifts by two -- permanently, in the file this points into.
     keep_from: str = ""
+    #: Set only on an ARRIVAL row from the harness that widened the workspace: the folder
+    #: added, absolute. Structured rather than parsed back out of the notice's wording, for
+    #: the reason `source` is: a resumed thread reads these rows to reach the folder again,
+    #: and a rule that matched the framing would make that wording load-bearing.
+    folder: str = ""
     #: Set only on ARRIVAL messages: which `inbox.Source` the arrival came from.
     #:
     #: The wire has no third-party slot, so `render` folds provenance into the text and
@@ -314,6 +327,9 @@ class Envelope:
     #: the same back-reference for the same reason: point at the call, do not impersonate
     #: its result.
     call_id: str | None = None
+    #: A folder this arrival added to the workspace, absolute, carried onto the row so the
+    #: transcript records the widening as a fact and not only as a sentence.
+    folder: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,7 +351,7 @@ class Outcome:
 
 @runtime_checkable
 class Agent(Protocol):
-    """What a front end drives, and what a parent holds of a child. Four methods."""
+    """What a front end drives, and what a parent holds of a child. Five methods."""
 
     async def open_thread(self, thread_id: str | None = None) -> str:
         """Resolve or create the thread, and return its id -- before any work happens."""
@@ -347,6 +363,11 @@ class Agent(Protocol):
 
     def tell(self, envelope: Envelope) -> None:
         """Say something to a run in flight. Read before the next model call."""
+        ...
+
+    async def widen(self, folder: Path | str) -> tuple[Path, ...]:
+        """Let this agent reach one more folder, now and on every later run of the thread.
+        Returns every folder it reaches, the working folder first."""
         ...
 
     async def aclose(self) -> None:

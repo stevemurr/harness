@@ -289,17 +289,17 @@ def create_app(
         # The title is not stored. `JsonlStore` already derives one from the first user
         # message, which is exactly what the client sends as a title, and a second copy is a
         # second thing that can disagree with the transcript about what was asked.
-        _ = open_conversation(thread_id, record)
+        _ = await open_conversation(thread_id, record)
         return JSONResponse({"thread_id": thread_id}, status_code=201)
 
-    def open_conversation(thread_id: str, record: WorkspaceRecord) -> Conversation:
+    async def open_conversation(thread_id: str, record: WorkspaceRecord) -> Conversation:
         """Every conversation is opened here, so a folder that has gone is one answer.
 
         `Workspace.at` refuses a root that is not a directory, and a registration outlives
         the folder it names -- somebody moves it between one run and the next.
         """
         try:
-            return runtime.conversation(
+            return await runtime.open(
                 thread_id,
                 Path(record.root_path),
                 record.workspace_id,
@@ -400,6 +400,28 @@ def create_app(
             }
         )
 
+    async def add_folder(request: Request) -> Response:
+        """Widen a conversation to one more folder, now and for every later run.
+
+        A thread-level route rather than a run command, because a person adds a folder
+        between runs as often as during one, and a command needs a run to send it to.
+        With a run in flight the agent is told through its inbox and the run's stream
+        says so; between runs the thread records it and the next run reaches it.
+        """
+        conversation = await open_thread(cast("str", request.path_params["thread_id"]))
+        body = await read_json(request)
+        path = str(body.get("path") or "").strip()
+        if not path:
+            raise ApiError(400, "invalid_request", "path is required.")
+        try:
+            folders = await conversation.agent.widen(path)
+        except WorkspaceError as exc:
+            raise ApiError(400, "no_such_folder", str(exc)) from exc
+        run = conversation.live.run
+        if run is not None:
+            run.publish("folder.added", {"path": str(Path(path).expanduser().resolve())})
+        return JSONResponse({"folders": [str(folder) for folder in folders]})
+
     async def open_thread(thread_id: str, workspace_id: str = "") -> Conversation:
         """The conversation for a thread id, opening it from the store when it has one.
 
@@ -418,11 +440,11 @@ def create_app(
         for info in await store.threads(limit=500):
             if info.thread_id == thread_id:
                 titles[thread_id] = info.title
-                return open_conversation(thread_id, folders.remember(info.workspace))
+                return await open_conversation(thread_id, folders.remember(info.workspace))
 
         if not workspace_id:
             raise ApiError(404, "no_such_thread", f"no conversation {thread_id}.")
-        return open_conversation(thread_id, require_workspace(workspace_id))
+        return await open_conversation(thread_id, require_workspace(workspace_id))
 
     def require_workspace(workspace_id: str) -> WorkspaceRecord:
         if not workspace_id:
@@ -488,21 +510,42 @@ def create_app(
     async def list_runs(request: Request) -> Response:
         thread_id = request.query_params.get("thread_id") or ""
         limit = read_int(request, "limit", 50) or 50
+        if thread_id:
+            # Opened from the store if this process is not holding it, so a thread's runs
+            # are listed after a restart -- which is how a client replays a conversation.
+            await opened(thread_id)
         runs = runtime.for_thread(thread_id) if thread_id else list(runtime.runs.values())
         return JSONResponse(
             {"runs": [{"run_id": r.run_id, "status": r.status.value} for r in runs[:limit]]}
         )
 
-    def require_run(request: Request) -> Run:
-        run = runtime.runs.get(cast("str", request.path_params["run_id"]))
+    async def opened(thread_id: str) -> None:
+        """Open a thread this process may not be holding, and say nothing if it is not
+        anywhere: a listing of an unknown thread is empty rather than an error."""
+        if thread_id in runtime.conversations or not is_id(thread_id):
+            return
+        try:
+            _ = await open_thread(thread_id)
+        except ApiError as exc:
+            if exc.status != 404:
+                raise
+
+    async def require_run(request: Request) -> Run:
+        run_id = cast("str", request.path_params["run_id"])
+        run = runtime.runs.get(run_id)
+        if run is None and run_id.startswith("run_") and "_" in run_id[4:]:
+            # A run id names its thread, so a run this process has not seen may be one the
+            # transcript holds: open the thread, which replays it.
+            await opened(run_id[4:].rpartition("_")[0])
+            run = runtime.runs.get(run_id)
         if run is None:
-            raise ApiError(404, "no_such_run", f"no run {request.path_params['run_id']}.")
+            raise ApiError(404, "no_such_run", f"no run {run_id}.")
         return run
 
     # -- events ----------------------------------------------------------------------------
 
     async def events(request: Request) -> Response:
-        run = require_run(request)
+        run = await require_run(request)
         after_seq = read_int(request, "after_seq", 0)
         ticks = read_int(request, "ticks", 0)
         return event_stream(
@@ -516,7 +559,7 @@ def create_app(
     # -- commands --------------------------------------------------------------------------
 
     async def commands(request: Request) -> Response:
-        run = require_run(request)
+        run = await require_run(request)
         body = await read_json(request)
         command_id = str(body.get("command_id") or "")
         if command_id and (remembered := run.remembered(command_id)) is not None:
@@ -683,6 +726,7 @@ def create_app(
         Route(f"{API}/threads", create_thread, methods=["POST"]),
         Route(f"{API}/threads/{{thread_id}}", get_thread),
         Route(f"{API}/threads/{{thread_id}}/runs", create_run, methods=["POST"]),
+        Route(f"{API}/threads/{{thread_id}}/folders", add_folder, methods=["POST"]),
         Route(f"{API}/runs", list_runs),
         Route(f"{API}/runs/{{run_id}}/events", events),
         Route(f"{API}/runs/{{run_id}}/commands", commands, methods=["POST"]),

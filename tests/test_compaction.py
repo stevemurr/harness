@@ -162,8 +162,7 @@ async def test_compaction_appends_to_the_transcript_and_removes_nothing(
     this repository has one commitment against.
     """
     store = JsonlStore(folder / "threads")
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -183,8 +182,7 @@ async def test_the_stored_transcript_is_longer_than_what_the_model_is_sent(
 ) -> None:
     """The two diverge, on purpose, and only in that direction."""
     store = MemoryStore()
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -351,8 +349,7 @@ async def test_nothing_changes_when_the_run_stays_under_the_threshold(
 
 async def test_nothing_changes_when_compaction_is_switched_off(folder: Path) -> None:
     """`[compaction] enabled = false` has to actually mean off, not merely later."""
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
 
     off = Settings(compaction=Compaction(enabled=False))
 
@@ -362,8 +359,7 @@ async def test_nothing_changes_when_compaction_is_switched_off(folder: Path) -> 
 
 
 async def test_crossing_the_threshold_compacts(folder: Path) -> None:
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
 
     await agent_over(folder, model).run("read everything")
 
@@ -376,8 +372,7 @@ async def test_a_boundary_never_lands_between_a_tool_call_and_its_answer(
 ) -> None:
     """Compaction runs at the top of a turn, where every call is already answered."""
     store = MemoryStore()
-    model = Model(*[reads()] * 6,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 6, Message(Role.ASSISTANT, "done"), context_window=20_000)
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -396,8 +391,7 @@ async def test_every_render_a_compacting_run_sends_is_one_a_provider_accepts(
     folder: Path,
 ) -> None:
     """The guard `loop.py` runs is on the raw transcript; this is on what actually went."""
-    model = Model(*[reads()] * 6,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 6, Message(Role.ASSISTANT, "done"), context_window=20_000)
 
     await agent_over(folder, model).run("go")
 
@@ -414,9 +408,12 @@ async def test_a_failed_summarisation_leaves_the_run_going_and_appends_no_bounda
 ) -> None:
     """An honest failure with a name beats a transcript mangled to avoid one."""
     store = MemoryStore()
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000,
-                  summary_error=ProviderError("summariser is down"))
+    model = Model(
+        *[reads()] * 4,
+        Message(Role.ASSISTANT, "done"),
+        context_window=20_000,
+        summary_error=ProviderError("summariser is down"),
+    )
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -433,9 +430,12 @@ async def test_a_summariser_that_keeps_failing_is_not_asked_every_turn(
 ) -> None:
     """Without the latch, a run that cannot be compacted pays for the most expensive
     request the system makes, over and over, for the rest of its life."""
-    model = Model(*[reads()] * 8,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000,
-                  summary_error=ProviderError("summariser is down"))
+    model = Model(
+        *[reads()] * 8,
+        Message(Role.ASSISTANT, "done"),
+        context_window=20_000,
+        summary_error=ProviderError("summariser is down"),
+    )
 
     await agent_over(folder, model).run("go")
 
@@ -446,8 +446,9 @@ async def test_an_empty_summary_is_not_written_as_a_boundary(folder: Path) -> No
     """A boundary claiming to summarise a history it has nothing to say about would
     silently delete that history from every later render."""
     store = MemoryStore()
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000, summary="   ")
+    model = Model(
+        *[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000, summary="   "
+    )
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -462,9 +463,12 @@ async def test_a_cancel_during_summarisation_appends_no_boundary(folder: Path) -
     """The boundary is appended only after the summary comes back, so a cancel cannot
     leave one on disk that summarises a history it never read."""
     store = MemoryStore()
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000,
-                  summary_error=asyncio.CancelledError())
+    model = Model(
+        *[reads()] * 4,
+        Message(Role.ASSISTANT, "done"),
+        context_window=20_000,
+        summary_error=asyncio.CancelledError(),
+    )
     agent = agent_over(folder, model, store=store)
     thread_id = await agent.open_thread()
 
@@ -518,11 +522,11 @@ def test_a_measurement_calibrates_the_estimate() -> None:
 @pytest.mark.parametrize(
     "prompt_tokens, sent_chars",
     [
-        (0, 1000),      # LM Studio and some llama.cpp builds report exactly this
-        (None, 1000),   # an endpoint that omits `usage` altogether
-        (5, 1000),      # LiteLLM reporting net of a cached prefix
-        (900, 1000),    # a number no tokeniser produces
-        (250, 0),       # nothing was sent, so nothing was measured
+        (0, 1000),  # LM Studio and some llama.cpp builds report exactly this
+        (None, 1000),  # an endpoint that omits `usage` altogether
+        (5, 1000),  # LiteLLM reporting net of a cached prefix
+        (900, 1000),  # a number no tokeniser produces
+        (250, 0),  # nothing was sent, so nothing was measured
     ],
 )
 def test_a_measurement_that_cannot_be_true_is_not_believed(prompt_tokens, sent_chars) -> None:
@@ -539,8 +543,12 @@ def test_a_measurement_that_cannot_be_true_is_not_believed(prompt_tokens, sent_c
 async def test_an_endpoint_that_reports_no_usage_still_compacts(folder: Path) -> None:
     """The seed has to carry the decision on its own, because plenty of endpoints omit
     `usage` and every resume starts from it."""
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000, prompt_tokens=None)
+    model = Model(
+        *[reads()] * 4,
+        Message(Role.ASSISTANT, "done"),
+        context_window=20_000,
+        prompt_tokens=None,
+    )
 
     await agent_over(folder, model).run("go")
 
@@ -564,8 +572,7 @@ async def test_a_resumed_thread_renders_from_its_boundary_rather_than_recompacti
     """The boundary is persisted where it is appended, so resume inherits the summary
     instead of paying for it again."""
     store = JsonlStore(folder / "threads")
-    first = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    first = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
     agent = agent_over(folder, first, store=store)
     thread_id = await agent.open_thread()
     await agent.run("first question", thread_id)
@@ -583,8 +590,7 @@ async def test_a_resumed_thread_renders_from_its_boundary_rather_than_recompacti
 async def test_a_person_is_told_when_the_context_was_handed_off(folder: Path) -> None:
     """An agent that quietly forgets things leaves a person blaming the model."""
     told: list[tuple[str, int, int]] = []
-    model = Model(*[reads()] * 4,
-                  Message(Role.ASSISTANT, "done"), context_window=20_000)
+    model = Model(*[reads()] * 4, Message(Role.ASSISTANT, "done"), context_window=20_000)
 
     agent = agent_over(folder, model)
     agent.on_compaction = lambda summary, before, after: told.append((summary, before, after))
@@ -610,7 +616,10 @@ def test_the_run_summary_is_never_the_handoff_note() -> None:
     type, summary = _ending(StopReason("done"), messages)
 
     assert type == "run.completed"
-    assert summary == "go"
+    # Not the note -- and not the person's own prompt either, which is what this asserted
+    # until 2026-09-03, when the filter was "anything but a compaction row". The model said
+    # nothing, and the summary says so.
+    assert summary == "Finished."
 
 
 # --- what a person said, across a boundary -----------------------------------------------
@@ -704,8 +713,12 @@ def test_pinned_words_keep_the_order_they_were_said_in() -> None:
     """Two instructions ten minutes apart are a sequence: the later one may amend the
     earlier, and reversing them inverts what the person asked for."""
     messages = [
-        system("s"), user("do it"),
-        steer("use tabs"), *history()[2:6], steer("actually, spaces"), *history()[6:],
+        system("s"),
+        user("do it"),
+        steer("use tabs"),
+        *history()[2:6],
+        steer("actually, spaces"),
+        *history()[6:],
     ]
 
     rendered = view(Transcript([*messages, boundary_at(messages, len(messages) - 2)]))
@@ -743,3 +756,26 @@ def test_the_opening_request_survives_a_compaction() -> None:
 
     assert "build me a JSON parser with these 12 rules" in rendered_text(rendered)
     assert valid(rendered)
+
+
+def test_a_widening_is_pinned_across_a_boundary() -> None:
+    """A folder added to the workspace is a fact about what the run may reach, and a
+    summary cannot be trusted to mention it. It crosses the boundary like a person's words."""
+    added = Message(
+        Role.ARRIVAL, "the folder /w/lib was added", source=Source.HARNESS, folder="/w/lib"
+    )
+    noise = Message(Role.ARRIVAL, "3 new lines", source=Source.HARNESS)
+    messages = [
+        system("s"),
+        user("go"),
+        added,
+        noise,
+        Message(Role.ASSISTANT, "working"),
+        Message(Role.ASSISTANT, "still"),
+        Message(Role.COMPACTION, "summary", keep_from=digest(Message(Role.ASSISTANT, "still"))),
+    ]
+
+    rendered = view(Transcript(messages)).messages
+
+    assert added in rendered
+    assert noise not in rendered

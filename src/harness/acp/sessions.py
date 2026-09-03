@@ -702,6 +702,9 @@ class _Unopened:
     def tell(self, envelope: object) -> None:
         raise RuntimeError(f"session not opened ({envelope})")
 
+    async def widen(self, folder: Path | str) -> tuple[Path, ...]:
+        raise RuntimeError(f"session not opened ({folder})")
+
     async def aclose(self) -> None:
         return None
 

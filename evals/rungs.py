@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from evals.verify import verify
-from harness.types import as_dict, as_str
+from harness.types import as_dict, as_int, as_str
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -36,6 +36,10 @@ class Rung:
     #: Whether the agent may delegate. A rung says so; the code arm then gets `delegate`
     #: and the board, and the base arm gets neither, the way it gets no code tools.
     agents: bool = False
+    #: How long the checks may take, in seconds. Two minutes is generous for a Python rung
+    #: and nothing at all for one whose checks compile a Swift package first, so a rung
+    #: whose checks build something says so in `rung.json`.
+    verify_timeout: int = 120
 
     @classmethod
     def at(cls, path: Path) -> Rung:
@@ -50,6 +54,7 @@ class Rung:
             seed_from=seed_from,
             long=path.parent == SUITES["long"],
             agents=meta.get("agents") is True,
+            verify_timeout=as_int(meta.get("verify_timeout"), 120),
         )
 
     @property
@@ -118,7 +123,7 @@ def unsolved(rung: Rung, into: Path) -> str | None:
     work = stage(rung, into)
     if absent := missing(rung, work):
         return f"{rung.name}: names files its seed does not have: {', '.join(absent)}"
-    verdict = verify(rung.script, work)
+    verdict = verify(rung.script, work, timeout=rung.verify_timeout)
     if not verdict.passed:
         return None
     return f"{rung.name}: verify passes on its own unsolved seed {verdict.score}".rstrip()

@@ -322,7 +322,7 @@ async def attempt(
 
     sizes = [c.sent_chars for c in model.calls]
     tokens = [c.prompt_tokens for c in model.calls if c.prompt_tokens]
-    verdict = verify(rung.script, work)
+    verdict = verify(rung.script, work, timeout=rung.verify_timeout)
     names = [name for name, _, _ in sequence]
     recovered, unrecovered = recoveries(sequence)
     return Attempt(

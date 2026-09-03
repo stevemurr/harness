@@ -24,10 +24,18 @@ def encode(message: Message) -> JSON:
         ]
     if message.call_id is not None:
         body["call_id"] = message.call_id
+    # Only the exceptions are written: a row that says nothing is ok, which is also what
+    # every row written before the field existed says.
+    if not message.ok:
+        body["ok"] = False
+    if message.refused:
+        body["refused"] = True
     if message.keep_from:
         body["keep_from"] = message.keep_from
     if message.source is not None:
         body["source"] = message.source.value
+    if message.folder:
+        body["folder"] = message.folder
     return body
 
 
@@ -50,6 +58,9 @@ def decode(raw: JSON) -> Message:
         call_id=call_id if isinstance(call_id, str) else None,
         keep_from=as_str(raw.get("keep_from")),
         source=_source(raw.get("source")),
+        ok=raw.get("ok") is not False,
+        refused=raw.get("refused") is True,
+        folder=as_str(raw.get("folder")),
     )
 
 

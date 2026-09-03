@@ -273,3 +273,26 @@ async def test_a_short_limit_keeps_the_most_recent(tmp_path: Path) -> None:
     os.utime(store.path_for(busy), (9000, 9000))
 
     assert [info.thread_id for info in await store.threads(limit=1)] == [busy]
+
+
+async def test_a_tool_rows_outcome_survives_the_round_trip(store) -> None:
+    """A replay has to say whether a call worked, and the content alone cannot. A row
+    written before the field existed reads as ok."""
+    thread_id = await store.create(Path("/w"))
+    await store.append(
+        thread_id,
+        [
+            Message(Role.TOOL, "5 failed", call_id="c1"),
+            Message(Role.TOOL, "no such file", call_id="c2", ok=False),
+            Message(Role.TOOL, "the user declined", call_id="c3", ok=False, refused=True),
+        ],
+    )
+
+    loaded = await store.load(thread_id)
+
+    assert loaded is not None
+    assert [(m.ok, m.refused) for m in loaded.messages] == [
+        (True, False),
+        (False, False),
+        (False, True),
+    ]

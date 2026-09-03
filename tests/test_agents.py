@@ -59,6 +59,9 @@ class Fake:
     def tell(self, envelope: Envelope) -> None:
         self.told.append(envelope)
 
+    async def widen(self, folder: Path | str) -> tuple[Path, ...]:
+        return (Path(folder),)
+
     async def aclose(self) -> None:
         self.closed += 1
 

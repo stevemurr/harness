@@ -136,6 +136,10 @@ def test_every_shipped_rung_has_what_a_rung_needs() -> None:
             assert rung.script.exists(), rung.name
             assert rung.task.strip(), rung.name
             assert rung.long == (suite == "long"), rung.name
+            # A rung whose checks compile something says how long that may take; the
+            # default is sized for a Python rung and would time out a Swift build.
+            if (rung.path / "seed" / "Package.swift").exists():
+                assert rung.verify_timeout > 120, rung.name
 
 
 # -- record and report -----------------------------------------------------------------

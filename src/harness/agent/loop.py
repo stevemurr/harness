@@ -133,7 +133,13 @@ class AgentLoop:
             results = await self._run_calls(assistant.tool_calls)
             for call, result in results:
                 transcript.append(
-                    Message(Role.TOOL, result.content, call_id=call.call_id)
+                    Message(
+                        Role.TOOL,
+                        result.content,
+                        call_id=call.call_id,
+                        ok=result.ok,
+                        refused=result.refused,
+                    )
                 )
 
             # Every call refused, not merely unsuccessful. A turn spent watching tests fail

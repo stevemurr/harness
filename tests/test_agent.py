@@ -13,10 +13,11 @@ import pytest
 from conftest import Broken, ScriptedModel, calls, says
 from harness.agent import Agent, new_agent
 from harness.providers.base import ProviderError
-from harness.state.approval import Approvals, Policy, deny_all
+from harness.state.approval import Approvals, Decision, Policy, deny_all
 from harness.store import MemoryStore
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role
+from harness.workspace import WorkspaceError
 
 
 @pytest.fixture
@@ -226,9 +227,7 @@ async def test_new_agent_refuses_to_rewrite_the_harness_directory_inside_the_fol
     (home / ".harness" / "threads").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     model = ScriptedModel(REWRITE, says("x"))
-    agent = new_agent(
-        home, model, approvals=Approvals(policy=Policy(approve_everything=True))
-    )
+    agent = new_agent(home, model, approvals=Approvals(policy=Policy(approve_everything=True)))
 
     outcome = await agent.run("rewrite the record")
     await agent.aclose()
@@ -281,7 +280,9 @@ def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
 
     # Every tool any kit can offer: the plain kit, a parent's, and a child's.
     children = Children(
-        inbox=Inbox(), spawner=lambda _t, _l: NotImplemented, approvals=Approvals(),
+        inbox=Inbox(),
+        spawner=lambda _t, _l: NotImplemented,
+        approvals=Approvals(),
         modes=ModeState(),
     )
     registered = {tool.spec.name for tool in Toolkit(board=MemoryBoard()).tools()}
@@ -334,3 +335,84 @@ async def test_a_listener_that_raises_does_not_end_the_run(folder: Path) -> None
 
     assert outcome.stop.ok
     assert outcome.answer == "fine"
+
+
+# -- widening ----------------------------------------------------------------------------
+
+
+async def test_a_widened_agent_reaches_the_folder_on_this_run_and_the_next(
+    folder: Path, tmp_path: Path
+) -> None:
+    """A folder added to the workspace is reachable by absolute path, the model is told
+    as a harness arrival rather than as the user's words, and the thread records it so a
+    fresh agent over the same store reaches it again."""
+    other = tmp_path.parent / f"{tmp_path.name}-lib"  # beside the folder, not inside it
+    other.mkdir()
+    (other / "util.py").write_text("shared = True\n")
+    store = MemoryStore()
+    model = ScriptedModel(
+        calls(("c1", "read_file", {"path": str(other / "util.py")})), says("read it")
+    )
+    agent = agent_over(folder, model, store=store)
+    thread = await agent.open_thread()
+
+    folders = await agent.widen(other)
+    outcome = await agent.run("read util", thread)
+
+    assert folders == (folder, other)
+    assert outcome.stop.ok
+    tool_message = next(m for m in model.seen[-1].messages if m.role is Role.TOOL)
+    assert "shared = True" in tool_message.content
+    notice = next(m for m in model.seen[-1].messages if m.role is Role.ARRIVAL)
+    assert str(other) in notice.content and "not the user speaking" in notice.content
+    stored = await store.load(thread)
+    assert stored is not None
+    assert [m.folder for m in stored.messages if m.folder] == [str(other)]
+
+    # A second agent, as after a restart: the row is what makes the folder reachable.
+    later = ScriptedModel(
+        calls(("c2", "read_file", {"path": str(other / "util.py")})), says("again")
+    )
+    resumed = await agent_over(folder, later, store=store).run("again", thread)
+    assert resumed.stop.ok
+    assert (
+        "shared = True"
+        in next(m for m in later.seen[-1].messages if m.role is Role.TOOL).content
+    )
+
+
+async def test_widening_mid_run_reaches_the_next_tool_call(
+    folder: Path, tmp_path: Path
+) -> None:
+    other = tmp_path.parent / f"{tmp_path.name}-lib"
+    other.mkdir()
+    (other / "util.py").write_text("shared = True\n")
+    model = ScriptedModel(
+        calls(("c1", "write_file", {"path": "a", "content": "1"})),
+        calls(("c2", "read_file", {"path": str(other / "util.py")})),
+        says("done"),
+    )
+    holder: list[Agent] = []
+
+    async def widen_then_allow(_request) -> Decision:
+        _ = await holder[0].widen(other)
+        return Decision.ALLOW
+
+    agent = agent_over(folder, model, approvals=Approvals(ask=widen_then_allow))
+    holder.append(agent)
+
+    outcome = await agent.run("go")
+
+    assert outcome.stop.ok
+    results = [m.content for m in model.seen[-1].messages if m.role is Role.TOOL]
+    assert "shared = True" in results[1]
+
+
+async def test_a_folder_that_is_not_one_is_refused_and_one_already_reached_is_not_added(
+    folder: Path,
+) -> None:
+    agent = agent_over(folder, ScriptedModel(says("x")))
+
+    with pytest.raises(WorkspaceError, match="not a directory"):
+        _ = await agent.widen(folder / "missing")
+    assert await agent.widen(folder) == (folder,)

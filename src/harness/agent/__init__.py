@@ -58,8 +58,17 @@ from harness.store.base import Store
 from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
-from harness.types import Agent, Envelope, Message, Outcome, Role, ToolSpec, Transcript
-from harness.workspace import Workspace
+from harness.types import (
+    Agent,
+    Envelope,
+    Message,
+    Outcome,
+    Role,
+    Source,
+    ToolSpec,
+    Transcript,
+)
+from harness.workspace import Workspace, WorkspaceError
 
 log = logging.getLogger(__name__)
 
@@ -107,9 +116,56 @@ class _Agent:
     #: What `new_agent` made and therefore owns. A caller who supplied the tools owns
     #: their kit; this list is empty for them.
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list, repr=False)
+    #: The thread last opened, so a widening between runs can be written to it.
+    thread_id: str = ""
+    #: Whether a run is in flight, which decides whether a widening reaches the model as
+    #: an arrival or as a row written straight to the thread.
+    running: bool = False
 
     def tell(self, envelope: Envelope) -> None:
         self.inbox.post(envelope)
+
+    async def widen(self, folder: Path | str) -> tuple[Path, ...]:
+        """Let this agent reach one more folder.
+
+        Three things happen, and the order matters. The workspace is replaced first, so
+        the next tool call resolves against it -- the runner reads the workspace per call
+        for exactly this. Then the model is told, as an arrival from the harness rather
+        than as the user's words, because the person did not say anything; the row
+        carries the folder as a field so the thread records the fact and not only the
+        sentence. With a run in flight the notice goes through the inbox, which writes it
+        where it is read; between runs it is written to the thread directly, so a restart
+        before the next run does not lose it.
+
+        A folder already reachable is not added twice, and one that is not a directory is
+        a `WorkspaceError` -- the caller's input, said in a sentence.
+        """
+        added = Path(folder).expanduser().resolve()
+        if not added.is_dir():
+            raise WorkspaceError(f"not a directory: {folder}")
+        if any(added == r or added.is_relative_to(r) for r in self.workspace.roots):
+            return self.workspace.roots
+        self._reach((*self.workspace.extra, added))
+        envelope = Envelope(
+            Source.HARNESS,
+            f"The user added the folder {added} to the workspace. Its files are reachable "
+            + "by absolute path; the working folder is unchanged.",
+            folder=str(added),
+        )
+        if self.running or not self.thread_id:
+            self.inbox.post(envelope)
+        else:
+            await self._write(self.thread_id, [render(envelope)])
+        return self.workspace.roots
+
+    def _reach(self, extra: tuple[Path, ...]) -> None:
+        """Replace the workspace with one reaching `extra` as well as the root."""
+        roots = (self.workspace.root, *extra)
+        self.workspace = Workspace.at(
+            self.workspace.root,
+            protected=tuple(p for r in roots for p in protected_in(r)),
+            extra=extra,
+        )
 
     async def aclose(self) -> None:
         closers, self.closers = self.closers, []
@@ -130,6 +186,7 @@ class _Agent:
         and refusing to work is a worse answer than working and saying where.
         """
         opened = await self._resolve(thread_id)
+        self.thread_id = opened
         if self.children is not None:
             self.children.parent_thread = opened
         return opened
@@ -164,6 +221,15 @@ class _Agent:
         """
         thread_id = await self.open_thread(thread_id)
         transcript, fresh = await self._open(thread_id)
+        # The folders the thread was widened to, before this run. Resuming is replaying:
+        # a folder added last week is reachable this week because the row says so.
+        remembered = tuple(
+            Path(m.folder)
+            for m in transcript.messages
+            if m.folder and Path(m.folder).is_dir()
+        )
+        if set(remembered) - set(self.workspace.extra):
+            self._reach(tuple(dict.fromkeys((*self.workspace.extra, *remembered))))
         transcript.append(user(prompt))
 
         # The opening messages, before the first turn -- so a run that dies during that
@@ -180,13 +246,18 @@ class _Agent:
                 ToolContext(paths=self.workspace),
                 self.approvals,
                 modes=self.modes,
+                paths=lambda: self.workspace,
             ).run,
             limits=self.settings.limits,
             output=self.settings.output,
             observers=[*self.observers, self._recorder(thread_id)],
             pending=self._arrivals(thread_id),
         )
-        return await loop.run(transcript)
+        self.running = True
+        try:
+            return await loop.run(transcript)
+        finally:
+            self.running = False
 
     def _arrivals(self, thread_id: str):
         """Drain the inbox, render it, and write it down -- in that order.
@@ -420,7 +491,13 @@ class _Agent:
         async def record(turn: Turn) -> None:
             messages: list[Message] = [turn.assistant]
             messages.extend(
-                Message(Role.TOOL, result.content, call_id=call.call_id)
+                Message(
+                    Role.TOOL,
+                    result.content,
+                    call_id=call.call_id,
+                    ok=result.ok,
+                    refused=result.refused,
+                )
                 for call, result in turn.results
             )
             await self._write(thread_id, messages)

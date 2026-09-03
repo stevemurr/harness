@@ -21,7 +21,7 @@ from conftest import ScriptedModel, calls, says
 from harness.server import create_app
 from harness.server.app import complete_lines, is_id, workspace_id_for
 from harness.store import JsonlStore
-from harness.types import Role
+from harness.types import Message, Role, ToolCall
 
 
 @pytest.fixture
@@ -235,9 +235,9 @@ async def test_the_same_idempotency_key_accepts_one_run(folder, tmp_path) -> Non
     app = app_for(ScriptedModel(says("done")), tmp_path)
     async with client_for(app) as client:
         workspace_id = await register(client, folder)
-        thread_id = (
-            await client.post("/threads", json={"workspace_id": workspace_id})
-        ).json()["thread_id"]
+        thread_id = (await client.post("/threads", json={"workspace_id": workspace_id})).json()[
+            "thread_id"
+        ]
         body = {"workspace_id": workspace_id, "message": {"content": "go"}}
         headers = {"Idempotency-Key": "idem_1"}
 
@@ -380,9 +380,7 @@ async def test_a_message_that_is_not_an_object_is_an_answer(folder, tmp_path) ->
 # -- events ---------------------------------------------------------------------------------
 
 
-async def test_a_bounded_read_returns_the_log_and_says_why_it_stopped(
-    folder, tmp_path
-) -> None:
+async def test_a_bounded_read_returns_the_log_and_says_why_it_stopped(folder, tmp_path) -> None:
     app = app_for(ScriptedModel(says("done")), tmp_path)
     async with client_for(app) as client:
         _, _, run = await start(client, folder)
@@ -469,9 +467,9 @@ async def test_a_stream_reports_a_run_that_ended_without_a_terminal_event() -> N
     # branch the generator heartbeats forever and an unbounded read hangs the suite instead
     # of failing it.
     async with asyncio.timeout(5):
-        written = "".join([chunk async for chunk in frames(
-            run, 0, developer=False, ticks=0, heartbeat=0.05
-        )])
+        written = "".join(
+            [chunk async for chunk in frames(run, 0, developer=False, ticks=0, heartbeat=0.05)]
+        )
 
     assert "event: stream.end" in written
     assert '{"reason": "terminal_without_event"}' in written
@@ -642,9 +640,7 @@ async def test_cancel_ends_the_run(folder, tmp_path) -> None:
     assert [f[2].get("type") for f in frames if f[2].get("type")][-1] == "run.cancelled"
 
 
-async def test_steering_a_run_in_flight_is_queued_for_the_next_turn(
-    folder, tmp_path
-) -> None:
+async def test_steering_a_run_in_flight_is_queued_for_the_next_turn(folder, tmp_path) -> None:
     """`AgentLoop.run` owns the transcript for the length of a run, and used to take no
     input channel at all -- this was a 409 saying so. It has an inbox now: the words are
     appended at the next turn boundary, which is the only point where the transcript is
@@ -723,9 +719,7 @@ async def test_a_configured_token_is_required_on_every_route(folder, tmp_path) -
     app = app_for(ScriptedModel(says("done")), tmp_path, token="secret")
     async with client_for(app) as client:
         refused = await client.get("/capabilities")
-        allowed = await client.get(
-            "/capabilities", headers={"Authorization": "Bearer secret"}
-        )
+        allowed = await client.get("/capabilities", headers={"Authorization": "Bearer secret"})
 
     assert refused.status_code == 401
     assert refused.json()["detail"]["code"] == "unauthorized"
@@ -873,7 +867,7 @@ def test_the_completed_line_arrives_once_its_newline_does() -> None:
     partial = '{"role": "tool", "content": "xxx'
 
     seen = len(complete_lines(f"{row}\n{partial}"))
-    after = complete_lines(f"{row}\n{partial}\"}}\n")
+    after = complete_lines(f'{row}\n{partial}"}}\n')
 
     assert seen == 1
     assert after[seen:] == ['{"role": "tool", "content": "xxx"}']
@@ -960,3 +954,79 @@ async def test_a_person_posts_work_to_a_folders_board_and_reads_it_back(
     assert [t["title"] for t in listed.json()["tasks"]] == ["migrate the parser"]
     assert nothing_done.json()["tasks"] == []
     assert bad.status_code == 400
+
+
+async def test_a_thread_keeps_its_runs_across_a_restart(folder, tmp_path) -> None:
+    """orca replays a thread by listing its runs and reading each one's events. Both used
+    to live only in memory, so a harness restart emptied every conversation while the
+    transcripts sat on disk."""
+    model = ScriptedModel(
+        Message(Role.ASSISTANT, "looking", (ToolCall("c1", "list_dir", {"path": "."}),)),
+        says("there it is"),
+    )
+    async with client_for(app_for(model, tmp_path)) as client:
+        _, thread_id, run = await start(client, folder, "look around")
+        run_id = run.json()["run_id"]
+        await asyncio.sleep(0.2)
+
+    async with client_for(app_for(ScriptedModel(says("later")), tmp_path)) as client:
+        listed = await client.get("/runs", params={"thread_id": thread_id})
+        assert [r["run_id"] for r in listed.json()["runs"]] == [run_id]
+        assert listed.json()["runs"][0]["status"] == "completed"
+
+        events = await client.get(f"/runs/{run_id}/events", params={"ticks": 1})
+        kinds = [event for _, event, _ in parse(events.text)]
+        rows = [data for _, event, data in parse(events.text) if event != "stream.end"]
+
+    types = [d["type"] for d in rows]
+    assert types == [
+        "run.created",
+        "answer.delta",
+        "run.progress",
+        "answer.delta",
+        "run.completed",
+    ]
+    assert rows[2]["payload"]["status"] == "completed"
+    assert rows[-1]["payload"]["summary"] == "looking\n\nthere it is"
+    assert kinds[-1] == "stream.end"
+
+
+async def test_a_thread_can_be_widened_to_another_folder(folder, tmp_path) -> None:
+    """orca's add-to-workspace effect: one route, and the folder is reachable on this
+    run, on the next, and after a restart, because the thread records it."""
+    other = tmp_path / "lib"
+    other.mkdir()
+    (other / "util.py").write_text("shared = True\n")
+    model = ScriptedModel(
+        calls(("c1", "read_file", {"path": str(other / "util.py")})), says("read it")
+    )
+    async with client_for(app_for(model, tmp_path)) as client:
+        workspace_id = await register(client, folder)
+        thread = await client.post("/threads", json={"workspace_id": workspace_id})
+        thread_id = thread.json()["thread_id"]
+
+        widened = await client.post(f"/threads/{thread_id}/folders", json={"path": str(other)})
+        assert widened.status_code == 200
+        assert widened.json()["folders"] == [str(folder), str(other)]
+
+        missing = await client.post(
+            f"/threads/{thread_id}/folders", json={"path": str(tmp_path / "nope")}
+        )
+        assert missing.status_code == 400
+
+        run = await client.post(
+            f"/threads/{thread_id}/runs",
+            json={"workspace_id": workspace_id, "message": {"content": "read util"}},
+        )
+        run_id = run.json()["run_id"]
+        await asyncio.sleep(0.2)
+
+    tool_message = next(m for m in model.seen[-1].messages if m.role is Role.TOOL)
+    assert "shared = True" in tool_message.content
+
+    async with client_for(app_for(ScriptedModel(says("later")), tmp_path)) as client:
+        events = await client.get(f"/runs/{run_id}/events", params={"ticks": 1})
+        rows = [data for _, event, data in parse(events.text) if event != "stream.end"]
+
+    assert [d["type"] for d in rows][:2] == ["run.created", "folder.added"]
+    assert rows[1]["payload"]["path"] == str(other)

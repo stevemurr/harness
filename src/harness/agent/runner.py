@@ -8,12 +8,14 @@ have no idea a loop exists -- either can be tested without the other.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from harness.state.approval import Approvals, Request
 from harness.state.mode import ModeState
 from harness.tools import Registry, ToolContext
 from harness.types import ToolCall, ToolResult
+from harness.workspace import Workspace
 
 
 @dataclass
@@ -24,6 +26,9 @@ class ToolRunner:
     context: ToolContext
     approvals: Approvals
     modes: ModeState | None = None
+    #: Where the workspace is read from, per call, when a run may be widened while it
+    #: works. `None` uses `context.paths` as given, which is what a test wants.
+    paths: Callable[[], Workspace] | None = None
     #: Calls that were refused, by their exact arguments, with the mode they were refused
     #: in. A refusal cannot turn into an acceptance on its own, so asking again with the
     #: same arguments is a loop rather than a retry -- see `_looping`.
@@ -72,10 +77,12 @@ class ToolRunner:
             # exception and not a run-ending condition.
             return self._remember(call, ToolResult(refusal, ok=False, refused=True))
 
-        # A fresh context per call, differing only in whose call it is.
-        return self._remember(
-            call, await self.registry.run(call, replace(self.context, call_id=call.call_id))
-        )
+        # A fresh context per call, differing only in whose call it is -- and in what it
+        # may reach, when a folder was added since the run began.
+        context = replace(self.context, call_id=call.call_id)
+        if self.paths is not None:
+            context = replace(context, paths=self.paths())
+        return self._remember(call, await self.registry.run(call, context))
 
     # -- the same refusal, over and over ---------------------------------------------
 

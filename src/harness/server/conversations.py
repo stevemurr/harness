@@ -32,13 +32,12 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
 
 from harness.agent import new_agent
 from harness.agent.loop import Observer, Turn
 from harness.exec.children import Children, Lineage
 from harness.mcp import McpServer, Server, connect_all
-from harness.providers.base import Chunk, Listener, Provider
+from harness.providers.base import Chunk, Completion, Listener, Provider
 from harness.server.events import Visibility
 from harness.server.runs import (
     CommandRefused,
@@ -59,7 +58,18 @@ from harness.store.boards import JsonlBoard
 from harness.tools import JSON, Handler, ToolContext
 from harness.tools.ask import Questioner
 from harness.tools.kit import Toolkit
-from harness.types import Agent, Message, Role, StopReason, ToolResult, ToolSpec
+from harness.types import (
+    Agent,
+    Message,
+    Role,
+    StopReason,
+    ToolResult,
+    ToolSpec,
+    Transcript,
+    as_dict,
+    as_list,
+    as_str,
+)
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +148,46 @@ class Watched:
         else:
             run.progress(update_id, text, "completed" if result.ok else "failed")
         return result
+
+
+@dataclass
+class Gated:
+    """The provider, with the run's pause gate before every call.
+
+    The tool wrapper above gates before a tool runs, and that was the only gate until
+    2026-09-03: a paused run whose next call was denied at approval never dispatched a
+    tool, so it never met the gate, and went on calling the model. A person who pauses
+    expects the model to stop too, so the model call is gated as well -- and for the same
+    reason the tool is, by wrapping rather than by teaching the loop about pauses.
+    """
+
+    inner: Provider
+    live: Live
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def context_window(self) -> int:
+        return self.inner.context_window
+
+    async def complete(
+        self,
+        transcript: Transcript,
+        tools: Sequence[ToolSpec] = (),
+        *,
+        listen: Listener | None = None,
+    ) -> Completion:
+        run = self.live.run
+        if run is not None:
+            await run.gate()
+        return await self.inner.complete(transcript, tools, listen=listen)
+
+    async def aclose(self) -> None:
+        # The runtime owns the real provider and closes it once, after every conversation.
+        # A wrapper that closed it would close it under the next conversation's feet.
+        return None
 
 
 def compaction_reporter(live: Live):
@@ -363,7 +413,7 @@ def open_conversation(
         child_kits.append(child_kit)
         return new_agent(
             lineage.root,
-            provider,
+            Gated(provider, live),
             tools=[
                 Watched(tool, live, child_kit.plan, label=lineage.agent_id)
                 for tool in child_kit.tools()
@@ -399,7 +449,7 @@ def open_conversation(
     )
     agent = new_agent(
         root,
-        provider,
+        Gated(provider, live),
         tools=[Watched(tool, live, kit.plan) for tool in kit.tools()],
         modes=modes,
         inbox=inbox,
@@ -464,12 +514,33 @@ class Runtime:
             self._boards[key] = found
         return found
 
+    async def open(self, thread_id: str, root: Path, workspace_id: str) -> Conversation:
+        """The conversation, with the runs its transcript already holds.
+
+        The first time a thread is opened in this process, its finished runs are rebuilt
+        from the stored transcript -- see `replayed` -- so a client that comes back after
+        a restart finds the same run ids and the same events it would have seen live. The
+        in-memory log is a cache of that derivation, never the record.
+        """
+        held = self.conversations.get(thread_id)
+        if held is not None:
+            return held
+        conversation = self.conversation(thread_id, root, workspace_id)
+        stored = await self.store.load(thread_id)
+        if stored is not None:
+            for run in replayed(conversation, stored):
+                self.runs[run.run_id] = run
+                conversation.runs.append(run)
+        return conversation
+
     def conversation(
         self,
         thread_id: str,
         root: Path,
         workspace_id: str,
     ) -> Conversation:
+        """The conversation held for a thread, made if it is not. Replays nothing: a caller
+        that wants what the transcript holds opens with `open`."""
         existing = self.conversations.get(thread_id)
         if existing is not None:
             return existing
@@ -507,7 +578,10 @@ class Runtime:
             )
 
         run = Run(
-            run_id=f"run_{uuid4().hex[:16]}",
+            # Numbered within the thread rather than minted, so a run replayed from the
+            # transcript after a restart has the id the client saw while it was live. The
+            # replayed runs are in `conversation.runs` already, so the count continues.
+            run_id=run_id_for(conversation.thread_id, len(conversation.runs) + 1),
             thread_id=conversation.thread_id,
             message=message,
             mode=mode,
@@ -620,19 +694,153 @@ def _ending(stop: StopReason, messages: list[Message]) -> tuple[str, str]:
     make impossible, so it must not be thrown away one layer above it.
     """
     if stop.kind == "done":
-        # Skipping a compaction boundary: its content is a handoff note the agent wrote to
-        # itself, and a model whose final message is empty -- the ordinary shape when a
-        # thinking model spends its budget in `reasoning_content` -- would otherwise hand
-        # the person that note as the answer.
-        last = next(
-            (
-                m.content.strip()
-                for m in reversed(messages)
-                if m.content.strip() and m.role is not Role.COMPACTION
-            ),
-            "",
-        )
-        return "run.completed", last or "Finished."
+        return "run.completed", narration_of(messages) or "Finished."
     if stop.kind == "cancelled":
         return "run.cancelled", stop.detail or "Cancelled."
     return "run.failed", stop.detail or f"The run stopped: {stop.kind}."
+
+
+def narration_of(messages: list[Message]) -> str:
+    """Everything the model said in the last run, in order. The summary of a completed run.
+
+    The whole run's prose, not its last message, because the client contract says the
+    summary *replaces* the streamed answer and the stream is the narration accumulating
+    across every turn. A summary of the last turn alone made a completed run collapse to
+    its final sentence, discarding what the person had watched being written. Now the
+    summary is exactly what was streamed, so the replacement changes nothing on a stream
+    that arrived whole and repairs one that did not. Nothing is generated here: this is
+    the model's own words, joined the way the deltas were.
+
+    Assistant rows only, from the last user row on. This used to skip compaction rows and
+    nothing else, so a model whose final message was empty -- the ordinary shape when a
+    thinking model spends its budget in `reasoning_content` -- handed the person its last
+    *tool result*, or their own prompt, as the answer. (2026-09-03)
+    """
+    start = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].role is Role.USER), 0
+    )
+    return "\n\n".join(
+        m.content.strip()
+        for m in messages[start:]
+        if m.role is Role.ASSISTANT and m.content.strip()
+    )
+
+
+# -- replay: the runs a transcript holds ---------------------------------------------------
+
+
+def run_id_for(thread_id: str, ordinal: int) -> str:
+    return f"run_{thread_id}_{ordinal}"
+
+
+def replayed(conversation: Conversation, transcript: Transcript) -> list[Run]:
+    """The finished runs in a transcript, each with the event log it would have had.
+
+    Derived, not stored. The transcript is the state (ADR 0001), and every event a client
+    renders for a finished run is a rendering of a row it holds: a user row is
+    `run.created`, assistant prose is `answer.delta`, a tool call and its answer are one
+    activity row, the plan tool's own arguments are `plan.progress`, and a compaction row
+    is `context.compacted`. Rebuilding those on demand keeps one record; persisting the
+    log would keep a second copy of every tool result that could drift from the first.
+
+    What does not replay, and why it need not: approvals, questions, pauses. They are
+    live states, and a finished run has none. What the transcript cannot say is how a run
+    ended, beyond whether it ended with an answer: a run whose last row is not a plain
+    answer is reported failed, which is what a cancel, a crash, a limit, and a restart mid-
+    run all are to the person reading it back.
+
+    The text of an activity row comes from the same preview the live wrapper used, through
+    the conversation's own tools, so a replayed row reads exactly as the live one did.
+    """
+    previews = {tool.spec.name: tool for tool in conversation.kit.tools()}
+    runs: list[Run] = []
+    pieces = _split(transcript.messages)
+    for ordinal, rows in enumerate(pieces, 1):
+        run = Run(
+            run_id=run_id_for(conversation.thread_id, ordinal),
+            thread_id=conversation.thread_id,
+            message=rows[0].content,
+            mode="",
+            policy="",
+        )
+        _replay_into(run, rows, previews)
+        runs.append(run)
+    return runs
+
+
+def _split(messages: list[Message]) -> list[list[Message]]:
+    """One run per user row: the row and everything up to the next. Arrivals stay with
+    the run they arrived in, and the system prompt belongs to none."""
+    pieces: list[list[Message]] = []
+    for message in messages:
+        if message.role is Role.USER:
+            pieces.append([message])
+        elif pieces and message.role is not Role.SYSTEM:
+            pieces[-1].append(message)
+    return pieces
+
+
+def _replay_into(run: Run, rows: list[Message], previews: dict[str, Handler]) -> None:
+    run.publish("run.created", {"message": run.message, "mode": "", "approval_policy": ""})
+    answers = {m.call_id: m for m in rows if m.role is Role.TOOL and m.call_id}
+    ended_with_answer = False
+    for message in rows[1:]:
+        if message.role is Role.COMPACTION:
+            run.publish("context.compacted", {"summary": message.content})
+            continue
+        if message.role is Role.ARRIVAL and message.folder:
+            run.publish("folder.added", {"path": message.folder})
+            continue
+        if message.role is not Role.ASSISTANT:
+            continue
+        prose = message.content.strip()
+        if prose:
+            run.publish(
+                "answer.delta",
+                {
+                    "effect_id": run.run_id,
+                    "model_call_id": run.run_id,
+                    "text": f"\n\n{prose}" if run.narrated else prose,
+                },
+            )
+            run.narrated = True
+        for call in message.tool_calls:
+            answer = answers.get(call.call_id)
+            ok = answer is not None and answer.ok
+            if call.name in PLAN_TOOLS and ok:
+                run.publish("plan.progress", _plan_of(call.arguments))
+                continue
+            run.progress(
+                progress_id(run.turns, call.name, call.arguments),
+                _preview_text(previews, call.name, call.arguments),
+                "completed" if ok else "failed",
+            )
+        run.turns += 1
+        ended_with_answer = not message.tool_calls
+    if ended_with_answer:
+        run.finish("run.completed", narration_of(rows) or "Finished.")
+    else:
+        run.finish("run.failed", "The run ended without an answer.")
+
+
+def _plan_of(arguments: JSON) -> JSON:
+    """The plan tool's arguments, in the shape `publish_plan` sends: they are the same
+    shape already, which is the reason the tool takes Codex's schema."""
+    return {
+        "explanation": as_str(arguments.get("explanation")),
+        "plan": [
+            {"step": as_str(entry.get("step")), "status": as_str(entry.get("status"))}
+            for entry in (as_dict(item) for item in as_list(arguments.get("plan")))
+            if entry
+        ],
+    }
+
+
+def _preview_text(previews: dict[str, Handler], name: str, arguments: JSON) -> str:
+    tool = previews.get(name)
+    if tool is None:
+        return name
+    try:
+        return one_line(tool.preview(arguments)[0])
+    except Exception:  # arguments the tool could not read: the live row would have said so
+        return name
