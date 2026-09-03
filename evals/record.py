@@ -5,10 +5,11 @@ file on disk used to be the only schema, and nothing checked a file against it. 
 number `FINDINGS.md` retracted was a number read out of one of those files by hand.
 
 A sweep carries a header saying what produced it -- the commit, a hash of the system
-prompt, the model and its sampling, the turn limit, the arms and the repeat -- so whether
-two sweeps are comparable is written in the files and not remembered. The last working note listed
-eight result files as void because they predated some mix of changes; none of them could
-say which (see `docs/adr/0016`).
+prompt, the model and its sampling, the turn limit, what was withheld and the repeat -- so
+whether two sweeps are comparable is written in the files and not remembered. The last
+working note listed
+eight result files as void because they predated some mix of changes; none of them
+could say which (see `docs/adr/0016`).
 """
 
 from __future__ import annotations
@@ -37,10 +38,12 @@ class Call:
 
 @dataclass(frozen=True, slots=True)
 class Attempt:
-    """One run of one rung in one arm. A row."""
+    """One run of one rung. A row."""
 
     rung: str
     tests: str
+    #: Which configuration: `all`, or `without-<tools>` for a control. Older sweeps carry
+    #: `code` and `base`, which meant the same two things under fixed names.
     arm: str
     attempt: int
     passed: bool
@@ -128,7 +131,9 @@ class Sweep:
     presence_penalty: float | None
     max_turns: int
     suite: str
-    arms: tuple[str, ...]
+    #: Tools withheld from every attempt. Empty is the ordinary sweep: every tool. A
+    #: control withholds by name, and `compare` pairs it against the full sweep.
+    withheld: tuple[str, ...]
     repeat: int
     #: Provenance a header cannot carry structurally -- a conversion, an interruption.
     note: str = ""
@@ -143,7 +148,7 @@ class Sweep:
         provider: OpenAICompatible,
         max_turns: int,
         suite: str,
-        arms: tuple[str, ...],
+        withheld: tuple[str, ...],
         repeat: int,
     ) -> Sweep:
         return cls(
@@ -158,9 +163,14 @@ class Sweep:
             presence_penalty=provider.presence_penalty,
             max_turns=max_turns,
             suite=suite,
-            arms=arms,
+            withheld=withheld,
             repeat=repeat,
         )
+
+    @property
+    def arm(self) -> str:
+        """The label this sweep's attempts carry."""
+        return arm_for(self.withheld)
 
     def groups(self) -> dict[tuple[str, str], list[Attempt]]:
         """Attempts by rung and arm, in the order first seen."""
@@ -171,7 +181,7 @@ class Sweep:
 
     def wire(self) -> JSON:
         body = asdict(self)
-        body["arms"] = list(self.arms)
+        body["withheld"] = list(self.withheld)
         body["attempts"] = [row.wire() for row in self.attempts]
         return body
 
@@ -194,11 +204,15 @@ class Sweep:
             presence_penalty=_optional(raw.get("presence_penalty")),
             max_turns=as_int(raw.get("max_turns")),
             suite=as_str(raw.get("suite")),
-            arms=tuple(as_str(arm) for arm in as_list(raw.get("arms"))),
+            withheld=tuple(as_str(name) for name in as_list(raw.get("withheld"))),
             repeat=as_int(raw.get("repeat")),
             note=as_str(raw.get("note")),
             attempts=[Attempt.read(as_dict(row)) for row in as_list(raw.get("attempts"))],
         )
+
+
+def arm_for(withheld: tuple[str, ...]) -> str:
+    return "all" if not withheld else "without-" + "+".join(sorted(withheld))
 
 
 def prompt_hash() -> str:

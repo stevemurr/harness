@@ -43,7 +43,8 @@ def table(sweep: Sweep) -> str:
     """Per rung and arm, across attempts."""
     lines = [
         f"{sweep.label}  commit {sweep.commit}  prompt {sweep.prompt or '?'}  "
-        + f"{sweep.model or '?'}  max_turns {sweep.max_turns}  repeat {sweep.repeat}",
+        + f"{sweep.model or '?'}  max_turns {sweep.max_turns}  repeat {sweep.repeat}"
+        + (f"  without {', '.join(sweep.withheld)}" if sweep.withheld else ""),
         "=" * 118,
         f"{'rung':<22} {'arm':<5} {'pass':>6} {'turns':>6} {'turn range':>11} "
         + f"{'secs':>7} {'sec range':>13} {'peak ctx':>9} {'find':>5}",
@@ -69,7 +70,7 @@ def table(sweep: Sweep) -> str:
     lines.append("-" * 118)
     if unstable:
         lines.append("  widest spread: " + ", ".join(unstable))
-    for arm in sweep.arms:
+    for arm in dict.fromkeys(r.arm for r in sweep.attempts):
         rows = [r for r in sweep.attempts if r.arm == arm]
         if rows:
             lines.append(
@@ -98,22 +99,34 @@ def compare(a: Sweep, b: Sweep) -> str:
         lines.append("Read the direction, not the digits, and say so where a number is quoted.")
     if a.commit != b.commit:
         lines.append(f"commits differ: {a.commit} vs {b.commit}")
+    if a.withheld != b.withheld:
+        lines.append(
+            f"A withholds {', '.join(a.withheld) or 'nothing'}; "
+            + f"B withholds {', '.join(b.withheld) or 'nothing'}"
+        )
     lines.append(
         f"{'rung':<22} {'arm':<5} {'n':>3} {'pass A':>7} {'pass B':>7} "
         + f"{'turns A':>8} {'turns B':>8} {'secs A':>7} {'secs B':>7}"
     )
     lines.append("-" * 88)
-    groups_a, groups_b = a.groups(), b.groups()
+    # Paired by rung when each sweep is one configuration, so a control lines up against
+    # the full sweep; by rung and arm when a sweep carries several, as the older two-arm
+    # sweeps do, so their rows are not folded into one.
+    groups_a, groups_b = _keyed(a), _keyed(b)
     refused: list[str] = []
     for key, left in groups_a.items():
         right = groups_b.get(key)
+        if isinstance(key, tuple):
+            rung, arm = key
+        else:
+            rung, arm = key, (a.arm if a.arm == b.arm else f"{a.arm} vs {b.arm}")
         if right is None:
             continue
         if len(left) != len(right):
-            refused.append(f"{key[0]}/{key[1]} (n={len(left)} vs n={len(right)})")
+            refused.append(f"{rung}/{arm} (n={len(left)} vs n={len(right)})")
             continue
         lines.append(
-            f"{key[0]:<22} {key[1]:<5} {len(left):>3} "
+            f"{rung:<22} {arm:<5} {len(left):>3} "
             + f"{sum(1 for r in left if r.passed):>7} {sum(1 for r in right if r.passed):>7} "
             + f"{median([float(r.turns) for r in left]):>8.1f} "
             + f"{median([float(r.turns) for r in right]):>8.1f} "
@@ -124,13 +137,26 @@ def compare(a: Sweep, b: Sweep) -> str:
         lines.append(
             "refused to pair, unequal attempts: " + ", ".join(refused)
         )
-    only_a = [f"{r}/{arm}" for (r, arm) in groups_a if (r, arm) not in groups_b]
-    only_b = [f"{r}/{arm}" for (r, arm) in groups_b if (r, arm) not in groups_a]
+    only_a = [_shown(k) for k in groups_a if k not in groups_b]
+    only_b = [_shown(k) for k in groups_b if k not in groups_a]
     if only_a:
         lines.append("only in A: " + ", ".join(only_a))
     if only_b:
         lines.append("only in B: " + ", ".join(only_b))
     return "\n".join(lines)
+
+
+def _keyed(sweep: Sweep) -> dict[str | tuple[str, str], list[Attempt]]:
+    groups = sweep.groups()
+    keyed: dict[str | tuple[str, str], list[Attempt]] = {}
+    single = len({arm for _, arm in groups}) <= 1
+    for (rung, arm), group in groups.items():
+        keyed[rung if single else (rung, arm)] = group
+    return keyed
+
+
+def _shown(key: str | tuple[str, str]) -> str:
+    return key if isinstance(key, str) else f"{key[0]}/{key[1]}"
 
 
 def main(argv: list[str] | None = None) -> int:

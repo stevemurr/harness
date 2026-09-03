@@ -1,10 +1,13 @@
 """Run the ladder, and say what happened in numbers rather than in prose.
 
-    uv run harness evals run --label postfix --both --repeat 3
-    uv run harness evals run --only 04-fix-bug,06-refactor --no-code --label one-arm
+    uv run harness evals run --label postfix --repeat 3
+    uv run harness evals run --only 09-needle-rename \\
+        --without find_definition,find_references --label no-search
 
-`--no-code` withholds `find_definition` and `find_references`, which is how the two arms of
-a comparison are produced. Everything else is held still. Each sweep writes
+Every sweep runs with every tool. A control withholds tools by name, the sweep's header
+records which, and `report` pairs the two by rung. That is how a tool's worth is measured
+and it is measured once: the code-search arm was run on every sweep for a week after its
+number was in, doubling the cost of each to learn nothing new. Each sweep writes
 `results/<date>-<label>/sweep.json` before its first attempt and after every one, and keeps
 each attempt's transcript beside it.
 
@@ -27,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from evals.record import Attempt, Call, Sweep
+from evals.record import Attempt, Call, Sweep, arm_for
 from evals.report import table
 from evals.rungs import HERE, REPO, Rung, discover, stage, unsolved
 from evals.verify import verify
@@ -54,13 +57,7 @@ from harness.types import Message, ToolSpec, Transcript
 #: long rung is something you want to look at while it happens.
 THREADS = config.THREADS.expanduser()
 RESULTS = HERE / "results"
-CODE_TOOLS = frozenset({"find_definition", "find_references"})
-#: What the base arm goes without on a rung that allows delegation. The board goes with
-#: them: a lone agent's board is its plan.
-AGENT_TOOLS = frozenset({
-    "delegate", "tell_agent", "wait_agents", "read_agent", "stop_agent",
-    "post_task", "list_tasks", "claim_task", "finish_task",
-})
+SEARCH_TOOLS = frozenset({"find_definition", "find_references"})
 MUTATING = frozenset({"write_file", "edit_file"})
 
 
@@ -153,7 +150,7 @@ def commit() -> str:
 
 @dataclass
 class Assembly:
-    """What one attempt's agent is built from. Separated so the arm rule is testable."""
+    """What one attempt's agent is built from. Separated so the withholding is testable."""
 
     kit: Toolkit
     tools: list[Handler]
@@ -164,25 +161,26 @@ def assemble(
     rung: Rung,
     work: Path,
     *,
-    with_code: bool,
+    withheld: frozenset[str],
     settings: Settings,
     model: Recording,
     threads: Path,
     approvals: Approvals,
     observers: Sequence[Observer],
 ) -> Assembly:
-    """The arm rule. `code` is every tool; `base` is without the searching tools and,
-    on a rung that allows delegation, without the delegating ones.
+    """Every tool the rung allows, minus what the sweep withholds by name.
 
-    Without code tools no language server is probed or started either: a kit that is not
-    built `for_workspace` has empty indexes. A child shares the recording provider, so
-    every model call counts, and the observer, so every tool call counts.
+    A rung that allows agents gets `delegate` and the board. With both search tools
+    withheld no language server is probed or started either: a kit that is not built
+    `for_workspace` has empty indexes. A child shares the recording provider, so every
+    model call counts, and the observer, so every tool call counts.
     """
+    searching = not withheld >= SEARCH_TOOLS
     inbox = Inbox()
     modes = ModeState()
     children: Children | None = None
-    board = MemoryBoard() if rung.agents and with_code else None
-    if rung.agents and with_code:
+    board = MemoryBoard() if rung.agents else None
+    if rung.agents:
         children = Children(
             inbox=inbox,
             spawner=spawning(
@@ -200,10 +198,11 @@ def assemble(
         Toolkit.for_workspace(
             work, settings=settings, modes=modes, inbox=inbox, children=children, board=board
         )
-        if with_code
-        else Toolkit(settings=settings, modes=modes, inbox=inbox)
+        if searching
+        else Toolkit(
+            settings=settings, modes=modes, inbox=inbox, children=children, board=board
+        )
     )
-    withheld: frozenset[str] = frozenset() if with_code else CODE_TOOLS | AGENT_TOOLS
     return Assembly(
         kit=kit,
         tools=[t for t in kit.tools() if t.spec.name not in withheld],
@@ -216,13 +215,14 @@ async def attempt(
     work: Path,
     *,
     provider: OpenAICompatible,
-    with_code: bool,
+    withheld: frozenset[str],
+    arm: str,
     number: int,
     max_turns: int,
     threads: Path,
     transcript: Path,
 ) -> Attempt:
-    """One run of one rung in one arm, graded."""
+    """One run of one rung, graded."""
     model = Recording(provider)
     settings = Settings(limits=Limits(max_turns=max_turns))
     approvals = Approvals(policy=Policy(approve_everything=True))
@@ -249,7 +249,7 @@ async def attempt(
     made = assemble(
         rung,
         work,
-        with_code=with_code,
+        withheld=withheld,
         settings=settings,
         model=model,
         threads=threads,
@@ -324,7 +324,7 @@ async def attempt(
     return Attempt(
         rung=rung.name,
         tests=rung.tests,
-        arm="code" if with_code else "base",
+        arm=arm,
         attempt=number,
         passed=verdict.passed,
         score=verdict.score,
@@ -356,8 +356,7 @@ class Flags:
     only: str
     max_turns: int
     work: str
-    no_code: bool
-    both: bool
+    without: str
     repeat: int
     threads: str
     suite: str
@@ -370,8 +369,7 @@ class Flags:
             only=flag(args, "only"),
             max_turns=_or(int_flag(args, "max_turns"), 30),
             work=flag(args, "work"),
-            no_code=bool_flag(args, "no_code"),
-            both=bool_flag(args, "both"),
+            without=flag(args, "without"),
             repeat=int_flag(args, "repeat") or 1,
             threads=flag(args, "threads"),
             suite=flag(args, "suite") or "ladder",
@@ -392,9 +390,13 @@ def parser() -> argparse.ArgumentParser:
     _ = made.add_argument("--only", default="", help="Comma-separated rung names.")
     _ = made.add_argument("--max-turns", type=int, default=30, help="0 means no limit.")
     _ = made.add_argument("--work", default="", help="Where to build. .eval-work by default.")
-    _ = made.add_argument("--no-code", action="store_true", help="Withhold the code tools.")
-    _ = made.add_argument("--both", action="store_true", help="Run each rung with and without.")
-    _ = made.add_argument("--repeat", type=int, default=1, help="Attempts per rung per arm.")
+    _ = made.add_argument(
+        "--without",
+        default="",
+        help="Comma-separated tool names to withhold, for a control sweep. Recorded in "
+        + "the sweep's header; `report` pairs it against the full sweep by rung.",
+    )
+    _ = made.add_argument("--repeat", type=int, default=1, help="Attempts per rung.")
     _ = made.add_argument(
         "--threads",
         default="",
@@ -420,7 +422,8 @@ async def sweep(args: Flags) -> int:
     threads = Path(args.threads).expanduser() if args.threads else THREADS
     work_root = Path(args.work).resolve() if args.work else (REPO / ".eval-work").resolve()
     work_root.mkdir(parents=True, exist_ok=True)
-    arms = ("code", "base") if args.both else (("base",) if args.no_code else ("code",))
+    withheld = frozenset(name.strip() for name in args.without.split(",") if name.strip())
+    arm = arm_for(tuple(sorted(withheld)))
     chosen = discover(args.suite, args.only)
     if not chosen:
         print("no rungs matched", file=sys.stderr)
@@ -443,37 +446,40 @@ async def sweep(args: Flags) -> int:
         provider=provider,
         max_turns=args.max_turns,
         suite=args.suite,
-        arms=arms,
+        withheld=tuple(sorted(withheld)),
         repeat=args.repeat,
     )
     record.write(out / "sweep.json")
-    print(f"sweep {out.name}: {len(chosen)} rungs x {len(arms)} arms x {args.repeat}")
+    print(
+        f"sweep {out.name}: {len(chosen)} rungs x {args.repeat}"
+        + (f", without {', '.join(sorted(withheld))}" if withheld else "")
+    )
 
     for rung in chosen:
-        for arm in arms:
-            for number in range(1, args.repeat + 1):
-                work = stage(rung, work_root / arm / str(number))
-                print(f"[{rung.name}/{arm} {number}/{args.repeat}] ...", flush=True)
-                row = await attempt(
-                    rung,
-                    work,
-                    provider=provider,
-                    with_code=arm == "code",
-                    number=number,
-                    max_turns=args.max_turns,
-                    threads=threads,
-                    transcript=out / "transcripts" / f"{rung.name}.{arm}.{number}.json",
-                )
-                record.attempts.append(row)
-                record.write(out / "sweep.json")
-                mark = "PASS" if row.passed else "FAIL"
-                print(
-                    f"[{rung.name}/{arm} {number}] {mark}  {row.stop}  "
-                    + f"turns={row.turns} calls={row.calls}  {row.seconds}s  "
-                    + f"peak={row.context_peak_chars:,}c"
-                    + (f"  <- {row.why[:70]}" if not row.passed else ""),
-                    flush=True,
-                )
+        for number in range(1, args.repeat + 1):
+            work = stage(rung, work_root / arm / str(number))
+            print(f"[{rung.name} {number}/{args.repeat}] ...", flush=True)
+            row = await attempt(
+                rung,
+                work,
+                provider=provider,
+                withheld=withheld,
+                arm=arm,
+                number=number,
+                max_turns=args.max_turns,
+                threads=threads,
+                transcript=out / "transcripts" / f"{rung.name}.{arm}.{number}.json",
+            )
+            record.attempts.append(row)
+            record.write(out / "sweep.json")
+            mark = "PASS" if row.passed else "FAIL"
+            print(
+                f"[{rung.name} {number}] {mark}  {row.stop}  "
+                + f"turns={row.turns} calls={row.calls}  {row.seconds}s  "
+                + f"peak={row.context_peak_chars:,}c"
+                + (f"  <- {row.why[:70]}" if not row.passed else ""),
+                flush=True,
+            )
 
     print("\n" + table(record))
     print(f"\nwrote {out / 'sweep.json'}")

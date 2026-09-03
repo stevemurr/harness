@@ -227,14 +227,17 @@ long suite is four rungs of thirty minutes to several hours, including a layout 
 to a spec and a fleet of sixteen packages with one planted bug each.
 
 ```sh
-uv run harness evals run --both --repeat 3 --label name          # both arms: with and without the extra tools
+uv run harness evals run --repeat 3 --label name                              # every tool
+uv run harness evals run --without find_definition,find_references --label ctl  # a control
 uv run harness evals run --suite long --only 14-engine --max-turns 0 --label engine
 uv run harness evals report evals/results/<sweep>/sweep.json [other-sweep.json]
 ```
 
 A sweep writes `evals/results/<date>-<label>/` with a header saying what produced it: commit,
-prompt hash, model, sampling, turn limit. `report` compares two sweeps only where the
-pairing is honest and names every header field that differs first. Before any sweep, every
+prompt hash, model, sampling, turn limit, and any tools withheld. Every sweep runs with every
+tool; a tool's worth is measured by a control sweep that withholds it by name. `report`
+compares two sweeps by rung, only where the pairing is honest, and names every header field
+that differs first. Before any sweep, every
 chosen rung's checks are run against its own unsolved seed and must fail. What the ladder
 has shown, retractions included, is in `evals/FINDINGS.md`.
 

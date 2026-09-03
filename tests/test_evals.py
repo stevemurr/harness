@@ -156,12 +156,12 @@ def _sweep(label: str, *rows: Attempt, prompt: str = "abc") -> Sweep:
     return Sweep(
         label=label, started="2026-09-02T00:00:00+00:00", commit="deadbee", prompt=prompt,
         model="m", base_url="http://x", temperature=0.7, top_p=0.8, presence_penalty=1.5,
-        max_turns=30, suite="ladder", arms=("code", "base"), repeat=2, attempts=list(rows),
+        max_turns=30, suite="ladder", withheld=(), repeat=2, attempts=list(rows),
     )
 
 
 def test_a_sweep_survives_the_round_trip_through_disk(tmp_path: Path) -> None:
-    before = _sweep("a", _attempt("01", "code", 1, passed=True, turns=5))
+    before = _sweep("a", _attempt("01", "all", 1, passed=True, turns=5))
     before.write(tmp_path / "sweep.json")
     assert Sweep.read(tmp_path / "sweep.json") == before
 
@@ -169,23 +169,23 @@ def test_a_sweep_survives_the_round_trip_through_disk(tmp_path: Path) -> None:
 def test_compare_refuses_to_pair_groups_of_unequal_size() -> None:
     a = _sweep(
         "a",
-        _attempt("01", "code", 1, passed=True, turns=5),
-        _attempt("01", "code", 2, passed=True, turns=7),
-        _attempt("02", "code", 1, passed=True, turns=9),
+        _attempt("01", "all", 1, passed=True, turns=5),
+        _attempt("01", "all", 2, passed=True, turns=7),
+        _attempt("02", "all", 1, passed=True, turns=9),
     )
     b = _sweep(
         "b",
-        _attempt("01", "code", 1, passed=False, turns=40),
-        _attempt("02", "code", 1, passed=True, turns=9),
+        _attempt("01", "all", 1, passed=False, turns=40),
+        _attempt("02", "all", 1, passed=True, turns=9),
     )
     out = compare(a, b)
-    assert "refused to pair" in out and "01/code (n=2 vs n=1)" in out
+    assert "refused to pair" in out and "01/all (n=2 vs n=1)" in out
     assert "\n02" in out  # the honest pairing is still shown
 
 
 def test_compare_says_when_two_sweeps_are_a_different_experiment() -> None:
-    a = _sweep("a", _attempt("01", "code", 1, passed=True, turns=5))
-    b = replace(_sweep("b", _attempt("01", "code", 1, passed=True, turns=5)), prompt="xyz")
+    a = _sweep("a", _attempt("01", "all", 1, passed=True, turns=5))
+    b = replace(_sweep("b", _attempt("01", "all", 1, passed=True, turns=5)), prompt="xyz")
     assert "NOT THE SAME EXPERIMENT" in compare(a, b)
     assert "prompt" in compare(a, b)
     assert "NOT THE SAME" not in compare(a, a)
@@ -194,21 +194,20 @@ def test_compare_says_when_two_sweeps_are_a_different_experiment() -> None:
 def test_the_table_reads_from_the_record_not_the_file() -> None:
     sweep = _sweep(
         "a",
-        _attempt("01", "code", 1, passed=True, turns=5),
-        _attempt("01", "code", 2, passed=False, turns=20),
+        _attempt("01", "all", 1, passed=True, turns=5),
+        _attempt("01", "all", 2, passed=False, turns=20),
     )
     out = table(sweep)
     assert "01" in out and "1/2" in out
-    assert "widest spread: 01/code (5-20 turns)" in out
+    assert "widest spread: 01/all (5-20 turns)" in out
 
 
-# -- the arm rule ------------------------------------------------------------------------------
+# -- withholding -------------------------------------------------------------------------------
 
 
-def test_the_base_arm_goes_without_searching_and_delegating(tmp_path: Path) -> None:
-    """On a rung that allows agents, the code arm gets `delegate` and the board and the
-    base arm gets neither, the way it gets no code tools. On any other rung nobody gets
-    them."""
+def test_every_tool_unless_withheld_by_name(tmp_path: Path) -> None:
+    """A rung that allows agents gets `delegate` and the board; a control withholds tools
+    by name and nothing else changes. On any other rung nobody gets the agent tools."""
     from evals.run import Recording, assemble
 
     from harness.providers.openai import OpenAICompatible
@@ -223,11 +222,11 @@ def test_the_base_arm_goes_without_searching_and_delegating(tmp_path: Path) -> N
     agents = type(agents).at(agents.path)
     plain = _rung(tmp_path, "#!/bin/sh\nexit 1\n", name="plain")
 
-    def names(rung, with_code: bool) -> set[str]:
+    def names(rung, withheld: frozenset[str] = frozenset()) -> set[str]:
         made = assemble(
             rung,
             tmp_path / "work",
-            with_code=with_code,
+            withheld=withheld,
             settings=Settings(),
             model=model,
             threads=tmp_path / "threads",
@@ -237,6 +236,7 @@ def test_the_base_arm_goes_without_searching_and_delegating(tmp_path: Path) -> N
         return {t.spec.name for t in made.tools}
 
     assert agents.agents and not plain.agents
-    assert {"delegate", "post_task", "find_definition"} <= names(agents, True)
-    assert not {"delegate", "post_task", "find_definition"} & names(agents, False)
-    assert "delegate" not in names(plain, True) and "read_file" in names(plain, False)
+    assert {"delegate", "post_task", "find_definition"} <= names(agents)
+    control = names(agents, frozenset({"find_definition", "find_references"}))
+    assert "find_definition" not in control and {"delegate", "read_file"} <= control
+    assert "delegate" not in names(plain) and "read_file" in names(plain)
