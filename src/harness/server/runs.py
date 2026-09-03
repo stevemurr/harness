@@ -159,10 +159,21 @@ class Run:
     ) -> None:
         _ = self.events.publish(type, payload, visibility=visibility)
 
-    def progress(self, update_id: str, text: str, status: str) -> None:
-        self.publish(
-            "run.progress", {"update_id": update_id, "text": text, "status": status}
-        )
+    def progress(
+        self, update_id: str, text: str, status: str, arguments: JSON | None = None
+    ) -> None:
+        """One activity row, with the call's arguments when the caller has them.
+
+        The arguments ride on every event for the row, not only the first, because a
+        client upserts the row by id and replaces what it held. They are what lets a client
+        show the code a write is about in the transcript -- the row's text is a one-line
+        preview, and once a call is approved or granted nothing else says what it did. The
+        transcript row and the editor's `rawInput` already carry them. (2026-09-03)
+        """
+        payload: JSON = {"update_id": update_id, "text": text, "status": status}
+        if arguments is not None:
+            payload["arguments"] = arguments
+        self.publish("run.progress", payload)
         if status != "active":
             self._settled.add(update_id)
 

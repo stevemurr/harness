@@ -135,7 +135,7 @@ class Watched:
             text = f"[{self.label}] {text}"
         planning = name in PLAN_TOOLS
         if not planning:
-            run.progress(update_id, text, "active")
+            run.progress(update_id, text, "active", args)
 
         result = await self.inner.call(args, ctx)
 
@@ -144,9 +144,9 @@ class Watched:
                 run.skip(update_id)
                 publish_plan(run, self.plan)
             else:
-                run.progress(update_id, text, "failed")
+                run.progress(update_id, text, "failed", args)
         else:
-            run.progress(update_id, text, "completed" if result.ok else "failed")
+            run.progress(update_id, text, "completed" if result.ok else "failed", args)
         return result
 
 
@@ -296,6 +296,7 @@ def observer_for(live: Live) -> Observer:
                 update_id,
                 one_line(result.content) or call.name,
                 "completed" if result.ok else "failed",
+                call.arguments,
             )
 
         run.publish(
@@ -814,6 +815,7 @@ def _replay_into(run: Run, rows: list[Message], previews: dict[str, Handler]) ->
                 progress_id(run.turns, call.name, call.arguments),
                 _preview_text(previews, call.name, call.arguments),
                 "completed" if ok else "failed",
+                call.arguments,
             )
         run.turns += 1
         ended_with_answer = not message.tool_calls
