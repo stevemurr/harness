@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from harness.server.events import EventLog, Visibility
 from harness.state.approval import Decision, Policy, Request
+from harness.tools.kinds import kind_for
 from harness.types import JSON
 
 #: The decision names a client may send, and what each one means here. `approve_bash_always`
@@ -160,9 +161,18 @@ class Run:
         _ = self.events.publish(type, payload, visibility=visibility)
 
     def progress(
-        self, update_id: str, text: str, status: str, arguments: JSON | None = None
+        self,
+        update_id: str,
+        text: str,
+        status: str,
+        arguments: JSON | None = None,
+        tool: str = "",
     ) -> None:
-        """One activity row, with the call's arguments when the caller has them.
+        """One activity row, with the call's arguments and its tool when the caller has them.
+
+        `tool` is the name and `kind` what sort of thing it does, in the editor protocol's
+        words, so a client can show a read, a write and a command differently without
+        knowing this harness's tool names.
 
         The arguments ride on every event for the row, not only the first, because a
         client upserts the row by id and replaces what it held. They are what lets a client
@@ -173,6 +183,9 @@ class Run:
         payload: JSON = {"update_id": update_id, "text": text, "status": status}
         if arguments is not None:
             payload["arguments"] = arguments
+        if tool:
+            payload["tool"] = tool
+            payload["kind"] = kind_for(tool)
         self.publish("run.progress", payload)
         if status != "active":
             self._settled.add(update_id)

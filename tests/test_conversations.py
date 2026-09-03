@@ -206,6 +206,7 @@ async def test_a_tool_call_opens_a_row_and_the_same_row_settles(folder, tmp_path
     # On both events: a client replaces the row it holds on each upsert, and the arguments
     # are how it shows what a write wrote once nothing else will say.
     assert rows[0]["arguments"] == rows[1]["arguments"] == {"path": "."}
+    assert (rows[0]["tool"], rows[0]["kind"]) == ("list_dir", "read")
 
 
 async def test_the_active_row_is_published_before_the_tool_returns(
@@ -826,6 +827,7 @@ async def test_a_thread_replays_its_runs_after_a_restart(folder, tmp_path) -> No
     # The same row identities the live wrapper used, so a client's upserts line up.
     assert rows[0]["update_id"] == progress_id(1, "read_file", {"path": "notes.md"})
     assert rows[0]["arguments"] == {"path": "notes.md"}
+    assert (rows[0]["tool"], rows[0]["kind"]) == ("read_file", "read")
     assert (
         payloads(replayed, "run.completed")[0]["summary"] == "planning\n\nreading\n\nall read"
     )

@@ -393,7 +393,7 @@ def write_example(path: Path | None = None) -> Path:
         + "\n"
         + "# How a run may end other than the model stopping.\n"
         + "# [limits]\n"
-        + "# max_turns = 100\n"
+        + "# max_turns = 0   # 0 means no limit\n"
         + "# max_consecutive_refusals = 10\n"
         + "\n"
         + "# Tool servers (MCP), one table each. Their tools join the built-in ones as\n"

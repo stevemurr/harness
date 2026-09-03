@@ -64,11 +64,16 @@ class Limits:
     the expected first state -- so counting it would end runs for working correctly. What
     signals a stall is the harness saying no over and over. (2026-08-31)
 
-    `max_turns=0` is no limit. A long rung's budget is the thing under test, and a
-    "limit" of a hundred thousand is a lie about what the number means.
+    `max_turns=0` is no limit, and it is the default. A long rung's budget is the thing
+    under test, and a "limit" of a hundred thousand is a lie about what the number means.
+    The default was a hundred until 2026-09-03, and a real piece of work driven through a
+    client stopped at turn 100 in the middle of doing it -- an ending nobody asked for,
+    reported as a failure. What catches a stalled run is `max_consecutive_refusals`; what
+    catches a runaway one is the person watching, who can cancel. A deployment that wants
+    a cap sets one in `[limits]`.
     """
 
-    max_turns: int = 100
+    max_turns: int = 0
     max_consecutive_refusals: int = 10
 
 

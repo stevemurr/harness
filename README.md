@@ -96,7 +96,7 @@ per_result = 30000         # characters one tool result may return
 per_turn = 120000          # shared across every call in one turn
 
 [limits]
-max_turns = 100            # 0 means no limit
+max_turns = 0              # 0 means no limit; set one to cap a run
 max_consecutive_refusals = 10
 
 [mcp.servers.files]        # a tool server, one table each; see "Tool servers" below

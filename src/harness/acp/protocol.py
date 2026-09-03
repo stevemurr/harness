@@ -18,6 +18,7 @@ import json
 from hashlib import blake2s
 
 from harness.state.plan import Plan
+from harness.tools.kinds import kind_for
 from harness.types import JSON, StopReason, as_dict, as_list, as_str
 
 PROTOCOL_VERSION = 1
@@ -57,29 +58,10 @@ MODES: tuple[JSON, ...] = (
 
 #: The protocol's kinds, by the harness's tool names. An editor picks an icon by this and
 #: nothing else, so an unlisted tool is `other` rather than an error.
-_KINDS: dict[str, str] = {
-    "read_file": "read",
-    "list_dir": "read",
-    "read_process": "read",
-    "read_monitor": "read",
-    "read_agent": "read",
-    "glob": "search",
-    "grep": "search",
-    "find_definition": "search",
-    "find_references": "search",
-    "list_tasks": "search",
-    "write_file": "edit",
-    "edit_file": "edit",
-    "run": "execute",
-    "monitor": "execute",
-    "stop_process": "execute",
-    "stop_monitor": "execute",
-    "delegate": "execute",
-    "web_search": "fetch",
-    "open_url": "fetch",
-    "update_plan": "think",
-    "exit_plan_mode": "switch_mode",
-}
+
+
+__all__ = ["kind_for"]  # re-exported: the editor's vocabulary, kept with the tools
+
 
 #: Stop reasons the protocol names, by the harness's. `error` is not here: it is answered
 #: as a JSON-RPC error rather than a turn that ended, because it is one.
@@ -90,10 +72,6 @@ _STOPS: dict[str, str] = {
     "refused": "refusal",
     "cancelled": "cancelled",
 }
-
-
-def kind_for(tool: str) -> str:
-    return _KINDS.get(tool, "other")
 
 
 def stop_reason(stop: StopReason) -> str:
