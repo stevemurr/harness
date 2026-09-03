@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from conftest import ScriptedModel
-from harness.mode import NORMAL, PLAN, ModeState
+from harness.state.mode import NORMAL, PLAN, ModeState
 from harness.tools import Registry, ToolContext, new_registry
 from harness.tools.ask import AskUser, ask_tools
 from harness.tools.kit import Toolkit
@@ -105,7 +105,7 @@ def test_the_question_tool_survives_plan_mode() -> None:
 async def test_a_run_can_ask_in_plan_mode_end_to_end(tmp_path: Path) -> None:
 
     from harness.agent import new_agent
-    from harness.approval import Approvals, Policy
+    from harness.state.approval import Approvals, Policy
     from harness.types import Message, Role
 
     async def person(question: str, options: tuple[str, ...]) -> str:

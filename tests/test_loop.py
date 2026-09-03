@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from harness.agent.loop import AgentLoop, Turn, assistant_with_calls, share, system, user
-from harness.approval import Approvals, Policy
 from harness.settings import Limits, Output
+from harness.state.approval import Approvals, Policy
 from harness.types import Message, Role, ToolCall, ToolResult, Transcript, parse_arguments
 
 OUT = Output()
@@ -404,7 +404,7 @@ async def test_leaving_plan_mode_lets_a_withheld_call_through(tmp_path: Path) ->
     """The one refusal that changes on its own: a tool withheld in plan mode becomes
     available the moment a plan is approved, so the mode is part of the key."""
     from harness.agent.runner import ToolRunner
-    from harness.mode import PLAN, ModeState
+    from harness.state.mode import PLAN, ModeState
     from harness.tools import ToolContext, new_registry
     from harness.tools.files import file_tools
     from harness.workspace import Workspace

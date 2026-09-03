@@ -18,7 +18,7 @@ The middle line is the whole point. A background command's later output cannot b
 as a `tool` message, because the call it came from was answered when it returned the handle,
 and each call is answered once. It cannot be an `assistant` message, because the model did
 not say it. So it is not delivered at all -- it is *fetched*, which makes it the genuine
-result of a genuine call. `inbox.py` argues this at length; this module is what it buys.
+result of a genuine call. `state/inbox.py` argues this at length; this module is what it buys.
 
 ## One table, two intentions
 
@@ -56,7 +56,7 @@ from uuid import uuid4
 
 from harness.exec.monitor import Monitor
 from harness.exec.spawn import OWN_SESSION, Child, Stopping
-from harness.inbox import Inbox
+from harness.state.inbox import Inbox
 from harness.types import Envelope, Source
 
 log = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class Process:
     child: Child
     #: Who is reading this, if anyone. The whole answer to "does this one stream?".
     monitor: Monitor | None = field(default=None, repr=False)
-    #: The tool call that started it. For tracing, never for delivery -- see `inbox.py`.
+    #: The tool call that started it. For tracing, never for delivery -- see `state/inbox.py`.
     call_id: str | None = None
     code: int | None = None
 

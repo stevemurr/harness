@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from harness.agent import SYSTEM_PROMPT
-from harness.plan import Plan
+from harness.state.plan import Plan
 from harness.tools.plan import plan_tools
 from harness.tools.shell import shell_tools
 

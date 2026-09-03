@@ -1,4 +1,5 @@
-"""Every number worth tuning, in one file.
+"""Every number worth tuning, in one file. What a run is handed; `config` is what a
+deployment writes down, and produces this.
 
 These were scattered as module constants across `agent/loop.py`, `types.py`,
 `agent/compaction.py` and `tools/shell.py`, which is where a tunable goes when nobody has yet

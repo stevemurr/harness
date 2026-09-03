@@ -13,8 +13,8 @@ import pytest
 
 from conftest import ScriptedModel, calls
 from harness.agent import Agent, new_agent
-from harness.approval import Approvals, Decision, Policy, Request, deny_all
-from harness.mode import NORMAL, PLAN, Mode, ModeState
+from harness.state.approval import Approvals, Decision, Policy, Request, deny_all
+from harness.state.mode import NORMAL, PLAN, Mode, ModeState
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role
 

@@ -1,4 +1,8 @@
-"""Settings that survive between runs, so a terminal is not four exports long.
+"""What a deployment writes down: the file, and its precedence.
+
+`config` is the file and what it resolves to, provider and server included; `settings` is
+what a run is handed. This module reads the one and produces the other, and `settings`
+knows nothing about files.
 
 `~/.harness/config.toml`, beside `threads/`. Both front ends read it -- the terminal CLI and
 the HTTP server -- because a deployment that needs `chat_template_kwargs` needs it whichever

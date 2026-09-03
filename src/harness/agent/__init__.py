@@ -43,14 +43,14 @@ from harness.agent.compaction import (
 from harness.agent.environment import describe
 from harness.agent.loop import AgentLoop, Observer, Turn, system, user
 from harness.agent.runner import ToolRunner
-from harness.approval import Approvals
-from harness.board import Board
 from harness.exec.children import Children, Lineage, Spawner
-from harness.inbox import Inbox, render
-from harness.mode import ModeState
 from harness.prompts import prompt
 from harness.providers.base import Provider
 from harness.settings import Settings
+from harness.state.approval import Approvals
+from harness.state.board import Board
+from harness.state.inbox import Inbox, render
+from harness.state.mode import ModeState
 from harness.store.base import Store
 from harness.tools import Handler, Registry, ToolContext, new_registry
 from harness.tools.ask import Questioner

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from harness.approval import Decision, Request
 from harness.cli.terminal import bold, dim, yellow
+from harness.state.approval import Decision, Request
 
 
 async def approve(request: Request) -> Decision:

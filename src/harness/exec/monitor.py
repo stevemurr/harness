@@ -12,7 +12,7 @@ What is left in the table is identity and lifetime.
 
 Everything else that arrives mid-run is metadata: an id, a status, one line, and the model
 fetches the content itself with a real tool call. A monitor is the deliberate exception, and
-the reason is in `inbox.py`: the model wrote this filter and asked to be told, so a notice
+the reason is in `state/inbox.py`: the model wrote this filter and asked to be told, so a notice
 reading "3 new lines" would cost a turn to read every time and be no monitor at all. The text
 arrives fenced, attributed to the process rather than to a person.
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Protocol
 
 from harness.exec.spawn import Child
-from harness.inbox import Inbox
+from harness.state.inbox import Inbox
 from harness.types import Envelope, Source
 
 

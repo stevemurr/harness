@@ -22,8 +22,8 @@ from enum import StrEnum
 from hashlib import blake2s
 from uuid import uuid4
 
-from harness.approval import Decision, Policy, Request
 from harness.server.events import EventLog, Visibility
+from harness.state.approval import Decision, Policy, Request
 from harness.types import JSON
 
 #: The decision names a client may send, and what each one means here. `approve_bash_always`

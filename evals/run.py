@@ -34,15 +34,15 @@ from evals.verify import verify
 from harness import config
 from harness.agent import new_agent, spawning
 from harness.agent.loop import Observer, Turn
-from harness.approval import Approvals, Policy
-from harness.board import MemoryBoard
 from harness.config import bool_flag, flag, int_flag, load
 from harness.exec.children import Children
-from harness.inbox import Inbox
-from harness.mode import ModeState
 from harness.providers.base import Completion
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings
+from harness.state.approval import Approvals, Policy
+from harness.state.board import MemoryBoard
+from harness.state.inbox import Inbox
+from harness.state.mode import ModeState
 from harness.store import JsonlStore
 from harness.store.codec import encode
 from harness.tools import Handler

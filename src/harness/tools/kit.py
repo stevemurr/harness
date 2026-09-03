@@ -17,13 +17,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from harness.board import Board
 from harness.exec.children import Children, Lineage
 from harness.exec.processes import Processes
-from harness.inbox import Inbox
-from harness.mode import ModeState
-from harness.plan import Plan
 from harness.settings import Settings
+from harness.state.board import Board
+from harness.state.inbox import Inbox
+from harness.state.mode import ModeState
+from harness.state.plan import Plan
 from harness.symbols import servers
 from harness.symbols.base import Indexes
 from harness.tools.agents import agent_tools, report_tools

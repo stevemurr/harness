@@ -7,8 +7,8 @@ distinguishable after they have all been flattened into the one row the wire has
 
 from __future__ import annotations
 
-from harness.inbox import FRAMING, Envelope, Inbox, Source, render
 from harness.providers.openai import encode_message
+from harness.state.inbox import FRAMING, Envelope, Inbox, Source, render
 from harness.types import Role
 
 

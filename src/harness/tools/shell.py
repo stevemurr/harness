@@ -265,7 +265,7 @@ class ReadProcess:
     output lives in `~/.harness/processes/`, which is outside the workspace, so `read_file`
     would refuse it -- correctly. And fetching it here makes it the answer to a call the
     model actually made, which is the whole reason a process's output is never delivered
-    into the transcript on its own. See `inbox.py`.
+    into the transcript on its own. See `state/inbox.py`.
     """
 
     processes: Processes | None = None

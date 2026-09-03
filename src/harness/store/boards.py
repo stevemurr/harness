@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast, override
 
-from harness.board import MemoryBoard, Status, Task
+from harness.state.board import MemoryBoard, Status, Task
 from harness.types import as_dict
 
 

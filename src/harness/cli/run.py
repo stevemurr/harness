@@ -9,14 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.agent import new_agent, spawning
-from harness.approval import Approvals, Policy
-from harness.board import board_id_for
 from harness.cli.person import approve, ask_user
 from harness.cli.resolve import Commands, provider_flags, require_key, resolve
 from harness.cli.terminal import dim, red, render, render_child, report_compaction, yellow
 from harness.config import BOARDS, THREADS, Config, bool_flag, flag, int_flag
-from harness.mode import NORMAL, PLAN, ModeState
 from harness.providers.openai import OpenAICompatible
+from harness.state.approval import Approvals, Policy
+from harness.state.board import board_id_for
+from harness.state.mode import NORMAL, PLAN, ModeState
 from harness.store import JsonlStore
 from harness.store.base import StoreError
 from harness.store.boards import JsonlBoard

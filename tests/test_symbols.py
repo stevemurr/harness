@@ -411,7 +411,7 @@ async def test_the_backend_is_unavailable_rather_than_merely_broken(project: Pat
 async def test_the_tools_are_offered_in_plan_mode(project: Path) -> None:
     """Read-only, so `Mode.permits` keeps them -- and plan mode is where code search is
     worth the most, since the whole activity is reading before deciding."""
-    from harness.mode import PLAN
+    from harness.state.mode import PLAN
 
     tools = symbol_tools(Indexes([Fake(project)]))
 

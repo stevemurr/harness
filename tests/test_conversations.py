@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
-from harness.approval import Decision
 from harness.server.conversations import TERMINAL_STATUSES as TERMINAL
 from harness.server.conversations import Runtime
 from harness.server.events import Visibility
 from harness.server.runs import RunStatus, progress_id
 from harness.settings import Limits, Settings
+from harness.state.approval import Decision
 from harness.tools.shell import Shell
 from harness.types import Message, Role, ToolCall
 

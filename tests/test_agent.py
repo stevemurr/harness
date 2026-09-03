@@ -12,8 +12,8 @@ import pytest
 
 from conftest import Broken, ScriptedModel, calls, says
 from harness.agent import Agent, new_agent
-from harness.approval import Approvals, Policy, deny_all
 from harness.providers.base import ProviderError
+from harness.state.approval import Approvals, Policy, deny_all
 from harness.store import MemoryStore
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role
@@ -274,10 +274,10 @@ def test_the_system_prompt_never_names_a_tool_that_does_not_exist() -> None:
     import re
 
     from harness.agent import SYSTEM_PROMPT
-    from harness.board import MemoryBoard
     from harness.exec.children import Children
-    from harness.inbox import Inbox
-    from harness.mode import ModeState
+    from harness.state.board import MemoryBoard
+    from harness.state.inbox import Inbox
+    from harness.state.mode import ModeState
 
     # Every tool any kit can offer: the plain kit, a parent's, and a child's.
     children = Children(

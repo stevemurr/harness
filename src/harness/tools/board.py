@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from harness.board import Board, Status, Task
+from harness.state.board import Board, Status, Task
 from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
 from harness.types import ToolResult, ToolSpec
 

@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from harness.approval import Approvals
-from harness.inbox import Inbox
-from harness.mode import Mode, ModeState
+from harness.state.approval import Approvals
+from harness.state.inbox import Inbox
+from harness.state.mode import Mode, ModeState
 from harness.types import Agent, Envelope, Outcome, Source
 
 log = logging.getLogger(__name__)

@@ -32,7 +32,7 @@ class Role(StrEnum):
     #: Something that arrived for the run from outside it -- a person typing while it
     #: worked, a background command ending, a watched process printing. Recorded so the
     #: transcript says what actually happened, and flattened to `user` by `encode_message`
-    #: because the wire has no third-party slot. See `inbox.py`.
+    #: because the wire has no third-party slot. See `state/inbox.py`.
     ARRIVAL = "arrival"
 
 
@@ -108,7 +108,7 @@ class Message:
     #: `encode_message` flattens the role to `user`. That is enough for the model and not
     #: enough for the harness: `compaction.view` keeps a person's words across a boundary
     #: and lets a watch's output go, and telling those apart by matching the framing string
-    #: would make that wording load-bearing in a second place -- editable in `inbox.py`,
+    #: would make that wording load-bearing in a second place -- editable in `state/inbox.py`,
     #: silently breaking something in `agent/compaction.py`.
     source: Source | None = None
 

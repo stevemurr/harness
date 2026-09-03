@@ -20,11 +20,11 @@ import pytest
 from harness.agent import Agent, new_agent
 from harness.agent.compaction import MODE_NOTES, Meter, State, anchor_for, digest, view
 from harness.agent.loop import system, user
-from harness.approval import Approvals, Policy
-from harness.inbox import Envelope, Source, render
 from harness.providers.base import Completion, ProviderError
 from harness.server.conversations import _ending
 from harness.settings import Compaction, Settings
+from harness.state.approval import Approvals, Policy
+from harness.state.inbox import Envelope, Source, render
 from harness.store import JsonlStore, MemoryStore
 from harness.tools.kit import Toolkit
 from harness.types import Message, Role, StopReason, ToolCall, Transcript

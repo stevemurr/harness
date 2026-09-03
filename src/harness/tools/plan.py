@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from harness.plan import Plan, Status, Step
+from harness.state.plan import Plan, Status, Step
 from harness.tools.base import Arguments, Handler, MinItems, ToolContext, bind, spec_for
 from harness.types import ToolResult, ToolSpec
 

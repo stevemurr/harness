@@ -9,9 +9,9 @@ import jsonschema
 import pytest
 
 from harness.agent.runner import ToolRunner
-from harness.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
 from harness.providers.openai import decode_message, merge_tool_call_deltas
 from harness.settings import Output
+from harness.state.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
 from harness.tools import Registry, ToolContext, bind, new_registry
 from harness.tools.files import file_tools
 from harness.tools.shell import Command, Shell, _program
@@ -610,7 +610,7 @@ async def test_a_background_command_answers_with_a_handle_not_its_output(tmp_pat
     """The handle IS the tool result. That is why later output cannot also be one: the call
     has been answered, and each call is answered once."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -630,7 +630,7 @@ async def test_a_background_command_answers_with_a_handle_not_its_output(tmp_pat
 
 async def test_its_output_is_fetched_and_comes_back_as_a_tool_result(tmp_path) -> None:
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -650,7 +650,7 @@ async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path)
     """Metadata only. The output is a file the model can read when it wants to; putting it
     here would put text nobody in the conversation wrote into a user-shaped row."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox, Source
+    from harness.state.inbox import Inbox, Source
     from harness.tools.shell import shell_tools
 
     box = Inbox()
@@ -681,7 +681,7 @@ async def test_an_exit_puts_a_notice_in_the_inbox_and_never_the_output(tmp_path)
 async def test_closing_reaps_what_the_run_started(tmp_path) -> None:
     """An eval that leaves servers running accumulates them, each holding a port."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -704,7 +704,7 @@ async def test_a_monitor_reports_its_lines_as_they_arrive(tmp_path) -> None:
     """The one source that carries content, because a notice reading '3 new lines' would
     cost a turn to read every time, which is no watch at all."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox, Source
+    from harness.state.inbox import Inbox, Source
     from harness.tools.shell import shell_tools
 
     box = Inbox()
@@ -733,7 +733,7 @@ async def test_a_monitor_that_matches_everything_is_stopped(tmp_path) -> None:
     than compaction can clear it -- the newest turn is the part kept verbatim."""
     from harness.exec.monitor import FLOOD
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     box = Inbox(limit=500)
@@ -759,7 +759,7 @@ async def test_a_monitor_that_matches_everything_is_stopped(tmp_path) -> None:
 
 async def test_reading_and_stopping_a_monitor_that_is_not_there(tmp_path) -> None:
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -780,7 +780,7 @@ async def test_a_command_that_detaches_itself_is_refused(tmp_path) -> None:
     shell, saw it exit in 0s, and the real script ran on where nothing could reach it. The
     second is worse, because it looks like it worked."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
     from harness.tools.shell import shell_tools
 
     processes = Processes(inbox=Inbox(), root=tmp_path / "out")
@@ -818,7 +818,7 @@ async def test_a_monitor_on_a_command_that_just_exits_says_it_was_the_wrong_tool
     say to use `run` for those, and saying it there did not work -- it is read once, long
     before the moment it applies. This says it at the moment it applies."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
 
     (tmp_path / "app.log").write_text("INFO nothing interesting\n")
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
@@ -838,7 +838,7 @@ async def test_a_monitor_on_a_command_that_just_exits_says_it_was_the_wrong_tool
 async def test_a_monitor_that_actually_streams_is_left_alone(tmp_path) -> None:
     """The check has to be narrow enough that a real watch is never lectured."""
     from harness.exec.processes import Processes
-    from harness.inbox import Inbox
+    from harness.state.inbox import Inbox
 
     processes = Processes(inbox=(box := Inbox()), root=tmp_path / "out")
 

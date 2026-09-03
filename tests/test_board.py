@@ -6,8 +6,8 @@ from pathlib import Path
 
 from conftest import ScriptedModel, calls, says
 from harness.agent import new_agent, spawning
-from harness.approval import Approvals, Policy
-from harness.board import MemoryBoard, Status, Task, board_id_for
+from harness.state.approval import Approvals, Policy
+from harness.state.board import MemoryBoard, Status, Task, board_id_for
 from harness.store.boards import JsonlBoard
 from harness.store.memory import MemoryStore
 from harness.tools import ToolContext

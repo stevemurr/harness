@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.agent.compaction import view
-from harness.approval import Approvals, Policy
 from harness.exec.children import Children, Lineage
-from harness.inbox import Inbox, render
-from harness.mode import NORMAL, PLAN, ModeState
+from harness.state.approval import Approvals, Policy
+from harness.state.inbox import Inbox, render
+from harness.state.mode import NORMAL, PLAN, ModeState
 from harness.tools import ToolContext
 from harness.tools.kit import Toolkit
 from harness.types import (

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Annotated
 
-from harness.mode import ModeState
+from harness.state.mode import ModeState
 from harness.tools.base import Arguments, Handler, ToolContext, bind, spec_for
 from harness.types import ToolResult, ToolSpec
 

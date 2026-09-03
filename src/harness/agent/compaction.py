@@ -21,7 +21,7 @@ view of it, and a pure function cannot disagree with its input.
 return a string that becomes a TOOL message: it has no path to the transcript (`ToolContext`
 is `paths`, deliberately), it runs after the oversized request has already gone out, and a
 boundary placed around a tool result would create exactly the dangling call
-`Transcript.unanswered_calls` refuses. The principled objection is the same one `plan.py`
+`Transcript.unanswered_calls` refuses. The principled objection is the same one `state/plan.py`
 makes: compaction *is* control state, and a model that could compact away an instruction it
 disliked would be a failure with no detection.
 """
@@ -52,7 +52,7 @@ from harness.types import Message, Role, Source, Transcript
 #: with `--plan` asserts read-only forever -- and the only thing contradicting it is the tool
 #: result from `exit_plan_mode`, which sits far behind any kept tail and is the first thing
 #: compaction summarises. Without this the model wakes to a system prompt saying it may not
-#: write, tools that say it may, and no record of the approval; `mode.py` withholds
+#: write, tools that say it may, and no record of the approval; `state/mode.py` withholds
 #: `exit_plan_mode` in normal mode, so it cannot even ask again.
 MODE_NOTES = {
     True: (

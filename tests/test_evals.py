@@ -211,9 +211,9 @@ def test_the_base_arm_goes_without_searching_and_delegating(tmp_path: Path) -> N
     them."""
     from evals.run import Recording, assemble
 
-    from harness.approval import Approvals
     from harness.providers.openai import OpenAICompatible
     from harness.settings import Settings
+    from harness.state.approval import Approvals
 
     provider = OpenAICompatible(base_url="http://x/v1", model="m")
     model = Recording(provider)

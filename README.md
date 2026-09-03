@@ -55,15 +55,17 @@ src/harness/
   workspace.py   path resolution and containment; tools never resolve their own
   settings.py    every number worth tuning, in one place
   config.py      ~/.harness/config.toml, read by both front ends
-  plan.py        the checklist one tool writes and a front end renders
-  mode.py        what a run may do; data, not an interface
-  inbox.py       what arrived for a run from outside a turn
+  state/         what a run carries, and a person controls or reads
+    approval.py  what may proceed without asking
+    mode.py      what a run may do; data, not an interface
+    plan.py      the checklist one tool writes and a front end renders
+    inbox.py     what arrived for a run from outside a turn
+    board.py     units of work shared across agents and runs
   prompts/       the system prompt and its pieces, with attribution
   agent/
     __init__.py  Agent, the interface; new_agent, the composition root
     loop.py      the agent loop
     runner.py    joins the registry to approvals
-    approval.py  what may proceed without asking
     compaction.py  the render, and when a long run hands off to a smaller context
     environment.py  what the model is told about the folder it is in
   tools/
@@ -154,7 +156,7 @@ and refuses to load a key from one that others can read.
 
 A view is a front end. Two exist and they share an unmodified core: the terminal CLI (216
 lines) and the HTTP server orca talks to (1,358). Nothing in `agent/loop.py`, `types.py`,
-`agent/runner.py`, `workspace.py`, `agent/approval.py`, `mode.py`, `plan.py` or any tool imports either
+`agent/runner.py`, `workspace.py`, `state/approval.py`, `state/mode.py`, `state/plan.py` or any tool imports either
 of them, and adding the server changed none of those files.
 
 **To build a view, supply four things.** They are ordinary callables and protocols, so a
@@ -347,7 +349,7 @@ second writer beside `append`.
 string that becomes a TOOL message: it has no path to the transcript (`ToolContext` is
 `paths`, deliberately), it runs *after* the oversized request has gone out, and a boundary
 placed around a tool result is the dangling call `unanswered_calls` refuses. The principled
-objection is the one `plan.py` makes -- compaction is control state, and a model that could
+objection is the one `state/plan.py` makes -- compaction is control state, and a model that could
 compact away an instruction it disliked would be a failure with no detection.
 
 The boundary points at its kept tail **by digest, not by index**. An index looks obviously

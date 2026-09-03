@@ -32,7 +32,6 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from harness.board import Status
 from harness.providers.base import Provider
 from harness.server.conversations import Conversation, Runtime
 from harness.server.runs import DECISIONS, CommandRefused, Run
@@ -44,6 +43,7 @@ from harness.server.workspaces import (
     workspace_id_for,
 )
 from harness.settings import Settings
+from harness.state.board import Status
 from harness.store.base import OnDisk, Store, StoreError
 from harness.types import JSON, Envelope, Source
 from harness.workspace import WorkspaceError

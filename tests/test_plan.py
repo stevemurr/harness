@@ -13,8 +13,8 @@ import pytest
 
 from conftest import ScriptedModel
 from harness.agent import Agent, new_agent
-from harness.approval import Approvals, Policy
-from harness.plan import Plan, Status, Step
+from harness.state.approval import Approvals, Policy
+from harness.state.plan import Plan, Status, Step
 from harness.tools import Registry, ToolContext, new_registry
 from harness.tools.kit import Toolkit
 from harness.tools.plan import plan_tools
