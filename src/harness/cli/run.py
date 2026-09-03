@@ -22,7 +22,7 @@ from harness.cli.terminal import (
 from harness.config import BOARDS, THREADS, Config, bool_flag, flag, int_flag
 from harness.mcp import connect_all
 from harness.providers.openai import OpenAICompatible
-from harness.state.approval import Approvals, Policy
+from harness.state.approval import Approvals, policy_for
 from harness.state.board import board_id_for
 from harness.state.mode import NORMAL, PLAN, ModeState
 from harness.store import JsonlStore
@@ -92,7 +92,15 @@ def handle(args: argparse.Namespace) -> int:
 
 async def _run(args: Flags, config: Config) -> int:
     provider = OpenAICompatible.from_settings(config.provider, max_tokens=args.max_tokens)
-    approvals = Approvals(policy=Policy(approve_everything=args.yes), ask=approve)
+    # `-y` is full access; otherwise the config's policy and its standing rules, the same
+    # ones the server and the editor read, so a rule set once holds through every door.
+    approvals = Approvals(
+        policy=policy_for(
+            "full-access" if args.yes else config.settings.approval.policy,
+            standing=config.settings.approval.always_allow,
+        ),
+        ask=approve,
+    )
     folder = Path(args.folder).expanduser().resolve()
     store = JsonlStore(THREADS.expanduser())
     board = JsonlBoard(path=BOARDS.expanduser() / f"{board_id_for(folder)}.jsonl")

@@ -23,7 +23,7 @@ from hashlib import blake2s
 from uuid import uuid4
 
 from harness.server.events import EventLog, Visibility
-from harness.state.approval import Decision, Policy, Request
+from harness.state.approval import Decision, Request
 from harness.tools.kinds import kind_for
 from harness.types import JSON
 
@@ -35,21 +35,6 @@ DECISIONS = {
     "approve_bash_always": Decision.ALLOW_ALWAYS,
     "reject": Decision.DENY,
 }
-
-#: The policy names this backend understands. A client passes whatever `/permissions` was
-#: set to and the vocabulary is ours, so it is deliberately two words.
-POLICY_NAMES = ("safe", "full-access")
-
-
-def policy_for(name: str) -> Policy:
-    """A fresh policy per run. An unknown name is `safe`.
-
-    Failing towards asking, because a typo must not be how a run acquires full access --
-    and `approve_everything` is the setting whose own docstring says nobody should turn it
-    on without noticing.
-    """
-    return Policy(approve_everything=name == "full-access")
-
 
 #: What a person is told about the boundary, per tool. Two sentences because there really
 #: are two boundaries: structured writes are contained by `Workspace`, and `run` is not
@@ -333,6 +318,7 @@ class Run:
                 "risk": "high" if shell else "medium",
                 "arguments": arguments,
                 "allowed_decisions": _allowed_decisions(request),
+                "grant": grant_summary(request),
             },
         )
         try:
@@ -375,6 +361,31 @@ def _allowed_decisions(request: Request) -> list[str]:
     if request.tool == "exit_plan_mode":
         return ["approve", "reject"]
     return ["approve", "approve_bash_always", "reject"]
+
+
+def grant_summary(request: Request) -> str:
+    """What answering "always" would cover, in words: `git commands`, `file writes`.
+
+    A client shows it on the choice, so a person knows the reach of a grant before making
+    it. The decision is named `approve_bash_always` on the wire and the scope was never
+    the shell alone -- a write tool's grant covers every write -- but nothing said so,
+    and a choice whose scope is unstated is one people read as the narrowest or the
+    widest thing it could be, and are wrong either way. Empty when "always" is not
+    offered.
+    """
+    if "approve_bash_always" not in _allowed_decisions(request):
+        return ""
+    key = request.grant_key
+    if key.startswith("run:"):
+        return f"{key[len('run:') :]} commands"
+    return _GRANT_WORDS.get(key, f"{request.tool} calls")
+
+
+_GRANT_WORDS = {
+    "write_file": "file writes",
+    "edit_file": "file edits",
+    "delegate": "delegating to other agents",
+}
 
 
 def one_line(text: str, limit: int = 200) -> str:

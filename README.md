@@ -99,6 +99,10 @@ per_turn = 120000          # shared across every call in one turn
 max_turns = 0              # 0 means no limit; set one to cap a run
 max_consecutive_refusals = 10
 
+[approval]
+policy = "ask"             # ask | edits | full-access; what a run gets unless the client says
+always_allow = ["run:git", "run:uv"]   # never ask about these; a grant key, fnmatch allowed
+
 [mcp.servers.files]        # a tool server, one table each; see "Tool servers" below
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
@@ -132,11 +136,15 @@ The dataclass is the schema the model sees; arguments are validated against it b
 | other agents | `delegate`, `wait_agents`, `tell_agent`, `read_agent`, `stop_agent`, `report` |
 | the board | `post_task`, `list_tasks`, `claim_task`, `finish_task` |
 
-**Approval, and no sandbox.** Reads are never asked about. Anything that can change the
-machine asks once; you can answer "always" for that program for the session, or set
-standing rules. `run` executes with your authority and is not sandboxed: structured writes
-are contained to the folder and to unprotected paths, but nothing can see inside
-`bash -c`. The boundary is the person reading the command.
+**Approval, and no sandbox.** Reads are never asked about. What else asks is the approval
+policy, which a person names -- `ask` about anything that changes the machine, `edits` to
+let file writes in the folder through and still ask about commands, delegation and tool
+servers, or `full-access` to ask about nothing. Any policy honours the standing rules in
+`[approval] always_allow`, and answering "always" to a prompt adds one for the session:
+for a command that is the program (`git`, not the command line), for a write tool every
+write, and the prompt says which. `run` executes with your authority and is not sandboxed:
+structured writes are contained to the folder and to unprotected paths, but nothing can see
+inside `bash -c`. The boundary is the person reading the command.
 
 **Plan mode.** `harness run --plan` starts read-only. The agent reads, proposes a plan with
 `exit_plan_mode`, and nothing changes until you approve it. A person sets the mode, never
@@ -221,7 +229,7 @@ an approval waits for the person, and approvals, questions and steering arrive a
 
 | method | path | |
 |---|---|---|
-| `GET` | `/api/v1/health`, `/api/v1/capabilities` | liveness and protocol version |
+| `GET` | `/api/v1/health`, `/api/v1/capabilities` | liveness; the protocol version, and the modes and approval policies a client may offer |
 | `GET` `POST` | `/api/v1/workspaces` | registered folders |
 | `GET` `POST` | `/api/v1/workspaces/{id}/tasks` | the folder's board |
 | `GET` `POST` | `/api/v1/folders` | browse and create directories, for a picker |

@@ -133,16 +133,55 @@ def own_group(pid: int) -> bool | None:
 def terminate(process: Spawned, sig: int = signal.SIGKILL) -> None:
     """Signal the process and everything it started.
 
+    The group first, then every descendant the group did not cover. A child that puts
+    itself in a new group -- `swift test` runs `xctest` that way -- escapes a group kill
+    and lives on with its parent gone: measured on 2026-09-03 as twenty-odd orphaned
+    `xctest` processes accumulated over a day of stopping test runs that never ended. The
+    descendants are listed *before* anything is signalled, because the moment the parent
+    dies its children are re-parented to init and the tree cannot be walked.
+
     Falls back to signalling the one process where the group is gone, cannot be signalled, or
     would be ours. That fallback is the old behaviour, and it is right in exactly the case
     where there is nothing else left to kill.
     """
+    strays = descendants(process.pid)
     if own_group(process.pid) is False:
         with contextlib.suppress(OSError, ProcessLookupError):
             os.killpg(os.getpgid(process.pid), sig)
-            return
-    with contextlib.suppress(ProcessLookupError):
-        process.kill()
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    for pid in strays:
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.kill(pid, sig)
+
+
+def descendants(pid: int) -> list[int]:
+    """Every process below `pid`, from one `ps` listing.
+
+    One listing, walked in memory, rather than a query per level: it is called from a
+    `finally` that may be running under cancellation, and it has to be quick and cannot
+    await. Empty when `ps` is not there or will not answer, which leaves the group kill to
+    do what it did before.
+    """
+    try:
+        listed = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=2.0
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in listed.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found: list[int] = []
+    frontier = [pid]
+    while frontier:
+        below = children.get(frontier.pop(), [])
+        found.extend(below)
+        frontier.extend(below)
+    return found
 
 
 @dataclass(slots=True)

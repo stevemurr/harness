@@ -21,6 +21,7 @@ import asyncio
 import os
 import re
 import shlex
+import time
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -242,6 +243,22 @@ class ProcessRef(Arguments):
     process_id: Annotated[str, "The id `run` gave you when it started, like proc_1a2b."]
 
 
+#: The longest one read may wait, in seconds. Ten minutes covers a build or a test run; a
+#: model wanting longer asks again, and each ask is one turn rather than a hundred.
+WAIT_LIMIT = 600
+
+
+@dataclass(frozen=True, slots=True)
+class Reading(Arguments):
+    process_id: Annotated[str, "The id `run` gave you when it started, like proc_1a2b."]
+    wait: Annotated[
+        int,
+        "Seconds to wait for the process to exit or print something new before answering. "
+        + "0 answers at once. Use this rather than reading again and again: a read that "
+        + "waits costs one turn, and one that does not costs one per look.",
+    ] = 0
+
+
 @dataclass(frozen=True, slots=True)
 class MonitorRef(Arguments):
     monitor_id: Annotated[str, "The id `monitor` gave you."]
@@ -270,18 +287,22 @@ class ReadProcess:
 
     processes: Processes | None = None
     spec: ToolSpec = field(default=spec_for(
-        ProcessRef,
+        Reading,
         name="read_process",
         description=(
             "Show what a background command has printed so far, most recent output last. "
-            + "Works while it is still running and after it has ended."
+            + "Works while it is still running and after it has ended. To wait for it, pass "
+            + "`wait`: the answer comes when it exits, prints more, or the seconds run out, "
+            + "whichever is first -- one call, instead of one per look."
         ),
     ))
 
-    def preview(self, args: ProcessRef, /) -> tuple[str, str]:
+    def preview(self, args: Reading, /) -> tuple[str, str]:
+        if args.wait:
+            return f"read {args.process_id}, waiting up to {args.wait}s", "read_process"
         return f"read {args.process_id}", "read_process"
 
-    async def run(self, args: ProcessRef, _ctx: ToolContext, /) -> ToolResult:
+    async def run(self, args: Reading, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
             return ToolResult("no background commands here", ok=False, refused=True)
         process = self.processes.get(args.process_id)
@@ -290,8 +311,26 @@ class ReadProcess:
             return ToolResult(
                 f"no process {args.process_id!r}. Running: {known}", ok=False, refused=True
             )
+
         text = self.processes.read(args.process_id) or ""
+        waited = 0.0
+        if args.wait > 0 and process.running:
+            # Until it exits or says something new. Polled rather than watched: the output
+            # is a file the child writes on its own, which is the point of it being a file
+            # (`Processes.start`), and a poll every half second is nothing beside the model
+            # call this replaces.
+            deadline = time.monotonic() + min(args.wait, WAIT_LIMIT)
+            seen = len(text)
+            while process.running and time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+                text = self.processes.read(args.process_id) or ""
+                if len(text) != seen:
+                    break
+            waited = min(args.wait, WAIT_LIMIT) - max(deadline - time.monotonic(), 0)
+
         state = "still running" if process.running else f"exited {process.code}"
+        if waited and process.running:
+            state += f" after waiting {waited:.0f}s"
         if not text.strip():
             return ToolResult(f"[{state}, no output yet]")
         return ToolResult(f"[{state}]\n{text.rstrip()}")

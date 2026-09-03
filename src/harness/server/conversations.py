@@ -45,14 +45,13 @@ from harness.server.runs import (
     Run,
     RunStatus,
     one_line,
-    policy_for,
     progress_id,
 )
 from harness.settings import Settings
-from harness.state.approval import Approvals
+from harness.state.approval import Approvals, policy_for
 from harness.state.board import Board, MemoryBoard, board_id_for
 from harness.state.inbox import Inbox
-from harness.state.mode import NORMAL, PLAN, ModeState
+from harness.state.mode import NORMAL, ModeState, mode_for
 from harness.state.plan import Plan
 from harness.store.base import Store
 from harness.store.boards import JsonlBoard
@@ -621,8 +620,10 @@ class Runtime:
         )
 
         conversation.approvals.ask = run.ask
-        conversation.approvals.policy = policy_for(policy)
-        conversation.modes.current = PLAN if mode == "plan" else NORMAL
+        conversation.approvals.policy = policy_for(
+            policy, standing=self.settings.approval.always_allow
+        )
+        conversation.modes.current = mode_for(mode) or NORMAL
 
         run.task = asyncio.create_task(
             self._execute(conversation, run), name=f"run:{run.run_id}"

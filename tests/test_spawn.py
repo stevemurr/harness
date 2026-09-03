@@ -64,3 +64,26 @@ async def test_stopping_is_carried_by_the_child_not_remembered_by_the_caller() -
     await child.stop()
 
     assert not child.running
+
+
+async def test_stopping_reaches_a_child_that_left_the_group(tmp_path: Path) -> None:
+    """`swift test` runs `xctest` in a group of its own, so a group kill left it running
+    with its parent gone -- twenty-odd of them, over a day. Stop kills the tree."""
+    marker = tmp_path / "grandchild.pid"
+    command = (
+        'python3 -c "import os, subprocess, time; '
+        + "p = subprocess.Popen(['sleep', '60'], start_new_session=True); "
+        + f"open('{marker}', 'w').write(str(p.pid)); time.sleep(60)\""
+    )
+    async with scoped(command) as child:
+        for _ in range(100):
+            if marker.exists() and marker.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+        grandchild = int(marker.read_text())
+        assert own_group(grandchild) is False
+        await child.stop()
+
+    await asyncio.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.kill(grandchild, 0)

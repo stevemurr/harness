@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from harness.state.approval import Approvals, Request
 from harness.state.mode import ModeState
 from harness.tools import Registry, ToolContext
+from harness.tools.kinds import kind_for
 from harness.types import ToolCall, ToolResult
 from harness.workspace import Workspace
 
@@ -33,6 +35,14 @@ class ToolRunner:
     #: in. A refusal cannot turn into an acceptance on its own, so asking again with the
     #: same arguments is a loop rather than a retry -- see `_looping`.
     _refused: dict[str, tuple[str, str]] = field(default_factory=dict, repr=False)
+    #: The last call and its answer, and how many times in a row that exact pair has come
+    #: back. The other loop -- see `_repeating`.
+    _streak: tuple[str, str, int] | None = field(default=None, repr=False)
+
+    #: How many identical answers in a row a model may collect before the next identical
+    #: call is refused. Three is enough to be sure it is not looking for a change that
+    #: takes a moment, and few enough that the fourth is not the two-hundredth.
+    STREAK: ClassVar[int] = 3
 
     async def run(self, call: ToolCall) -> ToolResult:
         if (again := self._looping(call)) is not None:
@@ -69,6 +79,7 @@ class ToolRunner:
                 summary=summary,
                 arguments=call.arguments,
                 grant_key=grant_key,
+                kind=kind_for(tool.spec.name),
             ),
         )
         if not allowed:
@@ -95,7 +106,47 @@ class ToolRunner:
             self._refused[self._fingerprint(call)] = (self.modes.current.name, result.content)
         elif result.refused:
             self._refused[self._fingerprint(call)] = ("", result.content)
-        return result
+        return self._repeating(call, result)
+
+    def _repeating(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        """The result, unless it is the same answer to the same call for the fourth time
+        running -- then the loop is named instead.
+
+        The other loop, and the one `_looping` was written not to catch: a call that
+        succeeds, says the same thing, and is made again. Measured 2026-09-03: a run called
+        `read_process` on a hung test **204 times** over fifty minutes, one model call each,
+        and every answer was the same three lines. Nothing said so, because only refusals
+        were remembered.
+
+        The call is dispatched and *then* compared, never refused up front: the world may
+        have changed -- the process printed, the file grew -- and a guard that blocked the
+        look would hide exactly the change the model was looking for. Replacing an answer
+        the model has already read three times costs it nothing.
+
+        Consecutive, not cumulative. A re-read after a compaction is one call, not a streak,
+        and any other call in between starts the count again -- so a model that reads a
+        process while doing other work is never refused. The replacement is not remembered
+        as a refusal, so the next identical call is dispatched and compared again; it
+        counts as one, so a run that keeps going regardless ends the way a stuck run does.
+        """
+        key = self._fingerprint(call)
+        if self._streak is not None and self._streak[:2] == (key, result.content):
+            self._streak = (key, result.content, self._streak[2] + 1)
+        else:
+            self._streak = (key, result.content, 1)
+        count = self._streak[2]
+        if not result.ok or count <= self.STREAK:
+            return result
+        return ToolResult(
+            f"You have called {call.name} with exactly these arguments {count} times in a "
+            + "row and the answer has not changed. Calling it again will not change it. If "
+            + "you are waiting for something, wait for it: read_process takes a `wait` in "
+            + "seconds and answers when the process exits or prints more, and a background "
+            + "command that exits when a condition holds tells you once. If nothing you can "
+            + "do will change the answer, say so and stop.",
+            ok=False,
+            refused=True,
+        )
 
     def _looping(self, call: ToolCall) -> ToolResult | None:
         """Whether this exact call has already been refused, and nothing has changed.

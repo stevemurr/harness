@@ -56,7 +56,7 @@ from harness.jsonrpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, P
 from harness.mcp import McpServer, Server, connect_all, from_acp
 from harness.providers.base import Chunk, Listener, Provider
 from harness.settings import Settings
-from harness.state.approval import Approvals, Approver, Decision, Request
+from harness.state.approval import Approvals, Approver, Decision, Request, policy_for
 from harness.state.board import Board, MemoryBoard, board_id_for
 from harness.state.inbox import Inbox
 from harness.state.mode import NORMAL, PLAN, ModeState
@@ -552,7 +552,11 @@ class _Sessions:
             raise RpcError(INVALID_REQUEST, "no connection")
         modes = ModeState()
         inbox = Inbox()
-        approvals = Approvals()
+        approvals = Approvals(
+            policy=policy_for(
+                self.settings.approval.policy, standing=self.settings.approval.always_allow
+            )
+        )
         board = self._board_for(root)
         child_kits: list[Toolkit] = []
 

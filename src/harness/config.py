@@ -39,7 +39,8 @@ from pathlib import Path
 from typing import cast
 
 from harness.mcp.base import McpServer
-from harness.settings import Compaction, Limits, Output, Settings
+from harness.settings import Approval, Compaction, Limits, Output, Settings
+from harness.state.approval import POLICY_NAMES, named_policy
 from harness.types import JSON
 
 #: Where the harness keeps its own things: config, threads, boards, language servers. One
@@ -72,7 +73,10 @@ _OUTPUT_KEYS = frozenset({"per_result", "per_turn"})
 _LIMITS_KEYS = frozenset({"max_turns", "max_consecutive_refusals"})
 _MCP_KEYS = frozenset({"servers"})
 _MCP_SERVER_KEYS = frozenset({"command", "args", "env", "url", "headers"})
-_TABLES = frozenset({"provider", "server", "compaction", "output", "limits", "mcp"})
+_APPROVAL_KEYS = frozenset({"policy", "always_allow"})
+_TABLES = frozenset({
+    "provider", "server", "compaction", "output", "limits", "mcp", "approval",
+})
 
 
 class ConfigError(Exception):
@@ -150,6 +154,13 @@ def load(path: Path | None = None) -> Config:
     output = _table(raw, "output", _OUTPUT_KEYS, resolved)
     limits = _table(raw, "limits", _LIMITS_KEYS, resolved)
     mcp = _mcp_servers(_table(raw, "mcp", _MCP_KEYS, resolved))
+    approval = _table(raw, "approval", _APPROVAL_KEYS, resolved)
+    policy = approval.text("policy", Approval().policy)
+    if named_policy(policy) is None:
+        raise ConfigError(
+            f"{resolved}: approval.policy {policy!r} is not one of: "
+            + f"{', '.join(POLICY_NAMES)}."
+        )
 
     extra = provider.values.get("extra_body", {})
     if not isinstance(extra, dict):
@@ -194,6 +205,10 @@ def load(path: Path | None = None) -> Config:
                 max_consecutive_refusals=limits.integer(
                     "max_consecutive_refusals", Limits().max_consecutive_refusals
                 ),
+            ),
+            approval=Approval(
+                policy=policy,
+                always_allow=tuple(str(rule) for rule in _strings(approval, "always_allow")),
             ),
         ),
         mcp=mcp,
@@ -379,6 +394,12 @@ def write_example(path: Path | None = None) -> Path:
         + f'host = "{DEFAULT_HOST}"\n'
         + f"port = {DEFAULT_PORT}\n"
         + '# token = ""   # set to require a bearer token; empty means no auth\n'
+        + "\n"
+        + "# What asks before it runs. ask | edits | full-access; and standing rules by\n"
+        + "# grant key: run:<program> for a command, write_file for every write.\n"
+        + "# [approval]\n"
+        + '# policy = "ask"\n'
+        + '# always_allow = ["run:git"]\n'
         + "\n"
         + "# Summarise and hand off to a smaller context at this fraction of the window.\n"
         + "# [compaction]\n"

@@ -42,7 +42,7 @@ def runtime_for(model, tmp_path: Path, settings: Settings | None = None) -> Runt
 async def drive(runtime: Runtime, folder: Path, message: str, **kw):
     conversation = runtime.conversation("thr_1", folder, "ws_1")
     run = runtime.start(
-        conversation, message, mode=kw.pop("mode", "auto"), policy=kw.pop("policy", "safe")
+        conversation, message, mode=kw.pop("mode", "normal"), policy=kw.pop("policy", "ask")
     )
     if run.task is not None:
         await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
@@ -64,15 +64,15 @@ async def test_a_run_opens_with_run_created_carrying_what_was_asked(folder, tmp_
     """A client reading from `after_seq=0` must find the request as its first row."""
     runtime = runtime_for(ScriptedModel(says("done")), tmp_path)
 
-    run = await drive(runtime, folder, "add a test", mode="auto", policy="safe")
+    run = await drive(runtime, folder, "add a test", mode="normal", policy="ask")
 
     first = run.events.since(0)[0]
     assert first.seq == 1
     assert first.type == "run.created"
     assert first.payload == {
         "message": "add a test",
-        "mode": "auto",
-        "approval_policy": "safe",
+        "mode": "normal",
+        "approval_policy": "ask",
     }
 
 
@@ -162,7 +162,7 @@ async def test_a_run_that_hit_the_turn_limit_did_not_complete(folder, tmp_path) 
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
-    run = runtime.start(conversation, "go", mode="auto", policy="full-access")
+    run = runtime.start(conversation, "go", mode="normal", policy="full-access")
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
 
     assert types_of(run)[-1] == "run.failed"
@@ -233,7 +233,7 @@ async def test_the_active_row_is_published_before_the_tool_returns(
 
     monkeypatch.setattr(Shell, "run", blocked)
 
-    run = runtime.start(conversation, "go", mode="auto", policy="full-access")
+    run = runtime.start(conversation, "go", mode="normal", policy="full-access")
     await asyncio.wait_for(started.wait(), timeout=5)
     await asyncio.sleep(0)
 
@@ -269,7 +269,7 @@ async def test_a_denied_call_is_one_failed_row_and_the_run_carries_on(folder, tm
     async def refuse(request):
         return Decision.DENY
 
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     conversation.approvals.ask = refuse
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
 
@@ -359,7 +359,7 @@ async def test_an_approval_parks_the_run_until_a_client_answers(folder, tmp_path
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     await _until(lambda: payloads(run, "approval.requested"))
 
     request = payloads(run, "approval.requested")[0]
@@ -367,6 +367,8 @@ async def test_an_approval_parks_the_run_until_a_client_answers(folder, tmp_path
     assert request["title"] == "run: ls -la"
     assert request["risk"] == "high"
     assert request["allowed_decisions"] == ["approve", "approve_bash_always", "reject"]
+    # What "always" would cover, said on the request so the client can say it on the choice.
+    assert request["grant"] == "ls commands"
     # The command line as it will actually be run, not a re-quoted approximation of it.
     assert request["arguments"]["argv"] == ["/bin/sh", "-c", "ls -la"]
     assert not run.task.done()
@@ -392,7 +394,7 @@ async def test_always_grants_for_the_session_so_the_next_one_does_not_ask(
         tmp_path,
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
 
     await _until(lambda: payloads(run, "approval.requested"))
     first = payloads(run, "approval.requested")[0]
@@ -413,12 +415,13 @@ async def test_exit_plan_mode_is_not_offered_a_session_grant(folder, tmp_path) -
         tmp_path,
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="plan", policy="safe")
+    run = runtime.start(conversation, "go", mode="plan", policy="ask")
 
     await _until(lambda: payloads(run, "approval.requested"))
     request = payloads(run, "approval.requested")[0]
 
     assert request["allowed_decisions"] == ["approve", "reject"]
+    assert request["grant"] == ""
     assert request["title"] == "proceed with this plan?"
     assert request["summary"] == "1. read\n2. write"
 
@@ -448,7 +451,7 @@ async def test_cancel_ends_the_run_as_cancelled_with_one_terminal_event(
         ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     await _until(lambda: payloads(run, "approval.requested"))
 
     run.cancel()
@@ -470,7 +473,7 @@ async def test_a_paused_run_stops_before_the_next_tool_and_resumes(folder, tmp_p
         tmp_path,
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     run.pause()
 
     await asyncio.sleep(0.05)
@@ -491,7 +494,7 @@ async def test_a_conversation_and_its_transcript_share_one_id(folder, tmp_path) 
     runtime = runtime_for(ScriptedModel(says("done")), tmp_path)
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
-    run = runtime.start(conversation, "first", mode="auto", policy="safe")
+    run = runtime.start(conversation, "first", mode="normal", policy="ask")
     await _until(lambda: conversation.thread_id is not None)
     bound = conversation.thread_id
     await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
@@ -506,7 +509,7 @@ async def test_a_second_run_continues_the_same_transcript(folder, tmp_path) -> N
     conversation = runtime.conversation("thr_1", folder, "ws_1")
 
     for message in ("first", "second"):
-        run = runtime.start(conversation, message, mode="auto", policy="safe")
+        run = runtime.start(conversation, message, mode="normal", policy="ask")
         await asyncio.wait_for(asyncio.shield(run.task), timeout=5)
 
     stored = await runtime.store.load(conversation.thread_id)
@@ -522,11 +525,11 @@ async def test_two_runs_at_once_in_one_thread_are_refused(folder, tmp_path) -> N
         ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "first", mode="auto", policy="safe")
+    run = runtime.start(conversation, "first", mode="normal", policy="ask")
     await _until(lambda: payloads(run, "approval.requested"))
 
     with pytest.raises(CommandRefused):
-        runtime.start(conversation, "second", mode="auto", policy="safe")
+        runtime.start(conversation, "second", mode="normal", policy="ask")
 
     run.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -583,7 +586,7 @@ async def test_shutting_down_ends_a_run_in_flight_rather_than_dropping_it(
     model = ScriptedModel(calls(("c1", "list_dir", {})))
     runtime = runtime_for(model, tmp_path)
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="full-access")
+    run = runtime.start(conversation, "go", mode="normal", policy="full-access")
     await _until(lambda: run.status is RunStatus.RUNNING)
 
     await runtime.aclose()
@@ -681,7 +684,7 @@ async def test_an_approval_answered_while_paused_restates_the_pause(folder, tmp_
         tmp_path,
     )
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     while not run.approvals_open():
         await asyncio.sleep(0.01)
     run.pause()
@@ -710,7 +713,7 @@ async def test_a_paused_run_stops_before_the_next_model_call_too(folder, tmp_pat
     )
     runtime = runtime_for(model, tmp_path)
     conversation = runtime.conversation("thr_1", folder, "ws_1")
-    run = runtime.start(conversation, "go", mode="auto", policy="safe")
+    run = runtime.start(conversation, "go", mode="normal", policy="ask")
     while not run.approvals_open():
         await asyncio.sleep(0.01)
     run.pause()
@@ -833,7 +836,7 @@ async def test_a_thread_replays_its_runs_after_a_restart(folder, tmp_path) -> No
     )
 
     # The next live run continues the numbering, and the same cursor yields the same rows.
-    again = after.start(conversation, "once more", mode="auto", policy="safe")
+    again = after.start(conversation, "once more", mode="normal", policy="ask")
     assert again.run_id == "run_thr_1_3"
     assert again.task is not None
     await asyncio.wait_for(asyncio.shield(again.task), timeout=5)

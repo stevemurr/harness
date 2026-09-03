@@ -179,6 +179,20 @@ class Symbols:
 
 
 @dataclass(frozen=True, slots=True)
+class Approval:
+    """What may proceed without a question, as the config sets it up front.
+
+    `policy` names one of `harness.state.approval.POLICIES`, and is what a run gets when
+    the client does not say. `always_allow` are grant-key patterns that never ask, in any
+    policy: `run:git` for a program, `write_file` for a tool. The README promised standing
+    rules from the start; until 2026-09-03 nothing read them from anywhere.
+    """
+
+    policy: str = "ask"
+    always_allow: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """What a run may do and how much it may say. One object, assembled once.
 
@@ -193,3 +207,4 @@ class Settings:
     shell: Shell = field(default_factory=Shell)
     web: Web = field(default_factory=Web)
     symbols: Symbols = field(default_factory=Symbols)
+    approval: Approval = field(default_factory=Approval)

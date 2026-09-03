@@ -44,7 +44,9 @@ from harness.server.workspaces import (
     workspace_id_for,
 )
 from harness.settings import Settings
+from harness.state.approval import POLICIES, POLICY_NAMES, named_policy
 from harness.state.board import Status
+from harness.state.mode import MODE_NAMES, MODES, NORMAL, mode_for
 from harness.store.base import OnDisk, Store, StoreError
 from harness.types import JSON, Envelope, Source
 from harness.workspace import WorkspaceError
@@ -54,6 +56,27 @@ log = logging.getLogger(__name__)
 API = "/api/v1"
 PROTOCOL_VERSION = "1"
 
+
+def capabilities_payload() -> JSON:
+    """What a client may learn before it does anything.
+
+    The rule for what belongs here: a vocabulary the client will have to put in front of a
+    person as a choice. Modes and approval policies are choices -- a menu a person picks
+    from -- and a choice a client cannot see is a string a person has to guess. Each comes
+    with a summary so the pick is made on what it means rather than on the word.
+
+    What does not belong: a feature flag. A flag is a promise about this server's
+    architecture, and a client has no view that could honour one; the contract says
+    unknown events and fields are ignored, which is the whole mechanism for adding a
+    feature. So this grows by vocabulary, never by capability bit.
+    """
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "modes": [{"name": mode.name, "summary": mode.summary} for mode in MODES],
+        "approval_policies": [
+            {"name": policy.name, "summary": policy.summary} for policy in POLICIES
+        ],
+    }
 
 
 def is_id(value: str) -> bool:
@@ -126,7 +149,7 @@ def create_app(
     titles: dict[str, str] = {}
 
     async def capabilities(_request: Request) -> Response:
-        return JSONResponse({"protocol_version": PROTOCOL_VERSION})
+        return JSONResponse(capabilities_payload())
 
     async def health(_request: Request) -> Response:
         # The instance id is echoed, never invented. A client will not signal a process that
@@ -492,13 +515,24 @@ def create_app(
         if not message:
             raise ApiError(400, "invalid_request", "message.content is required.")
 
-        try:
-            run = runtime.start(
-                conversation,
-                message,
-                mode=str(body.get("mode") or "auto"),
-                policy=str(body.get("approval_policy") or "safe"),
+        # Both vocabularies are advertised under /capabilities, so a name not in them is
+        # a client that did not look, and is told the list rather than quietly given the
+        # default -- which for a policy would be the wrong thing to be quiet about.
+        mode = str(body.get("mode") or NORMAL.name)
+        if mode_for(mode) is None:
+            raise ApiError(
+                400, "unknown_mode", f"{mode!r} is not a mode. Modes: {', '.join(MODE_NAMES)}."
             )
+        policy = str(body.get("approval_policy") or runtime.settings.approval.policy)
+        if named_policy(policy) is None:
+            raise ApiError(
+                400,
+                "unknown_policy",
+                f"{policy!r} is not an approval policy. Policies: {', '.join(POLICY_NAMES)}.",
+            )
+
+        try:
+            run = runtime.start(conversation, message, mode=mode, policy=policy)
         except CommandRefused as exc:
             raise ApiError(409, "run_in_flight", str(exc)) from exc
 

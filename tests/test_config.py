@@ -67,6 +67,25 @@ def test_extra_body_is_a_nested_table(tmp_path: Path) -> None:
     assert config.provider.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+def test_the_approval_table_names_a_policy_and_standing_rules(tmp_path: Path) -> None:
+    path = written(
+        tmp_path, '[approval]\npolicy = "edits"\nalways_allow = ["run:git", "run:uv"]\n'
+    )
+
+    config = load(path)
+
+    assert config.settings.approval.policy == "edits"
+    assert config.settings.approval.always_allow == ("run:git", "run:uv")
+    assert load(written(tmp_path, "")).settings.approval.policy == "ask"
+
+
+def test_a_policy_nobody_defined_is_an_error_not_a_quiet_ask(tmp_path: Path) -> None:
+    path = written(tmp_path, '[approval]\npolicy = "yolo"\n')
+
+    with pytest.raises(ConfigError, match="ask, edits, full-access"):
+        _ = load(path)
+
+
 def test_a_typo_is_an_error_rather_than_a_setting_that_does_nothing(tmp_path: Path) -> None:
     """A silently ignored `base_ur1` is a person reading a correct-looking file and wondering
     why the default is in force."""

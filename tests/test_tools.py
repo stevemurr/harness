@@ -11,7 +11,17 @@ import pytest
 from harness.agent.runner import ToolRunner
 from harness.providers.openai import decode_message, merge_tool_call_deltas
 from harness.settings import Output
-from harness.state.approval import Approvals, Decision, Policy, Request, approve_all, deny_all
+from harness.state.approval import (
+    POLICIES,
+    Approvals,
+    Decision,
+    Policy,
+    Request,
+    approve_all,
+    deny_all,
+    named_policy,
+    policy_for,
+)
 from harness.tools import Registry, ToolContext, bind, new_registry
 from harness.tools.files import file_tools
 from harness.tools.shell import Command, Shell, _program
@@ -322,6 +332,40 @@ async def test_a_standing_policy_rule_skips_the_question(
 
     assert result.ok
     assert asked == []
+
+
+async def test_the_edits_policy_lets_writes_through_and_still_asks_about_commands(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """The scope of a policy reaches past the shell: a kind of tool as a whole."""
+    asked: list[Request] = []
+
+    async def record(request: Request) -> Decision:
+        asked.append(request)
+        return Decision.DENY
+
+    runner = ToolRunner(registry, ctx, Approvals(policy=policy_for("edits"), ask=record))
+    written = await runner.run(ToolCall("1", "write_file", {"path": "x.txt", "content": "hi"}))
+    ran = await runner.run(ToolCall("2", "run", {"command": "true"}))
+
+    assert written.ok
+    assert not ran.ok
+    assert [request.tool for request in asked] == ["run"]
+    assert asked[0].kind == "execute"
+
+
+def test_a_policy_is_found_by_name_and_carries_the_standing_rules() -> None:
+    assert [policy.name for policy in POLICIES] == ["ask", "edits", "full-access"]
+    assert named_policy("ask") is POLICIES[0]
+    assert named_policy("yolo") is None
+    # A typo asks about everything; it never widens.
+    assert not policy_for("yolo").approve_everything
+    assert policy_for("full-access").approve_everything
+
+    standing = policy_for("ask", standing=("run:git", "write_file"))
+    assert standing.permits(Request("run", "run: git status", {}, "run:git", kind="execute"))
+    assert not standing.permits(Request("run", "run: rm x", {}, "run:rm", kind="execute"))
+    assert standing.permits(Request("write_file", "write x", {}, "write_file", kind="edit"))
 
 
 async def test_approve_everything_asks_nothing(registry: Registry, ctx: ToolContext) -> None:
@@ -902,3 +946,126 @@ async def test_glob_and_grep_reach_the_extra_folders(tmp_path: Path) -> None:
         "a.py",
         str(other / "b.py"),
     ]
+
+
+# -- the same answer, over and over ---------------------------------------------------
+
+
+async def test_the_fourth_identical_answer_is_refused_and_names_the_loop(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """A run read a hung process 204 times, one model call each, and every answer was the
+    same. Refusals were remembered; successes were not."""
+    runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
+    call = ToolCall("c", "read_file", {"path": "src/main.py"})
+
+    answers = [await runner.run(call) for _ in range(4)]
+
+    assert [a.ok for a in answers] == [True, True, True, False]
+    assert answers[3].refused
+    assert "4 times in a row" in answers[3].content
+    assert "wait" in answers[3].content
+
+
+async def test_a_different_call_in_between_starts_the_count_again(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """Reading a process while doing other work is not a loop, and neither is re-reading
+    a file after a compaction."""
+    runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
+    read = ToolCall("c", "read_file", {"path": "src/main.py"})
+    other = ToolCall("d", "list_dir", {"path": "."})
+
+    for _ in range(3):
+        assert (await runner.run(read)).ok
+    assert (await runner.run(other)).ok
+    for _ in range(3):
+        assert (await runner.run(read)).ok
+
+
+async def test_a_changed_answer_starts_the_count_again(tmp_path: Path) -> None:
+    from harness.tools.files import file_tools
+
+    (tmp_path / "log.txt").write_text("one\n")
+    registry = new_registry(file_tools())
+    runner = ToolRunner(
+        registry, ToolContext(paths=Workspace.at(tmp_path)), Approvals(ask=approve_all)
+    )
+    call = ToolCall("c", "read_file", {"path": "log.txt"})
+
+    for _ in range(3):
+        assert (await runner.run(call)).ok
+    (tmp_path / "log.txt").write_text("one\ntwo\n")
+    changed = await runner.run(call)
+    assert changed.ok and "two" in changed.content
+    for _ in range(2):
+        assert (await runner.run(call)).ok
+
+
+# -- waiting for a background command ----------------------------------------------------
+
+
+async def test_read_process_can_wait_for_the_exit(tmp_path: Path) -> None:
+    """One call that waits, instead of one call per look."""
+    import time
+
+    from harness.exec.processes import Processes
+    from harness.state.inbox import Inbox
+    from harness.tools.shell import shell_tools
+
+    processes = Processes(inbox=Inbox(), root=tmp_path / "out")
+    run, read, *_ = shell_tools(processes=processes)
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    started = await run.call({"command": "sleep 0.7; echo finished", "background": True}, ctx)
+    process_id = started.content.split()[0]
+
+    clock = time.monotonic()
+    seen = await read.call({"process_id": process_id, "wait": 10}, ctx)
+    took = time.monotonic() - clock
+
+    assert seen.ok
+    assert "exited 0" in seen.content and "finished" in seen.content
+    assert took < 5, took  # returned on the exit, not at the end of the wait
+    await processes.aclose()
+
+
+async def test_read_process_returns_when_the_process_prints_more(tmp_path: Path) -> None:
+    import time
+
+    from harness.exec.processes import Processes
+    from harness.state.inbox import Inbox
+    from harness.tools.shell import shell_tools
+
+    processes = Processes(inbox=Inbox(), root=tmp_path / "out")
+    run, read, *_ = shell_tools(processes=processes)
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    started = await run.call(
+        {"command": "echo first; sleep 0.8; echo second; sleep 30", "background": True}, ctx
+    )
+    process_id = started.content.split()[0]
+    await asyncio.sleep(0.3)
+
+    clock = time.monotonic()
+    seen = await read.call({"process_id": process_id, "wait": 10}, ctx)
+    took = time.monotonic() - clock
+
+    assert "still running" in seen.content and "second" in seen.content
+    assert took < 5, took
+    await processes.aclose()
+
+
+async def test_read_process_without_wait_answers_at_once(tmp_path: Path) -> None:
+    from harness.exec.processes import Processes
+    from harness.state.inbox import Inbox
+    from harness.tools.shell import shell_tools
+
+    processes = Processes(inbox=Inbox(), root=tmp_path / "out")
+    run, read, *_ = shell_tools(processes=processes)
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    started = await run.call({"command": "sleep 30", "background": True}, ctx)
+    process_id = started.content.split()[0]
+
+    seen = await read.call({"process_id": process_id}, ctx)
+
+    assert "still running, no output yet" in seen.content
+    await processes.aclose()

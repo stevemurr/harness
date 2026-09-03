@@ -37,6 +37,8 @@ class Mode:
     """A named bundle of what is allowed and what the model is told about it."""
 
     name: str
+    #: For a client to show beside the name when a person picks one.
+    summary: str
     #: Whether tools that change things are offered at all. This reuses `ToolSpec.mutates`,
     #: which already exists for approvals -- the same axis answers both questions, so there
     #: is one place a tool declares its nature rather than two that can disagree.
@@ -61,8 +63,26 @@ class Mode:
         return not mutates or name == EXIT_PLAN_MODE
 
 
-NORMAL = Mode(name="normal", allow_mutating=True)
-PLAN = Mode(name="plan", allow_mutating=False, prompt=PLAN_PROMPT)
+NORMAL = Mode(
+    name="normal",
+    summary="Read and change things, asking as the approval policy says.",
+    allow_mutating=True,
+)
+PLAN = Mode(
+    name="plan",
+    summary="Read only, until you approve a plan.",
+    allow_mutating=False,
+    prompt=PLAN_PROMPT,
+)
+
+#: The modes a person may choose, in the order a client should list them.
+MODES: tuple[Mode, ...] = (NORMAL, PLAN)
+MODE_NAMES: tuple[str, ...] = tuple(mode.name for mode in MODES)
+
+
+def mode_for(name: str) -> Mode | None:
+    """The mode called `name`, or None for a name nobody defined."""
+    return next((mode for mode in MODES if mode.name == name), None)
 
 
 @dataclass

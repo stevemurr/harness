@@ -97,11 +97,45 @@ def parse(text: str) -> list[tuple[str, str, dict]]:
 # -- discovery ------------------------------------------------------------------------------
 
 
-async def test_capabilities_names_the_protocol(folder, tmp_path) -> None:
+async def test_capabilities_names_the_protocol_and_every_choice_a_client_offers(
+    folder, tmp_path
+) -> None:
+    """The modes and the policies are here because a client has to put them in front of a
+    person as a menu, and a menu needs the words and what each one means."""
     async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
         response = await client.get("/capabilities")
 
-    assert response.json() == {"protocol_version": "1"}
+    body = response.json()
+    assert body["protocol_version"] == "1"
+    assert [mode["name"] for mode in body["modes"]] == ["normal", "plan"]
+    assert [policy["name"] for policy in body["approval_policies"]] == [
+        "ask",
+        "edits",
+        "full-access",
+    ]
+    assert all(entry["summary"] for entry in body["modes"] + body["approval_policies"])
+
+
+async def test_a_mode_or_policy_not_advertised_is_refused_with_the_list(
+    folder, tmp_path
+) -> None:
+    async with client_for(app_for(ScriptedModel(says("ok")), tmp_path)) as client:
+        workspace_id = await register(client, folder)
+        thread = await client.post("/threads", json={"workspace_id": workspace_id})
+        runs = f"/threads/{thread.json()['thread_id']}/runs"
+        body = {"workspace_id": workspace_id, "message": {"content": "go"}}
+
+        bad_policy = await client.post(runs, json={**body, "approval_policy": "yolo"})
+        bad_mode = await client.post(runs, json={**body, "mode": "auto"})
+        named = await client.post(runs, json={**body, "approval_policy": "ask"})
+
+    assert bad_policy.status_code == 400
+    assert bad_policy.json()["detail"]["code"] == "unknown_policy"
+    assert "ask, edits, full-access" in bad_policy.json()["detail"]["message"]
+    assert bad_mode.status_code == 400
+    assert bad_mode.json()["detail"]["code"] == "unknown_mode"
+    assert "normal, plan" in bad_mode.json()["detail"]["message"]
+    assert named.status_code == 202
 
 
 async def test_health_echoes_the_instance_id_it_was_given(folder, tmp_path) -> None:
@@ -459,7 +493,7 @@ async def test_a_stream_reports_a_run_that_ended_without_a_terminal_event() -> N
     from harness.server.runs import Run
     from harness.server.stream import frames
 
-    run = Run(run_id="run_x", thread_id="thr_x", message="go", mode="auto", policy="safe")
+    run = Run(run_id="run_x", thread_id="thr_x", message="go", mode="normal", policy="ask")
     run.publish("run.created", {"message": "go"})
     run.task = asyncio.create_task(asyncio.sleep(0))
     await run.task
