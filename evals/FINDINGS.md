@@ -3,6 +3,40 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-03: the fleet, and delegation does not pay at this size
+
+`16-fleet`: sixteen independent packages, one planted bug each, ~130k characters of
+source. `results/2026-09-03-fleet`, both arms, n=2, no turn limit. **All four attempts
+passed 16/16.**
+
+    arm   attempt  delegated  turns  secs   parent peak
+    code  1        yes        35     579    199,523
+    code  2        no         59     290    125,339
+    base  1        --         66     530    200,872
+    base  2        --         55     441    165,585
+
+**Adoption is one in two, and the delegating run cost more.** The parent that delegated
+read one package itself, then made a single child to read and diagnose the other fifteen
+-- 95 reads, 17 test runs, no edits, 31 turns -- waited for it with `wait_agents`, the
+first live use, and then re-read the fifteen files the child had named before applying all
+sixteen edits itself. Ten minutes against five for the parent that read everything and
+fixed everything alone, and a higher peak, because the parent paid for the reads twice.
+The base arm read all sixteen packages alone at the same peak the delegating parent
+reached, well under the compaction threshold.
+
+**So the rung is not big enough either.** 130k characters of source fits in one context
+with room to spare, and a model given the choice keeps work it can hold. The delegation
+that did happen was the reading, which is the right instinct -- reading is what fills a
+context -- and it was undone by re-reading. What would make delegation pay is source that
+does not fit, or a parent that trusts a diagnosis it did not make; the first is a bigger
+fleet and the second is a prompt question this file's rule says to be careful with.
+
+**Two gaps in the record, found by reading.** A child's peak context is not in the
+sweep: the parent's row saw 200k while its child carried the reads, and where the context
+went is the whole question on this rung. And the four-at-once cap on children did not
+bite only because no parent fanned out; a parent following the prompt's "one call per
+piece" on sixteen pieces would have been refused at the fifth.
+
 ## 2026-09-02: compaction fired, twice, and the engine passed
 
 `14-engine` with no turn limit, `results/2026-09-02-engine`, commit `6f56963`, prompt

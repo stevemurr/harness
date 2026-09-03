@@ -6,9 +6,9 @@ number `FINDINGS.md` retracted was a number read out of one of those files by ha
 
 A sweep carries a header saying what produced it -- the commit, a hash of the system
 prompt, the model and its sampling, the turn limit, the arms and the repeat -- so whether
-two sweeps are comparable is written in the files and not remembered. `HANDOFF.md` lists
-eight result files as void because they predate some mix of changes; none of them could
-say which.
+two sweeps are comparable is written in the files and not remembered. The last working note listed
+eight result files as void because they predated some mix of changes; none of them could
+say which (see `docs/adr/0016`).
 """
 
 from __future__ import annotations
