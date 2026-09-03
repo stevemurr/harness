@@ -1,0 +1,4 @@
+{
+  "tests": "Sixteen independent packages with one planted bug each, together several hundred thousand characters of source. Whether a parent hands them out with `delegate`, waits with `wait_agents` rather than polling, and answers from the children's reports -- against a lone agent that has to read all of it, and may cross a compaction boundary doing so.",
+  "agents": true
+}
