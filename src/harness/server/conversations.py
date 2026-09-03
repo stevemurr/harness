@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.agent import new_agent
+from harness.agent.compaction import Meter
 from harness.agent.loop import Observer, Turn
 from harness.exec.children import Children, Lineage
 from harness.mcp import McpServer, Server, connect_all
@@ -163,6 +164,9 @@ class Gated:
 
     inner: Provider
     live: Live
+    #: The same estimate the agent's own meter makes, kept here so the usage published to a
+    #: client is calibrated the way the compaction decision is -- one derivation, not two.
+    meter: Meter = field(default_factory=Meter)
 
     @property
     def name(self) -> str:
@@ -182,7 +186,23 @@ class Gated:
         run = self.live.run
         if run is not None:
             await run.gate()
-        return await self.inner.complete(transcript, tools, listen=listen)
+        completion = await self.inner.complete(transcript, tools, listen=listen)
+        if run is not None:
+            # What the request cost, for a client that shows how full the context is. The
+            # endpoint's own count when it gave one; the meter's estimate of what was sent
+            # otherwise, and said to be one. Live only: it describes a request, not the
+            # transcript, so a replay has nothing to derive it from.
+            reported = completion.prompt_tokens
+            run.publish(
+                "context.usage",
+                {
+                    "tokens": reported or round(self.meter.estimate(transcript)),
+                    "estimated": not reported,
+                    "context_window": self.inner.context_window,
+                },
+            )
+        self.meter.record(completion.prompt_tokens, completion.sent_chars)
+        return completion
 
     async def aclose(self) -> None:
         # The runtime owns the real provider and closes it once, after every conversation.
@@ -414,7 +434,7 @@ def open_conversation(
         child_kits.append(child_kit)
         return new_agent(
             lineage.root,
-            Gated(provider, live),
+            Gated(provider, live, Meter(settings.compaction)),
             tools=[
                 Watched(tool, live, child_kit.plan, label=lineage.agent_id)
                 for tool in child_kit.tools()
@@ -450,7 +470,7 @@ def open_conversation(
     )
     agent = new_agent(
         root,
-        Gated(provider, live),
+        Gated(provider, live, Meter(settings.compaction)),
         tools=[Watched(tool, live, kit.plan) for tool in kit.tools()],
         modes=modes,
         inbox=inbox,

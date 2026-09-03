@@ -194,6 +194,12 @@ async def test_a_tool_call_opens_a_row_and_the_same_row_settles(folder, tmp_path
 
     rows = payloads(run, "run.progress")
     assert [r["status"] for r in rows] == ["active", "completed"]
+    # One usage row per model call, so a client can show how full the context is. A
+    # scripted model reports no count, so the estimate is what goes out, and says so.
+    usage = payloads(run, "context.usage")
+    assert len(usage) == 2
+    assert all(u["estimated"] is True and u["tokens"] > 0 for u in usage)
+    assert usage[0]["context_window"] == runtime.provider.context_window
     expected = progress_id(0, "list_dir", {"path": "."})
     assert rows[0]["update_id"] == rows[1]["update_id"] == expected
     assert rows[0]["text"] == rows[1]["text"]

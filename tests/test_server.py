@@ -392,6 +392,7 @@ async def test_a_bounded_read_returns_the_log_and_says_why_it_stopped(folder, tm
     frames = parse(response.text)
     assert [f[2].get("type") for f in frames[:-1]] == [
         "run.created",
+        "context.usage",
         "answer.delta",
         "run.completed",
     ]
