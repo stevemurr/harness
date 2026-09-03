@@ -368,3 +368,58 @@ def test_a_parents_words_are_pinned_across_compaction_like_a_persons() -> None:
 
     assert any("and also this" in text for text in kept)
     assert not any("a sibling says hi" in text for text in kept)
+
+
+def test_the_observer_is_told_what_becomes_of_each_child(tmp_path: Path) -> None:
+    """A front end draws a child as a thing with a life: started, finished, failed,
+    stopped. The table tells an observer, the way a run tells its observers about turns."""
+    from harness.exec.children import Child
+
+    told: list[tuple[str, str, str]] = []
+
+    class Watching:
+        def started(self, child: Child) -> None:
+            told.append(("started", child.agent_id, child.task))
+
+        def finished(self, child: Child, outcome: Outcome) -> None:
+            told.append(("finished", child.agent_id, outcome.answer))
+
+        def failed(self, child: Child, error: Exception) -> None:
+            told.append(("failed", child.agent_id, str(error)))
+
+        def stopped(self, child: Child) -> None:
+            told.append(("stopped", child.agent_id, ""))
+
+    async def scenario() -> None:
+        children, _ = parent(tmp_path)
+        children.observer = Watching()
+        waited = await children.delegate("count", call_id="c1", wait=True)
+        assert not isinstance(waited, str)
+
+        gate = asyncio.Event()
+        original = children.spawner
+
+        def gated(task: str, lineage: Lineage) -> Agent:
+            child = original(task, lineage)
+            assert isinstance(child, Fake)
+            child.release = gate
+            return child
+
+        children.spawner = gated
+        background = await children.delegate("later", call_id="c2", wait=False)
+        assert not isinstance(background, str)
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        held = await children.delegate("forever", call_id="c3", wait=False)
+        assert not isinstance(held, str)
+        _ = await children.stop(held.agent_id)
+        await children.aclose()
+
+    asyncio.run(scenario())
+
+    kinds = [(kind, task_or_answer) for kind, _, task_or_answer in told]
+    assert kinds[:2] == [("started", "count"), ("finished", "did: count")]
+    assert kinds[2:4] == [("started", "later"), ("finished", "did: later")]
+    assert kinds[4] == ("started", "forever") and kinds[5] == ("stopped", "")

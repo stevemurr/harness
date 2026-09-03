@@ -115,6 +115,10 @@ class Message:
     #: the reason `source` is: a resumed thread reads these rows to reach the folder again,
     #: and a rule that matched the framing would make that wording load-bearing.
     folder: str = ""
+    #: Set only on ARRIVAL messages: which child agent, process or watch it was about, when
+    #: it was about one. The framing already names it in the text; this is the field, so a
+    #: replay can say which agent spoke without reading the wording back out.
+    sender: str = ""
     #: Set only on ARRIVAL messages: which `inbox.Source` the arrival came from.
     #:
     #: The wire has no third-party slot, so `render` folds provenance into the text and

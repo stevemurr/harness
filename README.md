@@ -156,7 +156,15 @@ and reads a skill with `use_skill` when it applies, so a long skill costs one li
 context until it is needed; `pinned: true` puts one in the prompt from the start. A
 message beginning `/name` invokes one. A skill's scripts run through the ordinary tools
 under the ordinary approval policy, and a delegated agent sees the same skills as its
-parent. The folder's skills win a name clash with the person's.
+parent. Four ship with the harness -- `debugging`, `testing`, `architecture`, `design` --
+and the folder's skills win a name clash with the person's, which win over those.
+
+**Workflows.** A skill with `steps:` is one. Using it seeds the run's checklist with the
+steps, so where the work stands shows in the plan a client already renders, and nothing
+new holds that state. A skill with `triggers:` -- words like `bug` or `refactor` -- is
+pointed out by the harness when a request names one, as a note through the inbox saying
+which skill to read first, because a model that only has the index will sometimes not
+look. The four built-ins have both.
 
 **Plan mode.** `harness run --plan` starts read-only. The agent reads, proposes a plan with
 `exit_plan_mode`, and nothing changes until you approve it. A person sets the mode, never
@@ -173,6 +181,10 @@ finished 45 of 45 cases.
 wait for it or be told when it finishes, and speak to it mid-run. A child inherits the
 folder, the approvals and the mode, owns its own plan, tools, inbox and thread, and cannot
 delegate in turn. Whether a model reaches for this is measured in the evals, not assumed.
+A client sees each child as its own thing: `agent.started`, `agent.said`, `agent.finished`,
+`agent.failed` and `agent.stopped` events bound its life and carry its words, and its
+activity rows carry its `agent_id`, so a person watching can tell the child's work from
+the parent's.
 
 **The board.** Units of work with a status and an owner, one board per folder, durable
 across runs and restarts. The agent reads it before it plans: an open task that is what

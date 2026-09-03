@@ -155,8 +155,13 @@ class Run:
         status: str,
         arguments: JSON | None = None,
         tool: str = "",
+        agent_id: str = "",
     ) -> None:
         """One activity row, with the call's arguments and its tool when the caller has them.
+
+        `agent_id` names the delegated agent whose call this is, as a field. It used to be
+        a prefix on the row's text, and a client that renders the tool's name rather than
+        the text never showed it -- so a child's searches read as the parent's.
 
         `tool` is the name and `kind` what sort of thing it does, in the editor protocol's
         words, so a client can show a read, a write and a command differently without
@@ -174,6 +179,8 @@ class Run:
         if tool:
             payload["tool"] = tool
             payload["kind"] = kind_for(tool)
+        if agent_id:
+            payload["agent_id"] = agent_id
         self.publish("run.progress", payload)
         if status != "active":
             self._settled.add(update_id)

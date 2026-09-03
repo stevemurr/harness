@@ -36,6 +36,8 @@ def encode(message: Message) -> JSON:
         body["source"] = message.source.value
     if message.folder:
         body["folder"] = message.folder
+    if message.sender:
+        body["sender"] = message.sender
     return body
 
 
@@ -61,6 +63,7 @@ def decode(raw: JSON) -> Message:
         ok=raw.get("ok") is not False,
         refused=raw.get("refused") is True,
         folder=as_str(raw.get("folder")),
+        sender=as_str(raw.get("sender")),
     )
 
 

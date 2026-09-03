@@ -36,7 +36,7 @@ from pathlib import Path
 from harness.agent import new_agent
 from harness.agent.compaction import Meter
 from harness.agent.loop import Observer, Turn
-from harness.exec.children import Children, Lineage
+from harness.exec.children import Child, ChildObserver, Children, Lineage
 from harness.mcp import McpServer, Server, connect_all
 from harness.providers.base import Chunk, Completion, Listener, Provider
 from harness.server.events import Visibility
@@ -61,7 +61,9 @@ from harness.tools.kit import Toolkit
 from harness.types import (
     Agent,
     Message,
+    Outcome,
     Role,
+    Source,
     StopReason,
     ToolResult,
     ToolSpec,
@@ -79,6 +81,10 @@ log = logging.getLogger(__name__)
 #: in both front ends rather than shared, because what to render specially is a front end's
 #: decision and sharing it would make one front end's taste the other's.
 PLAN_TOOLS = frozenset({"update_plan"})
+#: Tools that keep their activity row and may change the plan as well: reading a skill
+#: with steps seeds an empty checklist. The row says what happened; the plan says what
+#: comes next.
+PLAN_FOLLOWERS = frozenset({"use_skill"})
 
 
 @dataclass
@@ -105,7 +111,9 @@ class Watched:
     live: Live
     plan: Plan
     #: Set on a delegated agent's tools, so its rows say whose they are in the parent's
-    #: stream -- a child has no run of its own; it works inside the parent's.
+    #: stream -- a child has no run of its own; it works inside the parent's. Carried as
+    #: the row's `agent_id`; it used to be a prefix on the text, which a client that shows
+    #: the tool's name never displayed.
     label: str = ""
 
     @property
@@ -131,11 +139,9 @@ class Watched:
         # the whole plan, because there the detail is the decision -- and an activity row
         # is one row.
         text = one_line(self.inner.preview(args)[0])
-        if self.label:
-            text = f"[{self.label}] {text}"
         planning = name in PLAN_TOOLS
         if not planning:
-            run.progress(update_id, text, "active", args, name)
+            run.progress(update_id, text, "active", args, name, agent_id=self.label)
 
         result = await self.inner.call(args, ctx)
 
@@ -147,6 +153,8 @@ class Watched:
                 run.progress(update_id, text, "failed", args, name)
         else:
             run.progress(update_id, text, "completed" if result.ok else "failed", args, name)
+            if name in PLAN_FOLLOWERS and result.ok:
+                publish_plan(run, self.plan)
         return result
 
 
@@ -207,6 +215,50 @@ class Gated:
         # The runtime owns the real provider and closes it once, after every conversation.
         # A wrapper that closed it would close it under the next conversation's feet.
         return None
+
+
+def agents_for(live: Live) -> ChildObserver:
+    """What becomes of each delegated agent, as events on the parent's run.
+
+    Four events, one per thing a client draws: started, with the task; finished, with the
+    answer; failed, with the error; stopped. The child's rows and words arrive separately,
+    each carrying its id, so a client can show an agent as a thing with a life of its own
+    rather than as rows mixed into the parent's.
+    """
+
+    def publish(type: str, child: Child, **more: object) -> None:
+        run = live.run
+        if run is None:
+            return
+        payload: JSON = {
+            "agent_id": child.agent_id,
+            "task": child.task,
+            "call_id": child.call_id,
+        }
+        payload.update(more)
+        run.publish(type, payload)
+
+    class _Agents:
+        def started(self, child: Child) -> None:
+            publish("agent.started", child)
+
+        def finished(self, child: Child, outcome: Outcome) -> None:
+            publish(
+                "agent.finished",
+                child,
+                turns=outcome.turns,
+                stop=outcome.stop.kind,
+                answer=outcome.answer,
+                seconds=round(child.elapsed(), 1),
+            )
+
+        def failed(self, child: Child, error: Exception) -> None:
+            publish("agent.failed", child, error=f"{type(error).__name__}: {error}")
+
+        def stopped(self, child: Child) -> None:
+            publish("agent.stopped", child)
+
+    return _Agents()
 
 
 def halt_for(live: Live):
@@ -287,11 +339,16 @@ def listener_for(live: Live) -> Listener:
     return listen
 
 
-def observer_for(live: Live) -> Observer:
+def observer_for(live: Live, agent_id: str = "") -> Observer:
     """The observer. Publishes what a completed turn added that no tool call could.
 
     Three things: the model's prose when it was not already streamed, the activity rows for
     calls that never reached a tool, and one developer row per turn.
+
+    With `agent_id` it is a delegated child's observer, and the words are handled
+    differently: a child's prose and its `report`s are published as `agent.said`, never as
+    the parent's answer. They used to stream as `answer.delta`, and a person watching saw
+    the parent announce work the child was doing.
     """
 
     def publish(turn: Turn) -> None:
@@ -300,8 +357,18 @@ def observer_for(live: Live) -> Observer:
             return
 
         prose = turn.assistant.content.strip()
+        if agent_id:
+            if prose:
+                run.publish("agent.said", {"agent_id": agent_id, "text": prose})
+            for call, result in turn.results:
+                if call.name == "report" and result.ok:
+                    text = as_str(call.arguments.get("text")).strip()
+                    if text:
+                        run.publish(
+                            "agent.said", {"agent_id": agent_id, "text": text, "report": True}
+                        )
         streamed, run.streamed = run.streamed, False
-        if prose and not streamed:
+        if prose and not streamed and not agent_id:
             # One delta for the whole turn, for a provider that answers with a whole
             # message. A streaming one already published the words through the listener.
             run.publish(
@@ -327,8 +394,11 @@ def observer_for(live: Live) -> Observer:
                 "completed" if result.ok else "failed",
                 call.arguments,
                 call.name,
+                agent_id=agent_id,
             )
 
+        if agent_id:
+            return
         run.publish(
             "harness.turn",
             {
@@ -375,9 +445,7 @@ class Conversation:
         return run is not None and run.status not in TERMINAL_STATUSES
 
 
-TERMINAL_STATUSES = frozenset(
-    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-)
+TERMINAL_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
 def _questioner(live: Live) -> Questioner:
@@ -453,7 +521,7 @@ def open_conversation(
             inbox=child_kit.inbox,
             store=store,
             approvals=lineage.approvals,
-            observers=[observer_for(live)],
+            observers=[observer_for(live, lineage.agent_id)],
             settings=settings,
             lineage=lineage,
             on_compaction=compaction_reporter(live),
@@ -467,6 +535,7 @@ def open_conversation(
         modes=modes,
         root=root,
         parent_thread=thread_id,
+        observer=agents_for(live),
     )
     kit = Toolkit.for_workspace(
         root,
@@ -825,6 +894,11 @@ def _replay_into(run: Run, rows: list[Message], previews: dict[str, Handler]) ->
             continue
         if message.role is Role.ARRIVAL and message.folder:
             run.publish("folder.added", {"path": message.folder})
+            continue
+        if message.role is Role.ARRIVAL and message.source is Source.AGENT and message.sender:
+            # A child's report or finishing notice, as the parent read it. The child's own
+            # rows are in its own thread; what survives here is what it said.
+            run.publish("agent.said", {"agent_id": message.sender, "text": message.content})
             continue
         if message.role is not Role.ASSISTANT:
             continue

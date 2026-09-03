@@ -660,11 +660,23 @@ async def test_a_delegated_child_works_inside_the_parents_run(folder, tmp_path) 
 
     assert run.status is RunStatus.COMPLETED
     rows = payloads(run, "run.progress")
-    labelled = [r["text"] for r in rows if r["text"].startswith("[agent_")]
-    assert labelled and "list_dir" in labelled[0]
-    assert "the child says: notes.md" in "".join(
-        d["text"] for d in payloads(run, "answer.delta")
-    )
+    childs = [r for r in rows if r.get("agent_id", "").startswith("agent_")]
+    assert childs and childs[0]["tool"] == "list_dir"
+    assert not any(r["text"].startswith("[agent_") for r in rows)
+    # The child's words are its own, as `agent.said`; the parent's answer is the parent's.
+    narration = "".join(d["text"] for d in payloads(run, "answer.delta"))
+    assert "the child says: notes.md" in narration
+    assert "notes.md, nothing else" not in narration
+    (said,) = payloads(run, "agent.said")
+    assert said["agent_id"] == childs[0]["agent_id"]
+    assert said["text"] == "notes.md, nothing else"
+    # And its life, as events: started with the task, finished with the answer.
+    (started,) = payloads(run, "agent.started")
+    assert started["agent_id"] == said["agent_id"]
+    assert started["task"] == "what is in this folder?"
+    (finished,) = payloads(run, "agent.finished")
+    assert finished["answer"] == "notes.md, nothing else" and finished["stop"] == "done"
+    assert types_of(run).index("agent.started") < types_of(run).index("agent.finished")
     child = next(t for t in threads if t.parent)
     assert child.parent == "thr_1"
     assert conversation.child_kits and "delegate" in model.tools_offered[0]

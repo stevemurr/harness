@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from harness.state.approval import Approvals
@@ -57,6 +58,25 @@ class Lineage:
 
 #: Makes a child for a task and a lineage. Supplied by the composition root.
 Spawner = Callable[[str, Lineage], Agent]
+
+
+class ChildObserver(Protocol):
+    """Told what becomes of each child, for a front end that shows them.
+
+    Supplied beside the spawner and for the same reason: the table knows when a child
+    starts, ends, fails or is stopped, and a client wants to draw that, but the table must
+    not learn what a client is. Before this existed a child's tool calls reached a client
+    as rows with its id in their text and its words as the parent's own, and a person
+    watching saw the parent doing the child's work. (2026-09-03)
+    """
+
+    def started(self, child: Child) -> None: ...
+
+    def finished(self, child: Child, outcome: Outcome) -> None: ...
+
+    def failed(self, child: Child, error: Exception) -> None: ...
+
+    def stopped(self, child: Child) -> None: ...
 
 
 @dataclass(slots=True)
@@ -95,6 +115,9 @@ class Children:
     #: a model cannot fan out unboundedly on a whim; it is the number to tune first.
     most: int = 4
     started: dict[str, Child] = field(default_factory=dict)
+    #: Who is told what becomes of each child. A spectator: one that raises is logged and
+    #: never ends a child, the way an observer of turns never ends a run.
+    observer: ChildObserver | None = None
 
     def lineage(self, agent_id: str, call_id: str) -> Lineage:
         return Lineage(
@@ -122,11 +145,29 @@ class Children:
             started=time.monotonic(),
         )
         self.started[agent_id] = child
+        self._tell(lambda o: o.started(child))
         if wait:
-            child.outcome = await child.agent.run(task)
+            try:
+                outcome = await child.agent.run(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error = exc
+                self._tell(lambda o: o.failed(child, error))
+                raise
+            child.outcome = outcome
+            self._tell(lambda o: o.finished(child, outcome))
             return child
         child.work = asyncio.ensure_future(self._finish(child))
         return child
+
+    def _tell(self, say: Callable[[ChildObserver], None]) -> None:
+        if self.observer is None:
+            return
+        try:
+            say(self.observer)
+        except Exception:
+            log.exception("child observer failed")
 
     async def _finish(self, child: Child) -> Outcome:
         try:
@@ -135,6 +176,8 @@ class Children:
             raise
         except Exception as exc:
             log.exception("child %s failed", child.agent_id)
+            error = exc
+            self._tell(lambda o: o.failed(child, error))
             self.inbox.post(
                 Envelope(
                     Source.HARNESS,
@@ -146,6 +189,7 @@ class Children:
             )
             raise
         child.outcome = outcome
+        self._tell(lambda o: o.finished(child, outcome))
         answer = outcome.answer
         more = " Call read_agent for the rest." if len(answer) > NOTICE_CHARS else ""
         self.inbox.post(
@@ -222,9 +266,7 @@ class Children:
         return chosen
 
     def ids(self, running: bool | None = None) -> list[str]:
-        return [
-            i for i, c in self.started.items() if running is None or c.running == running
-        ]
+        return [i for i, c in self.started.items() if running is None or c.running == running]
 
     async def stop(self, agent_id: str) -> str | None:
         """`None` if there is no such child, else what actually happened."""
@@ -236,6 +278,7 @@ class Children:
         if child.work is not None:
             _ = child.work.cancel()
         await child.agent.aclose()
+        self._tell(lambda o: o.stopped(child))
         return "stopped"
 
     async def aclose(self) -> None:

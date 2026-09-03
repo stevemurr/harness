@@ -106,6 +106,7 @@ def render(envelope: Envelope, turn: int | None = None) -> Message:
         ),
         source=envelope.source,
         folder=envelope.folder,
+        sender=envelope.sender or "",
     )
 
 
