@@ -107,7 +107,7 @@ src/harness/
 Configure once:
 
 ```sh
-harness --init          # writes ~/.harness/config.toml, mode 0600
+harness init            # writes ~/.harness/config.toml, mode 0600
 ```
 
 ```toml
@@ -130,11 +130,12 @@ port = 8080
 Then neither front end needs arguments:
 
 ```sh
-harness "add a test for the parser"      # asks before anything changes
-harness-serve                            # the HTTP server orca talks to
-harness -y "..."                          # approve everything (no sandbox -- read that again)
-harness --threads                         # what has been run
-harness --resume <thread> "now do X"      # continue where it left off
+harness run "add a test for the parser"      # asks before anything changes
+harness serve                                # the HTTP server orca talks to
+harness run -y "..."                          # approve everything (no sandbox -- read that again)
+harness threads                              # what has been run
+harness run --resume <thread> "now do X"      # continue where it left off
+harness evals run --both --label name        # the ladder, from a checkout
 ```
 
 **A flag beats an environment variable beats the file beats the built-in default** -- one
@@ -226,7 +227,7 @@ is the part of the claim that mattered. `server/runs.py` says it at length.
 ## Serving it
 
 ```sh
-harness-serve --port 8080          # HARNESS_TOKEN=... to require a bearer token
+harness serve --port 8080          # HARNESS_TOKEN=... to require a bearer token
 ```
 
 The same `Agent` behind HTTP, which is what the `orca` terminal client drives. A run is a
@@ -290,7 +291,7 @@ adding a store means running tests that already exist.
 
 ## Plan mode
 
-`harness --plan` starts read-only. The agent reads, works out what it would do, and calls
+`harness run --plan` starts read-only. The agent reads, works out what it would do, and calls
 `exit_plan_mode` with a plan; nothing changes until you approve it. Reject it and the agent
 stays read-only and revises.
 
@@ -555,7 +556,7 @@ starts nothing anyway; the server waits for the first query.
 **Servers live in `~/.harness/servers/bin`, and nowhere else is consulted.**
 
 ```sh
-harness --install-servers
+harness install-servers
   ✓ basedpyright  linked basedpyright-langserver -> /Users/you/.local/bin/basedpyright-langserver
   ✓ gopls         linked gopls -> /Users/you/go/bin/gopls
 ```

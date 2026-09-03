@@ -13,7 +13,6 @@ with no name on it, which tells them nothing they can act on.
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import logging
@@ -34,19 +33,6 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from harness.board import Status
-from harness.config import (
-    DEFAULT_BASE_URL,
-    DEFAULT_HOST,
-    DEFAULT_MODEL,
-    DEFAULT_PORT,
-    Config,
-    flag,
-    int_flag,
-    load,
-    settle,
-)
-from harness.config import Provider as ProviderSettings
-from harness.config import Server as ServerSettings
 from harness.providers.base import Provider
 from harness.server.conversations import Conversation, Runtime
 from harness.server.runs import DECISIONS, CommandRefused, Run
@@ -67,10 +53,6 @@ log = logging.getLogger(__name__)
 API = "/api/v1"
 PROTOCOL_VERSION = "1"
 
-#: Where the terminal front end keeps its threads, and where this one keeps them too. One
-#: place, so `harness --sessions` lists what the server ran and `--resume` continues it.
-THREADS = Path("~/.harness/threads").expanduser()
-BOARDS = Path("~/.harness/boards").expanduser()
 
 
 def is_id(value: str) -> bool:
@@ -866,136 +848,3 @@ def read_int(request: Request, name: str, default: int) -> int:
 
 
 # -- running it --------------------------------------------------------------------------
-
-
-def build_app(args: argparse.Namespace) -> Starlette:
-    from harness.providers.openai import OpenAICompatible
-    from harness.store import JsonlStore
-
-    settings = resolve(args)
-    return create_app(
-        provider=OpenAICompatible.from_settings(settings.provider),
-        store=JsonlStore(THREADS),
-        token=settings.server.token,
-        settings=settings.settings,
-        boards=BOARDS,
-    )
-
-
-def _extra_body(raw: str) -> JSON:
-    """Provider dialect from a flag or the environment, or nothing.
-
-    The terminal front end grew this and the server did not, so a deployment that needs it --
-    a Qwen3 behind LiteLLM answers with an empty string without it -- worked through `harness`
-    and silently produced nothing through `harness-serve`. Two front ends over one provider
-    should not disagree about what the provider needs. (2026-08-31)
-    """
-    if not raw.strip():
-        return {}
-    try:
-        parsed = cast("object", json.loads(raw))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"--extra-body is not JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise SystemExit("--extra-body must be a JSON object")
-    return cast("JSON", parsed)
-
-
-def resolve(args: argparse.Namespace) -> Config:
-    """Flags, then environment, then the config file, then the built-in defaults.
-
-    One rule for every setting. Five settings resolved separately in two front ends is ten
-    chances to get the order subtly different, and a precedence that varies per setting is
-    one nobody can hold in their head.
-    """
-    config = flag(args, "config")
-    stored = load(Path(config).expanduser() if config else None)
-    environment = os.environ
-    extra = _extra_body(flag(args, "extra_body")) or _extra_body(
-        environment.get("HARNESS_EXTRA_BODY", "")
-    )
-    return Config(
-        provider=ProviderSettings(
-            base_url=settle(
-                flag(args, "base_url"),
-                environment.get("HARNESS_BASE_URL", ""),
-                stored.provider.base_url,
-                DEFAULT_BASE_URL,
-            ),
-            model=settle(
-                flag(args, "model"),
-                environment.get("HARNESS_MODEL", ""),
-                stored.provider.model,
-                DEFAULT_MODEL,
-            ),
-            api_key=settle(
-                flag(args, "api_key"),
-                environment.get("HARNESS_API_KEY", ""),
-                stored.provider.api_key,
-                "",
-            ),
-            extra_body=extra or stored.provider.extra_body,
-        ),
-        server=ServerSettings(
-            host=settle(
-                flag(args, "host"),
-                environment.get("HARNESS_HOST", ""),
-                stored.server.host,
-                DEFAULT_HOST,
-            ),
-            port=int(
-                (int_flag(args, "port") or 0)
-                or environment.get("HARNESS_PORT", "")
-                or stored.server.port
-                or DEFAULT_PORT
-            ),
-            token=settle(
-                flag(args, "token"),
-                environment.get("HARNESS_TOKEN", ""),
-                stored.server.token,
-                "",
-            ),
-        ),
-        path=stored.path,
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    import uvicorn
-
-    parser = argparse.ArgumentParser(
-        prog="harness-serve", description="Serve the harness over HTTP."
-    )
-    _ = parser.add_argument("--host", default="")
-    _ = parser.add_argument("--port", type=int, default=0)
-    _ = parser.add_argument("--model", default="")
-    _ = parser.add_argument("--config", default="", help="Path to config.toml.")
-    _ = parser.add_argument("--base-url", default="")
-    _ = parser.add_argument("--api-key", default="")
-    _ = parser.add_argument(
-        "--extra-body",
-        default="",
-        help=(
-            "JSON merged into every model request, for deployment dialect the OpenAI "
-            + "schema does not cover. A Qwen3 behind LiteLLM answers with an empty string "
-            + "without it. (env: HARNESS_EXTRA_BODY)"
-        ),
-    )
-    _ = parser.add_argument(
-        "--token",
-        default="",
-        help="Require this bearer token. No token means no authentication.",
-    )
-    args = parser.parse_args(argv)
-
-    settings = resolve(args)
-    app = build_app(args)
-    if settings.path is not None:
-        log.info("settings from %s", settings.path)
-    log.info("model %s at %s", settings.provider.model, settings.provider.base_url)
-    uvicorn.run(app, host=settings.server.host, port=settings.server.port, log_level="info")
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())

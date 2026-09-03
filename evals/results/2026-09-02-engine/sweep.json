@@ -15,5 +15,48 @@
   ],
   "repeat": 1,
   "note": "",
-  "attempts": []
+  "attempts": [
+    {
+      "rung": "14-engine",
+      "tests": "Building a layout engine to a written spec over a long horizon. Four subsystems that feed each other -- HTML parsing, the CSS cascade, block layout, inline layout -- so an early mistake surfaces as a wrong coordinate in a late case. Nine rules stated once in the spec's preamble are the probe for whether a compaction boundary loses what came before it.",
+      "arm": "code",
+      "attempt": 1,
+      "passed": true,
+      "score": "[45/45]",
+      "why": "",
+      "stop": "done",
+      "detail": "",
+      "turns": 681,
+      "seconds": 20984.5,
+      "calls": 757,
+      "tools": {
+        "edit_file": 149,
+        "grep": 12,
+        "list_dir": 1,
+        "read_file": 222,
+        "run": 367,
+        "update_plan": 1,
+        "write_file": 5
+      },
+      "failed": {
+        "run": 2,
+        "edit_file": 10
+      },
+      "refused": {
+        "grep": 6,
+        "edit_file": 5,
+        "read_file": 1
+      },
+      "compactions": 2,
+      "context_peak_chars": 603035,
+      "context_peak_tokens": 159137,
+      "context_total_chars": 213158044,
+      "model_seconds": 20617.8,
+      "model_calls": 683,
+      "verified_last": true,
+      "mutations": 154,
+      "recovered": 24,
+      "unrecovered": 0
+    }
+  ]
 }

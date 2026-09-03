@@ -3,6 +3,30 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-02: compaction fired, twice, and the engine passed
+
+`14-engine` with no turn limit, `results/2026-09-02-engine`, commit `6f56963`, prompt
+`172fea94532d`. **Passed 45/45 in 681 turns and 5.8 hours**, peak context 603k characters.
+The rung had reached 42/45 at 441 turns on 2026-09-01 under a limit, and 12 and 13 had never
+made a boundary; this is the first measured run to cross one.
+
+**Two compactions, and the run carried on through both.** The first after turn 177, with
+519k characters behind it, replaced by a 2.7k-character handoff; the second after turn 495,
+with 1.07M behind it, replaced by 4.1k. Both handoffs are the structured note `handoff.md`
+asks for -- mode, request, changed, found, next -- and both carried the progress line
+exactly: 27/45 passing at the first, 38/45 at the second. After each boundary the model went
+straight back to editing and running cases, with no re-reading of the spec or the case
+files that would have said the summary had lost them. The nine preamble rules the rung
+plants as its memory probe were honoured through to the end, since the last cases are the
+ones that exercise them and they passed.
+
+**What it cost.** 681 turns is 240 more than the limited run, and 5.8 hours is most of the
+day; the limited run had reached 42/45 in 441, so the last three cases took a third of the
+turns. `update_plan` was called once in 681 turns, the same shape as before: the plan's
+last step swallowed the grind, and the model was right not to update a plan that was still
+accurate. This run was sharing its endpoint with the delegation sweeps for part of the
+afternoon, so its wall-clock is an upper bound.
+
 ## 2026-09-02: the first multi-agent rung, and a model that would not delegate
 
 `15-delegate-services`: five independent services, one planted bug each, a report naming

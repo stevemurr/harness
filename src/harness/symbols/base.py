@@ -212,7 +212,7 @@ class Indexes:
     def _nothing_for(self, near: Path | None) -> str:
         if not self.available:
             return (
-                "No code index is set up. Run `harness --install-servers`, or use grep "
+                "No code index is set up. Run `harness install-servers`, or use grep "
                 + "and read_file."
             )
         subject = f"{near.suffix} files" if near is not None and near.suffix else "that"

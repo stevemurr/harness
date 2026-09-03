@@ -37,7 +37,13 @@ from typing import cast
 from harness.settings import Compaction, Limits, Output, Settings
 from harness.types import JSON
 
-DEFAULT_PATH = Path("~/.harness/config.toml")
+#: Where the harness keeps its own things: config, threads, boards, language servers. One
+#: folder a person can inspect and delete. Not expanded here, so a test can point `HOME`
+#: elsewhere before anything reads them.
+HOME = Path("~/.harness")
+DEFAULT_PATH = HOME / "config.toml"
+THREADS = HOME / "threads"
+BOARDS = HOME / "boards"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o"
 DEFAULT_HOST = "127.0.0.1"

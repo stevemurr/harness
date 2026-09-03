@@ -1,7 +1,7 @@
 """Run the ladder, and say what happened in numbers rather than in prose.
 
-    uv run python -m evals.run --label postfix --both --repeat 3
-    uv run python -m evals.run --only 04-fix-bug,06-refactor --no-code --label one-arm
+    uv run harness evals run --label postfix --both --repeat 3
+    uv run harness evals run --only 04-fix-bug,06-refactor --no-code --label one-arm
 
 `--no-code` withholds `find_definition` and `find_references`, which is how the two arms of
 a comparison are produced. Everything else is held still. Each sweep writes
@@ -31,6 +31,7 @@ from evals.record import Attempt, Call, Sweep
 from evals.report import table
 from evals.rungs import HERE, REPO, Rung, discover, stage, unsolved
 from evals.verify import verify
+from harness import config
 from harness.agent import new_agent, spawning
 from harness.agent.loop import Observer, Turn
 from harness.approval import Approvals, Policy
@@ -49,9 +50,9 @@ from harness.tools.kit import Toolkit
 from harness.types import Message, ToolSpec, Transcript
 
 #: Where transcripts go while a run happens. The harness's own folder by default, so
-#: `harness-serve` can watch a run it did not start and `harness --threads` lists it -- a
+#: `harness serve` can watch a run it did not start and `harness threads` lists it -- a
 #: long rung is something you want to look at while it happens.
-THREADS = Path("~/.harness/threads").expanduser()
+THREADS = config.THREADS.expanduser()
 RESULTS = HERE / "results"
 CODE_TOOLS = frozenset({"find_definition", "find_references"})
 #: What the base arm goes without on a rung that allows delegation. The board goes with

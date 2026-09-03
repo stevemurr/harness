@@ -38,7 +38,6 @@ dev = [
 
 [project.scripts]
 harness = "harness.cli:main"
-harness-serve = "harness.server:main"
 
 [build-system]
 requires = ["hatchling"]

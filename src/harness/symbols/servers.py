@@ -13,7 +13,7 @@ environment.
 
 **Symlink before download.** A Go developer already has `gopls` and does not want a second
 copy; provisioning finds it and links it. Only when nothing is there does a recipe run, and
-only from `harness --install-servers` -- never during a run, where a 272MB fetch would blow
+only from `harness install-servers` -- never during a run, where a 272MB fetch would blow
 the request timeout and fail somewhere a model cannot understand.
 
 **Nothing here knows a language.** Each server's binary, install command and fallback

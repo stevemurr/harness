@@ -35,7 +35,7 @@ from harness.prompts import prompt
 #: one should not need a third.
 CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md", ".harness.md")
 
-#: What `harness --init-agents` writes when a folder has none.
+#: What `harness init-agents` writes when a folder has none.
 #:
 #: Written by a command and never on connect. A harness that created a file in someone's
 #: repository the first time it was pointed at it would be mutating a folder before being

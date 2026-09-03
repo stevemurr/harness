@@ -68,7 +68,7 @@ class Recipe:
     language must stay one file -- an install recipe kept in a central table is a second
     place to edit and a second place to forget.
 
-    `install` is argv, run only by `harness --install-servers`, never during a run. Fetching
+    `install` is argv, run only by `harness install-servers`, never during a run. Fetching
     272MB inside a tool call would blow the request timeout, and failing halfway is strictly
     worse than "not installed, use grep", which already degrades correctly.
 
@@ -157,7 +157,7 @@ class LspIndex:
                 # caller must stop asking rather than spend the budget re-discovering it.
                 raise SymbolIndexError(
                     f"{self.recipe.binary} is not set up for the harness. "
-                    + "Run `harness --install-servers` to provision it, "
+                    + "Run `harness install-servers` to provision it, "
                     + "or use grep and read_file instead.",
                     available=False,
                 ) from exc

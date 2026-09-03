@@ -10,8 +10,8 @@ pairing a near-best attempt in one arm against an outlier in the other. It refus
 groups of unequal size, and it says which of the header fields differ before it says any
 number, so "not comparable" is written down where the numbers would have been.
 
-    uv run python -m evals.report results/2026-09-01-postfix/sweep.json
-    uv run python -m evals.report results/A/sweep.json results/B/sweep.json
+    uv run harness evals report results/2026-09-01-postfix/sweep.json
+    uv run harness evals report results/A/sweep.json results/B/sweep.json
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def compare(a: Sweep, b: Sweep) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if not args or len(args) > 2:
-        print("usage: python -m evals.report SWEEP.json [OTHER.json]", file=sys.stderr)
+        print("usage: harness evals report SWEEP.json [OTHER.json]", file=sys.stderr)
         return 2
     first = Sweep.read(Path(args[0]))
     if len(args) == 1:

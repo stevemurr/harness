@@ -155,11 +155,11 @@ def index(request: pytest.FixtureRequest, project: Path):
         index = Fake(project)
     elif request.param == "pyright":
         if not provisioned("basedpyright-langserver"):
-            pytest.skip("run `harness --install-servers` to exercise basedpyright")
+            pytest.skip("run `harness install-servers` to exercise basedpyright")
         index = Pyright(project, slow)
     else:
         if not provisioned("gopls"):
-            pytest.skip("run `harness --install-servers` to exercise gopls")
+            pytest.skip("run `harness install-servers` to exercise gopls")
         index = Gopls(project, slow)
     index.words = DIALECT[request.param]
     return index
@@ -308,7 +308,7 @@ async def test_with_no_index_at_all_the_message_names_the_command(project: Path)
     with pytest.raises(SymbolIndexError) as caught:
         await Indexes().definitions("Widget")
 
-    assert "--install-servers" in str(caught.value)
+    assert "install-servers" in str(caught.value)
 
 
 # --- the tools ----------------------------------------------------------------------------

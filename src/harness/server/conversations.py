@@ -402,7 +402,7 @@ class Runtime:
     provider: Provider
     store: Store
     #: Threaded rather than defaulted, because `[compaction] enabled = false` has to mean the
-    #: same thing through `harness-serve` as through `harness`. A setting one front end reads
+    #: same thing through `harness serve` as through `harness`. A setting one front end reads
     #: and the other does not is the bug `config.py` was written about.
     settings: Settings = field(default_factory=Settings)
     #: Where boards are kept, one file per folder. `None` keeps them in memory, which is
