@@ -66,7 +66,7 @@ the config file beats the built-in default, for every setting, in both commands.
 
 ## Configuration
 
-`~/.harness/config.toml` has six tables. Unknown tables and keys are errors, so a typo
+`~/.harness/config.toml` has seven tables. Unknown tables and keys are errors, so a typo
 cannot become a setting that silently does nothing.
 
 ```toml
@@ -163,17 +163,38 @@ folder, the approvals and the mode, owns its own plan, tools, inbox and thread, 
 delegate in turn. Whether a model reaches for this is measured in the evals, not assumed.
 
 **The board.** Units of work with a status and an owner, one board per folder, durable
-across runs. Agents post, claim and finish tasks by their own identity; a person can leave
-work for a run that has not started through the server.
+across runs and restarts. The agent reads it before it plans: an open task that is what
+was asked for is claimed, a task someone else holds is left alone, a done task's result is
+built on rather than redone. When the work has several pieces, the agent posts one task
+per piece, claims each as it starts and finishes it saying what it did, and leaves the
+rest posted if it stops early, so the next run picks up where it left off. A person can
+leave work for a run that has not started through the server. The board is not the plan:
+the plan is one agent's checklist for the piece it is on, and does not survive the run.
 
 **Three outcomes, not two.** A tool result is *ok*, *failed* (it could not do its job), or
 *refused* (the harness declined). A non-zero exit is *ok*: the command ran and the answer
 was negative. Only refusals count towards a stall, so a model watching its tests fail is
-working and a model the harness keeps saying no to is stuck.
+working and a model the harness keeps saying no to is stuck. Two loops are named for what
+they are: a call that was refused and is made again unchanged, and a call that keeps
+succeeding with the same answer -- the fourth identical answer in a row is replaced by a
+refusal that says so, after the call was made, so a change in the world is never hidden.
+
+**Background commands.** `run` with `background=true` answers at once with an id, and the
+agent is told when the command ends. `read_process` shows what it has printed; with `wait`
+set it blocks until the process exits, prints more, or the seconds run out, so waiting for
+a build is one call rather than one per look. Stopping a process kills everything it
+started, including children that put themselves in a process group of their own, as a
+test runner's workers do.
 
 **Bounded output.** One result is cut to 30k characters and one turn to 120k across all
 its calls, keeping both ends so a test run's verdict survives. Tool calls run one at a
 time. Every call gets an answer, even when the tool raises.
+
+**Widening.** A thread works in one folder and may be given more: an editor's other
+project folders at the start, or a folder added mid-thread through the server. The first
+folder stays the working folder and the rest are reachable by absolute path. The addition
+is a row in the transcript, so a resumed thread reaches the folder again, and it is
+carried across compaction the way the person's own words are.
 
 **Streaming.** A front end may listen to the model's words as they arrive; the terminal
 prints them, the server and the editor forward them. The transcript is unchanged by it:
@@ -189,32 +210,58 @@ far.
 
 ## The editor
 
-```sh
-uv run harness acp                       # an editor runs this; nothing to type by hand
-```
-
 The same agent as an [Agent Client Protocol](https://agentclientprotocol.com) server:
-JSON-RPC on stdin and stdout, one message per line, protocol version 1. In Zed, add it
-under `agent_servers` in settings and it appears in the agent panel:
+JSON-RPC on stdin and stdout, one message per line, protocol version 1. Zed speaks it;
+this is how to set it up there.
+
+**1. Have a model configured.** The editor runs `harness acp` from the project folder with
+your login shell's environment, so the same `~/.harness/config.toml` the terminal uses is
+what it reads. `uv run harness init`, point `[provider]` at a model, and check it works
+once from the terminal with `uv run harness run "say hello"`.
+
+**2. Register the agent in Zed.** Either through the agent panel -- the `+` menu, *Add
+Custom Agent* -- or by adding this to Zed's `settings.json` (`zed: open settings`), with
+the path of this checkout:
 
 ```json
-"agent_servers": {
-  "harness": {
-    "type": "custom",
-    "command": "uv",
-    "args": ["run", "--directory", "/path/to/harness", "harness", "acp"]
+{
+  "agent_servers": {
+    "harness": {
+      "type": "custom",
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/harness", "harness", "acp"]
+    }
   }
 }
 ```
 
-A session is a thread, so the editor can come back to one. The editor's mode picker is
-the person choosing between normal and plan mode; every approval is the editor's
-permission prompt, with the diff shown before a write; the plan is the editor's plan
-view. When the editor offers its buffers, `read_file`, `write_file` and `edit_file` go
-through it, so the agent reads what a person has not saved yet and its edits show up in
-the editor's review. A project of several folders gives the agent the first as its
-working folder and the rest by absolute path. Nothing but protocol goes to stdout;
-everything else is on stderr, which the editor keeps as the agent's log.
+The provider flags work in `args` too -- `"--model", "gpt-4o"` -- and an API key can go in
+`"env": {"HARNESS_API_KEY": "..."}` instead of the file. Zed reloads settings on save; no
+restart. If `uv` is not on the PATH Zed inherits, give its absolute path.
+
+**3. Open a thread.** In the agent panel, start a new thread and choose *harness*. The
+first prompt opens a session, which is a thread under `~/.harness/threads/`, so the
+editor can come back to it later and `harness threads` lists it beside the others.
+
+**What you get.** The editor's mode picker is the person choosing between `normal` and
+`plan`. Every approval is the editor's permission prompt, with the diff shown before a
+write and *Allow*, *Always allow* and *Reject* mapped onto the same session grants as the
+terminal's; the approval policy and standing rules from `[approval]` apply here too. The
+plan is the editor's plan view. Tool calls appear as they run, with their output, and the
+model's words stream as they are written. When the editor offers its buffers, `read_file`,
+`write_file` and `edit_file` go through it, so the agent reads what you have not saved yet
+and its edits land in the editor's review. A project of several folders gives the agent
+the first as its working folder and the rest by absolute path. MCP servers configured in
+Zed are handed to the session and join the tools beside the ones in `[mcp]`.
+
+**Debugging.** Nothing but protocol goes to stdout; everything else -- logging, and any
+stray print -- is on stderr, which Zed records. `dev: open acp logs` in Zed shows both
+sides of the wire and that log. A session that never answers is usually a model that
+cannot be reached: the same `harness run` from a terminal will say so in a sentence.
+
+**Not there yet.** `ask_user` has nobody to ask in the editor, so the model is told to
+decide for itself; images are not offered, so the editor does not send them; protocol
+version 2 is a draft Zed does not speak.
 
 ## The server
 
@@ -235,9 +282,18 @@ an approval waits for the person, and approvals, questions and steering arrive a
 | `GET` `POST` | `/api/v1/folders` | browse and create directories, for a picker |
 | `GET` `POST` | `/api/v1/threads`, `/api/v1/threads/{id}` | conversations |
 | `POST` | `/api/v1/threads/{id}/runs` | start a run; answers with a run id at once |
+| `POST` | `/api/v1/threads/{id}/folders` | widen the thread to another folder, now and for every later run |
 | `GET` | `/api/v1/runs`, `/api/v1/runs/{id}/events` | runs, and one run's event stream |
 | `POST` | `/api/v1/runs/{id}/commands` | `pause`, `resume`, `cancel`, `resolve_approval`, `answer`, `steer` |
 | `GET` | `/watch`, `/watch/{thread}`, `/console` | browser pages, no build step |
+
+A restart loses nothing a client needs. A thread's runs and their events are rebuilt from
+its transcript when it is next opened -- the same run ids, the same rows, the same cursors
+-- so a client that comes back after the server restarted finds the history it saw live.
+Approvals, questions and pauses are live states and do not replay; a run that ended
+without an answer replays as failed. A run's terminal `summary` is everything the model
+said in that run, joined as it was streamed, so a client that replaces its streamed answer
+with the summary shows the same text.
 
 `/watch` tails the stored transcript rather than the in-memory event log, so a run started by
 another process, an eval for instance, is watchable too.
@@ -278,8 +334,10 @@ that exist, and they share an unmodified core.
 The ladder under `evals/` grades behaviour: each rung is a task, a seed folder, and a
 `verify.sh` that runs the artifact and exits zero only if the work was done. The fast suite
 is twelve rungs from a greeting script to a cross-file rename over a 5,000-line codebase; the
-long suite is four rungs of thirty minutes to several hours, including a layout engine built
-to a spec and a fleet of sixteen packages with one planted bug each.
+long suite is five rungs of thirty minutes to several hours, including a layout engine built
+to a spec, a fleet of sixteen packages with one planted bug each, and a native macOS media
+player built against a mock server, whose checks compile a Swift package and so declare a
+longer `verify_timeout` in their `rung.json`.
 
 ```sh
 uv run harness evals run --repeat 3 --label name                              # every tool
