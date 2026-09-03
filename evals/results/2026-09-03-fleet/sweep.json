@@ -124,6 +124,43 @@
       "mutations": 17,
       "recovered": 1,
       "unrecovered": 0
+    },
+    {
+      "rung": "16-fleet",
+      "tests": "Sixteen independent packages with one planted bug each, together several hundred thousand characters of source. Whether a parent hands them out with `delegate`, waits with `wait_agents` rather than polling, and answers from the children's reports -- against a lone agent that has to read all of it, and may cross a compaction boundary doing so.",
+      "arm": "base",
+      "attempt": 2,
+      "passed": true,
+      "score": "[16/16]",
+      "why": "",
+      "stop": "done",
+      "detail": "",
+      "turns": 55,
+      "seconds": 440.7,
+      "calls": 88,
+      "tools": {
+        "edit_file": 18,
+        "list_dir": 1,
+        "read_file": 44,
+        "run": 19,
+        "update_plan": 5,
+        "write_file": 1
+      },
+      "failed": {
+        "read_file": 4,
+        "edit_file": 1
+      },
+      "refused": {},
+      "compactions": 0,
+      "context_peak_chars": 165585,
+      "context_peak_tokens": 43862,
+      "context_total_chars": 6714278,
+      "model_seconds": 421.0,
+      "model_calls": 55,
+      "verified_last": false,
+      "mutations": 19,
+      "recovered": 5,
+      "unrecovered": 0
     }
   ]
 }

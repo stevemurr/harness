@@ -258,8 +258,9 @@ tests/
 ```
 
 Every module opens with why it is shaped the way it is, including the incident that shaped
-it. `evals/DESIGN.md` records what was reasoned through and not built; `HANDOFF.md` is a
-dated working note.
+it. `docs/adr/` holds the decision records, one per decision with what forced it;
+`evals/DESIGN.md` records what was reasoned through and not built; `evals/FINDINGS.md` is
+what the ladder has shown, retractions included.
 
 ## Development
 
