@@ -31,6 +31,7 @@ from harness.tools.agents import agent_tools, report_tools
 from harness.tools.ask import Questioner, ask_tools
 from harness.tools.base import Handler
 from harness.tools.board import board_tools
+from harness.tools.browser import Renderer, new_renderer
 from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
 from harness.tools.plan import plan_tools
@@ -78,10 +79,15 @@ class Toolkit:
     #: Tools from outside this repository -- an MCP server's -- offered beside the
     #: built-in ones. The kit does not own them: whoever connected the server closes it.
     extra: list[Handler] = field(default_factory=list)
+    #: The browser `open_url` falls back to. Made here and closed here, because it is a
+    #: process nothing else knows about, like the language servers.
+    renderer: Renderer | None = None
 
     def __post_init__(self) -> None:
         if self.processes is None:
             self.processes = Processes(inbox=self.inbox)
+        if self.renderer is None:
+            self.renderer = new_renderer(self.settings.web)
         if self.children is not None and self.lineage is not None:
             raise ValueError("a kit is a parent's or a child's, not both")
         if self.lineage is not None:
@@ -124,7 +130,7 @@ class Toolkit:
         return [
             *file_tools(),
             *shell_tools(self.settings.shell, self.processes),
-            *web_tools(self.settings.web),
+            *web_tools(self.settings.web, renderer=self.renderer),
             *plan_tools(self.plan),
             *symbol_tools(self.indexes),
             *(mode_tools(self.modes) if self.lineage is None else []),
@@ -144,5 +150,7 @@ class Toolkit:
         await self.indexes.aclose()
         if self.processes is not None:
             await self.processes.aclose()
+        if self.renderer is not None:
+            await self.renderer.aclose()
         if self.children is not None:
             await self.children.aclose()

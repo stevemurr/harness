@@ -57,6 +57,7 @@ uv run harness threads                                   # what has been run
 | `harness init` | write a starter `~/.harness/config.toml` |
 | `harness init-agents` | write a starter `AGENTS.md` in the folder, read at the start of every run |
 | `harness install-servers` | provision the language servers code search uses |
+| `harness install-browser` | fetch the headless Chromium `open_url` falls back to, after `uv sync --extra browser` |
 | `harness evals run` / `report` | the eval ladder, from a checkout of this repository |
 
 `run`, `serve` and `acp` share the provider flags (`--model`, `--base-url`, `--api-key`,
@@ -202,6 +203,16 @@ prints them, the server and the editor forward them. The transcript is unchanged
 the loop still appends one whole message per turn, and a provider only streams when
 someone is listening.
 
+**The web.** `web_search` returns ranked results with snippets; `open_url` fetches one
+page and returns its main content as text, reader-mode style, with links kept so the model
+can open what it finds. A page whose fetch reads as empty is rendered in a headless
+Chromium, if one is installed (`uv sync --extra browser`, then `harness install-browser`),
+and read the same way; the result says it was rendered. The browser is a fallback and
+nothing else: every request a page makes is checked against the same private-address
+guard as the fetch, images and fonts are not loaded, downloads are refused, and a page
+gets fifteen seconds to settle. Without the browser, the tool says the page needs one and
+how to install it.
+
 **Tool servers.** Any MCP server named in `[mcp.servers.<name>]`, or handed over by an
 editor, joins the registry: each of its tools is offered as `<name>__<tool>`, validated
 against the schema the server sent, asked about before it runs unless the server marks it
@@ -288,7 +299,10 @@ an approval waits for the person, and approvals, questions and steering arrive a
 | `POST` | `/api/v1/runs/{id}/commands` | `pause`, `resume`, `cancel`, `resolve_approval`, `answer`, `steer` |
 | `GET` | `/watch`, `/watch/{thread}`, `/console` | browser pages, no build step |
 
-A restart loses nothing a client needs. A thread's runs and their events are rebuilt from
+Stopping the server ends every open stream within a moment with `stream.end` reason
+`server_stopping`, which a client reads as "reconnect from the cursor", and any
+connection that does not drain is closed after five seconds; runs in flight are cancelled
+with their terminal event. A restart loses nothing a client needs. A thread's runs and their events are rebuilt from
 its transcript when it is next opened -- the same run ids, the same rows, the same cursors
 -- so a client that comes back after the server restarted finds the history it saw live.
 Approvals, questions and pauses are live states and do not replay; a run that ended

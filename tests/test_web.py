@@ -289,6 +289,7 @@ async def test_search_honours_the_result_count_it_was_asked_for(ctx: ToolContext
 async def test_being_rate_limited_does_not_read_as_no_results(ctx: ToolContext) -> None:
     """The two outcomes look identical in a result count and mean opposite things: one is
     "nothing matched", the other is "the engine refused this machine"."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(202, text=CHALLENGE_PAGE)
 
@@ -302,6 +303,7 @@ async def test_a_query_that_matches_nothing_is_a_successful_search(ctx: ToolCont
     """On the reasoning `shell.py` gives for a non-zero exit: the tool did its job and the
     answer was negative. Reporting it as a failure would count towards the loop's refusal
     cap for a model asking a reasonable question."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="<div id='links' class='results'></div>")
 
@@ -335,6 +337,7 @@ async def test_open_url_returns_the_page_as_readable_text(ctx: ToolContext) -> N
 async def test_a_redirect_into_the_private_network_is_refused(ctx: ToolContext) -> None:
     """The reason redirects are followed by hand. A check made only on the URL the model
     typed passes a public address that 302s to localhost."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "93.184.216.34":
             return httpx.Response(302, headers={"location": "http://127.0.0.1:8080/watch"})
@@ -418,6 +421,7 @@ async def test_a_long_page_is_cut_and_says_so(ctx: ToolContext) -> None:
 async def test_a_page_with_no_text_says_which_kind_of_empty_it_is(ctx: ToolContext) -> None:
     """A JavaScript-built page is the common case and the model can act on knowing it --
     by opening a different URL rather than trying the same one again."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -450,7 +454,9 @@ async def test_an_empty_main_does_not_beat_the_prose_beside_it() -> None:
     plainly has some."""
     _, text = readable(
         "<html><body><main id='app'></main>"
-        + "<div id='real'><p>" + "Actual prose that goes on for a while. " * 8 + "</p></div>"
+        + "<div id='real'><p>"
+        + "Actual prose that goes on for a while. " * 8
+        + "</p></div>"
         + "</body></html>"
     )
 
@@ -467,6 +473,7 @@ async def test_a_page_served_without_a_content_type_is_still_read(
     ctx: ToolContext,
 ) -> None:
     """Refusing those would be refusing a readable page on a technicality."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -479,3 +486,131 @@ async def test_a_page_served_without_a_content_type_is_still_read(
     )
 
     assert result.ok and "served bare" in result.content
+
+
+# -- pages written for readers without JavaScript ---------------------------------------
+
+
+DISCOURSE_PAGE = """<!doctype html><html><head><title>Hanging tasks - Swift Forums</title>
+<script>window.preload = {"huge": "json"}</script></head>
+<body class="crawler">
+<noscript><style>#d-splash { display: none; }</style></noscript>
+<div id="ember-shell"></div>
+<noscript data-path="/t/hanging-tasks/1">
+  <header><a href="/">Swift Forums</a></header>
+  <div id="main-outlet" class="wrap" role="main">
+    <div id="topic-title"><h1><a href="/t/hanging-tasks/1">Hanging tasks</a></h1></div>
+    <div class="post" itemprop="text"><p>Before I describe my problem in detail, I would
+    like to summarize the situation, because it matters for understanding it.</p>
+    <ul><li>240 test cases</li><li>All pass with four workers on the Mac</li></ul></div>
+    <div class="post" itemprop="text"><p>Have you tried a fresh URLSession per test? The
+    shared one keeps connections alive across tests and that can serialise them.</p></div>
+  </div>
+</noscript>
+</body></html>"""
+
+
+def test_a_discourse_topic_is_read_from_its_noscript_block() -> None:
+    """The tool does not run JavaScript, which makes it the reader `noscript` is written
+    for. Dropping it read every Discourse thread as empty."""
+    title, text = readable(DISCOURSE_PAGE)
+
+    assert title.startswith("Hanging tasks")
+    assert "summarize the situation" in text
+    assert "fresh URLSession per test" in text
+    assert "240 test cases" in text
+    assert "d-splash" not in text  # the style inside the other noscript is still dropped
+
+
+# -- the browser, as a fallback ----------------------------------------------------------
+
+
+SHELL_PAGE = (
+    "<!doctype html><html><head><title>App</title></head>"
+    + '<body><div id="root"></div><script src="/app.js"></script></body></html>'
+)
+
+
+class _FakeRenderer:
+    def __init__(self, html: str | None = None, error: Exception | None = None) -> None:
+        self.html, self.error = html, error
+        self.rendered: list[str] = []
+        self.closed = False
+
+    async def render(self, url: str) -> str:
+        self.rendered.append(url)
+        if self.error is not None:
+            raise self.error
+        return self.html or ""
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _shell_transport() -> httpx.AsyncBaseTransport:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=SHELL_PAGE, headers={"content-type": "text/html"})
+
+    return transport(handler)
+
+
+async def test_an_empty_shell_is_rendered_and_read(ctx: ToolContext) -> None:
+    renderer = _FakeRenderer(html=ARTICLE_PAGE)
+    opener = Open(OPEN_ANYWHERE, _shell_transport(), renderer)
+
+    result = await bind(opener).call({"url": "https://example.com/app"}, ctx)
+
+    assert result.ok
+    assert renderer.rendered == ["https://example.com/app"]
+    assert "How wrapping works" in result.content
+    assert "rendered in a browser" in result.content
+
+
+async def test_a_page_with_text_is_never_rendered(ctx: ToolContext) -> None:
+    """The fetch is the common path. A browser is reached for only when it reads as empty."""
+    renderer = _FakeRenderer(html=ARTICLE_PAGE)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=ARTICLE_PAGE, headers={"content-type": "text/html"})
+
+    opener = Open(OPEN_ANYWHERE, transport(handler), renderer)
+    result = await bind(opener).call({"url": "https://example.com/a"}, ctx)
+
+    assert result.ok and renderer.rendered == []
+    assert "rendered in a browser" not in result.content
+
+
+async def test_without_a_browser_the_tool_says_how_to_get_one(ctx: ToolContext) -> None:
+    from harness.tools.browser import INSTALL, RenderUnavailable
+
+    renderer = _FakeRenderer(
+        error=RenderUnavailable(f"no browser is installed. Install one with: {INSTALL}")
+    )
+    opener = Open(OPEN_ANYWHERE, _shell_transport(), renderer)
+
+    result = await bind(opener).call({"url": "https://example.com/app"}, ctx)
+
+    assert not result.ok and not result.refused
+    assert "install-browser" in result.content
+
+
+async def test_a_render_that_still_reads_as_empty_says_so(ctx: ToolContext) -> None:
+    renderer = _FakeRenderer(html=SHELL_PAGE)
+    opener = Open(OPEN_ANYWHERE, _shell_transport(), renderer)
+
+    result = await bind(opener).call({"url": "https://example.com/app"}, ctx)
+
+    assert not result.ok
+    assert "even after running its JavaScript" in result.content
+
+
+async def test_rendering_can_be_switched_off(ctx: ToolContext) -> None:
+    from dataclasses import replace
+
+    renderer = _FakeRenderer(html=ARTICLE_PAGE)
+    opener = Open(replace(OPEN_ANYWHERE, render=False), _shell_transport(), renderer)
+
+    result = await bind(opener).call({"url": "https://example.com/app"}, ctx)
+
+    assert not result.ok and renderer.rendered == []
+    assert "rendering is not available" in result.content

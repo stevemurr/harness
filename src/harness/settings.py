@@ -151,6 +151,12 @@ class Web:
     #: a person who genuinely wants an agent reading their intranet can say so -- and has
     #: to say so.
     block_private: bool = True
+    #: Whether a page that fetches as empty is rendered in a headless browser before the
+    #: tool gives up. Only ever a fallback: the fetch is the common path, and it stays so.
+    render: bool = True
+    #: Seconds a render may take to settle. A page that has not stopped loading in this
+    #: long is answered with what it has by then.
+    render_timeout: float = 15.0
 
 
 @dataclass(frozen=True, slots=True)

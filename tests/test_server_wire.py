@@ -377,3 +377,64 @@ async def _settle(app, timeout: float = 5.0) -> None:
     tasks = [r.task for r in app.state.runtime.runs.values() if r.task is not None]
     if tasks:
         await asyncio.wait(tasks, timeout=timeout)
+
+
+# -- hang four: a stream that never ends holds the server open --------------------------
+
+
+@pytest.fixture
+async def stoppable(folder, tmp_path) -> AsyncIterator[tuple[Served, asyncio.Event]]:
+    """A server with a run parked on an approval, and the event `serve` sets on a stop."""
+    closing = asyncio.Event()
+    app = create_app(
+        provider=ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")),
+        store=JsonlStore(tmp_path / "sessions"),
+        heartbeat=HEARTBEAT * 50,  # long, so the end below cannot be a heartbeat tick
+        closing=closing,
+    )
+    async for served in serve(app):
+        yield served, closing
+
+
+async def test_a_stop_ends_a_live_follow_at_once_and_says_why(stoppable, folder) -> None:
+    """Uvicorn drains connections before it runs the app's shutdown, and a follow of a live
+    run never drains on its own -- so a stop signal used to wait on the client forever.
+    Now the stream ends the moment the signal lands, with a reason the client reads as
+    "reconnect from the cursor"."""
+    served, closing = stoppable
+    run_id = await begin(served, folder)
+    follow = await served.open_stream(f"/runs/{run_id}/events?after_seq=0")
+    _ = await follow.until(b"approval.requested")
+
+    started = asyncio.get_running_loop().time()
+    closing.set()
+    body = await follow.until(b"stream.end", timeout=2.0)
+    took = asyncio.get_running_loop().time() - started
+    follow.close()
+
+    assert b"event: stream.end\ndata: " in body
+    frame = body.split(b"event: stream.end\ndata: ")[1].split(b"\n")[0]
+    assert json.loads(frame) == {"reason": "server_stopping"}
+    assert took < 1.0, took  # well inside the heartbeat, which is five seconds here
+
+
+async def test_a_watch_stream_ends_on_a_stop(stoppable, folder) -> None:
+    served, closing = stoppable
+    run_id = await begin(served, folder)
+    listed = await served.json("GET", "/runs")
+    thread_id = run_id[len("run_") :].rpartition("_")[0]
+    assert listed.json()["runs"][0]["run_id"] == run_id
+    follow = await served.open_stream(f"/watch/{thread_id}/events")
+    _ = await follow.until(b'"kind": "harness"')
+
+    closing.set()
+    # The response ends: the chunked body's terminator arrives rather than more rows.
+    async with asyncio.timeout(2.0):
+        while b"\r\n0\r\n\r\n" not in follow._raw:
+            chunk = await follow.reader.read(4096)
+            if not chunk:
+                break
+            follow._absorb(chunk)
+    follow.close()
+
+    assert b"\r\n0\r\n\r\n" in follow._raw or follow.reader.at_eof()

@@ -120,8 +120,14 @@ def create_app(
     settings: Settings | None = None,
     boards: Path | None = None,
     mcp: tuple[McpServer, ...] = (),
+    closing: asyncio.Event | None = None,
 ) -> Starlette:
     """The server, with its collaborators handed in.
+
+    `closing` is set by whoever owns the stop signal -- `cli/serve.py` -- the moment it
+    arrives, so every open stream can end. It has to come from outside: the application's
+    own shutdown hook runs only after uvicorn has drained the connections, which the streams
+    were holding open. See `stream.py`.
 
     `Provider` is an interface, so this is importable and testable end to end against a
     scripted model -- which is the practical argument for the interface, separate from the
@@ -588,6 +594,7 @@ def create_app(
             developer=request.query_params.get("visibility") == "all",
             ticks=ticks,
             heartbeat=heartbeat,
+            closing=closing,
         )
 
     # -- commands --------------------------------------------------------------------------
@@ -721,7 +728,7 @@ def create_app(
                 {"kind": "harness", "context_window": window, "compact_at": threshold}
             ) + "\n\n"
             seen, idle = start, 0.0
-            while True:
+            while not (closing is not None and closing.is_set()):
                 if path.exists():
                     lines = complete_lines(path.read_text(encoding="utf-8"))
                     # The id is how many lines the client has then consumed, so a reconnect

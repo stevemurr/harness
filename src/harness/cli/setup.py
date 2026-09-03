@@ -1,4 +1,4 @@
-"""`harness init`, `init-agents`, `install-servers`: the three things done once."""
+"""`harness init`, `init-agents`, `install-servers`, `install-browser`: the things done once."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from harness.cli.resolve import CliError, Commands
-from harness.cli.terminal import bold, dim, green, yellow
+from harness.cli.terminal import bold, dim, green, red, yellow
 from harness.config import ConfigError, flag, write_example
 
 
@@ -32,6 +32,12 @@ def configure(commands: Commands) -> None:
         + "there. Run once; never happens during a run.",
     )
     servers.set_defaults(handler=handle_install_servers)
+    browser = commands.add_parser(
+        "install-browser",
+        help="Fetch the headless Chromium that open_url falls back to for a page that builds "
+        + "itself with JavaScript. Needs the `browser` extra: uv sync --extra browser.",
+    )
+    browser.set_defaults(handler=handle_install_browser)
 
 
 def handle_init(args: argparse.Namespace) -> int:
@@ -60,6 +66,27 @@ def handle_init_agents(args: argparse.Namespace) -> int:
 
 def handle_install_servers(_args: argparse.Namespace) -> int:
     return asyncio.run(_install_servers())
+
+
+def handle_install_browser(_args: argparse.Namespace) -> int:
+    """Playwright's own installer, for its own pinned Chromium build.
+
+    Run as a subprocess of this interpreter rather than imported, because that is the
+    documented way and the one that lays the browser where Playwright looks for it.
+    """
+    import importlib.util
+    import subprocess
+    import sys
+
+    if importlib.util.find_spec("playwright") is None:
+        print(
+            red("playwright is not installed. Run: uv sync --extra browser, then this again."),
+            file=sys.stderr,
+        )
+        return 2
+    print(dim("fetching Chromium for playwright"))
+    done = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+    return done.returncode
 
 
 async def _install_servers() -> int:

@@ -179,6 +179,14 @@ class Monitor:
                     if self.seen >= self.limits.flood:
                         process.child.terminate()
                         break
+            # Read on to the end, discarding. `wait()` does not answer until the child's
+            # pipes have closed as well as the child, and a pipe whose reader stopped mid-
+            # flood never reaches its end: the loop pauses reading a full buffer and so
+            # never sees EOF. Measured 2026-09-03 as a flooded monitor that was killed and
+            # then reported running for as long as anyone waited -- one time in six, and
+            # five in six once the kill grew a process listing in front of it.
+            async for _ in process.child.read_lines():
+                pass
         except asyncio.CancelledError:
             raise
         except Exception:

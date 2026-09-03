@@ -23,6 +23,7 @@ def test_every_subcommand_parses_and_names_its_handler() -> None:
         ["init"],
         ["init-agents", "-C", "/tmp"],
         ["install-servers"],
+        ["install-browser"],
         ["evals", "run", "--label", "x", "--both"],
         ["evals", "report", "a.json", "b.json"],
     ):

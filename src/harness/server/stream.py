@@ -17,10 +17,21 @@ in mind needs the other two:
      allowed to think for an hour, so an idle stream is never treated as a failure.
   3. **An idle connection dies silently**, so a `:` comment goes out every `HEARTBEAT`
      seconds.
+
+And a fourth, found from the other side: **a stream that never ends holds the server
+open**. Uvicorn waits for every connection to finish before it runs the application's
+shutdown, and these streams are built to run as long as there is something to follow, so a
+client following a live run kept the process alive through a stop signal for as long as it
+stayed connected -- and the shutdown hook that would have ended the run, and with it the
+stream, never got to run. So a stream is told when the server is stopping and ends with
+`stream.end` reason `server_stopping`, which a client reads as "still going, reconnect from
+the cursor" -- the right reading, since the transcript survives the restart and the run's
+history is rebuilt from it. (2026-09-03)
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -44,10 +55,18 @@ def event_stream(
     developer: bool = False,
     ticks: int = 0,
     heartbeat: float = HEARTBEAT,
+    closing: asyncio.Event | None = None,
 ) -> StreamingResponse:
     """One run's log from a cursor, as an SSE response."""
     return StreamingResponse(
-        frames(run, after_seq, developer=developer, ticks=ticks, heartbeat=heartbeat),
+        frames(
+            run,
+            after_seq,
+            developer=developer,
+            ticks=ticks,
+            heartbeat=heartbeat,
+            closing=closing,
+        ),
         media_type="text/event-stream",
         headers={
             "cache-control": "no-store",
@@ -67,6 +86,7 @@ async def frames(
     developer: bool,
     ticks: int,
     heartbeat: float,
+    closing: asyncio.Event | None = None,
 ) -> AsyncIterator[str]:
     """One run's log from a cursor, as SSE.
 
@@ -102,10 +122,34 @@ async def frames(
             yield end("tick_limit")
             return
 
+        if closing is not None and closing.is_set():
+            yield end("server_stopping")
+            return
+
         before = run.events.last_seq
-        await run.events.wait(cursor, heartbeat)
-        if run.events.last_seq == before:
+        await _next(run, cursor, heartbeat, closing)
+        if run.events.last_seq == before and not (closing is not None and closing.is_set()):
             yield ": keep-alive\n\n"
+
+
+async def _next(
+    run: Run, cursor: int, heartbeat: float, closing: asyncio.Event | None
+) -> None:
+    """Wait for a row after the cursor, the heartbeat, or the server stopping -- whichever
+    comes first. The stop is what makes a follow end within a moment of the signal rather
+    than at its next heartbeat."""
+    if closing is None:
+        await run.events.wait(cursor, heartbeat)
+        return
+    rows = asyncio.ensure_future(run.events.wait(cursor, heartbeat))
+    stop = asyncio.ensure_future(closing.wait())
+    try:
+        _ = await asyncio.wait({rows, stop}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (rows, stop):
+            if not task.done():
+                _ = task.cancel()
+        _ = await asyncio.gather(rows, stop, return_exceptions=True)
 
 
 def end(reason: str) -> str:
