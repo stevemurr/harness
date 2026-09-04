@@ -15,7 +15,6 @@ from harness.tools.browser import (
     Capture,
     RenderFailed,
     RenderUnavailable,
-    file_error,
     reading_of,
 )
 from harness.tools.kit import Toolkit
@@ -143,7 +142,7 @@ async def test_without_a_browser_the_tool_says_how_to_get_one(
     tool = bind(Screenshot(ANYWHERE, renderer, tmp_path / "shots"))
 
     result = await tool.call({"url": "index.html"}, ToolContext(ws))
-    assert not result.ok and "install-browser" in result.content
+    assert not result.ok and "install-webkit" in result.content
 
     broken = _FakeRenderer(error=RenderFailed("the browser could not load it"))
     result = await bind(Screenshot(ANYWHERE, broken, tmp_path / "shots")).call(
@@ -153,7 +152,7 @@ async def test_without_a_browser_the_tool_says_how_to_get_one(
 
     none = bind(Screenshot(ANYWHERE, None, tmp_path / "shots"))
     result = await none.call({"url": "index.html"}, ToolContext(ws))
-    assert not result.ok and "install-browser" in result.content
+    assert not result.ok and "install-webkit" in result.content
 
 
 async def test_the_viewport_has_a_ceiling_and_a_floor(ws: Workspace, tmp_path: Path) -> None:
@@ -170,14 +169,6 @@ async def test_the_viewport_has_a_ceiling_and_a_floor(ws: Workspace, tmp_path: P
     assert properties["width"]["minimum"] == 200 and properties["height"]["minimum"] == 200
 
 
-def test_a_file_page_may_load_from_its_folder_and_nowhere_else(tmp_path: Path) -> None:
-    beside = (tmp_path / "styles.css").resolve()
-    assert file_error(beside.as_uri(), tmp_path.resolve()) == ""
-    assert "outside" in file_error("file:///etc/passwd", tmp_path.resolve())
-    assert "not in the working folder" in file_error(beside.as_uri(), None)
-    assert "names a host" in file_error("file://server/share/x.css", tmp_path.resolve())
-
-
 def test_the_kit_offers_it_beside_the_web_tools(tmp_path: Path) -> None:
     names = [t.spec.name for t in Toolkit().tools()]
     assert "screenshot" in names
@@ -186,32 +177,32 @@ def test_the_kit_offers_it_beside_the_web_tools(tmp_path: Path) -> None:
 
 
 async def test_the_real_browser_captures_a_local_page(tmp_path: Path) -> None:
-    """The one test that starts Chromium: a page with a stylesheet beside it, a missing
-    image, and a console error, so every field of the reading is exercised for real."""
-    _ = pytest.importorskip("playwright")
+    """The one test that starts Safari's engine, where `harness install-webkit` has run:
+    a page with a stylesheet beside it, a missing image, a console error, and a
+    stylesheet from outside the folder, so every field of the reading is exercised."""
     from harness.tools.browser import new_renderer
+    from harness.tools.webkit import WebKit
 
+    if not WebKit().available:
+        pytest.skip("wkrender is not installed")
+    renderer = new_renderer(ANYWHERE)
     _ = (tmp_path / "styles.css").write_text(
         "body { background: rgb(1, 2, 3); color: rgb(250, 250, 250); font-family: serif }"
         + ".wide { width: 900px }"
     )
     _ = (tmp_path / "index.html").write_text(
         "<!doctype html><html><head><title>Wide</title>"
-        + '<link rel="stylesheet" href="styles.css"></head>'
+        + '<link rel="stylesheet" href="styles.css">'
+        + '<link rel="stylesheet" href="file:///etc/hosts"></head>'
         + "<body><header><nav><a href='#w'>w</a></nav></header><main>"
         + "<h1>Hello</h1><div class='wide'>x</div><img src='missing.png'>"
-        + '<link rel="stylesheet" href="file:///etc/hosts">'
         + "<script>console.error('bad')</script>"
         + "</main></body></html>"
     )
-    renderer = new_renderer(ANYWHERE)
     try:
-        try:
-            shot = await renderer.capture(
-                (tmp_path / "index.html").as_uri(), width=390, height=600, files_under=tmp_path
-            )
-        except RenderUnavailable as exc:
-            pytest.skip(str(exc))
+        shot = await renderer.capture(
+            (tmp_path / "index.html").as_uri(), width=390, height=600, files_under=tmp_path
+        )
     finally:
         await renderer.aclose()
 
@@ -224,5 +215,5 @@ async def test_the_real_browser_captures_a_local_page(tmp_path: Path) -> None:
     assert shot.background == "rgb(1, 2, 3)" and "serif" in shot.font
     assert any("bad" in e for e in shot.console_errors)
     assert any("missing.png" in f for f in shot.failed_requests)
-    # The stylesheet from outside the folder was refused by the guard, not served.
+    # The stylesheet from outside the folder was not served.
     assert any("etc/hosts" in f for f in shot.failed_requests)

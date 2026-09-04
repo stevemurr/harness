@@ -2,7 +2,7 @@
 set -eu
 # The brief, the checker and the portrait are the question; a run that edits them has
 # changed the question rather than answered it. Digests are committed literals.
-if [ "$(shasum check_site.py | cut -d' ' -f1)" != "1afcea335bce87b8000b2afd6ccfefe699781ccc" ]; then
+if [ "$(shasum check_site.py | cut -d' ' -f1)" != "004b115d1407cf388d71b77d62d7a1750721f630" ]; then
     echo "FAILED: check_site.py has been changed" >&2
     exit 1
 fi

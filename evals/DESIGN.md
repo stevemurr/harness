@@ -62,7 +62,7 @@ transcript. What was reasoned through before that, and still holds, follows; the
 is `docs/adr/0023`.
 
 **What was built.** `screenshot` loads a page -- a URL, or a file in the folder -- in the
-headless Chromium `open_url` already has, at a viewport, light or dark, and writes the PNG
+headless Safari engine `open_url` renders with, at a viewport, light or dark, and writes the PNG
 under `~/.harness/screenshots/`. The model reads a *reading* of the page: whether the
 document is wider than the viewport, the headings and landmarks, images without alt, the
 body's font and colours, console errors, failed requests. `21-site` is the rung: a personal

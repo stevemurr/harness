@@ -1,7 +1,7 @@
 """A picture of a page, and a reading of it.
 
-`screenshot` loads a page in the same headless Chromium `open_url` falls back to, at a
-viewport the model chooses, and writes what it saw as a PNG under `~/.harness/screenshots/`.
+`screenshot` loads a page in the same headless Safari engine `open_url` renders with, at
+a viewport the model chooses, and writes what it saw as a PNG under `~/.harness/screenshots/`.
 The result the model reads is not the picture. It is what the browser can say about the
 page in a few lines: the title, whether the document is wider than the viewport, the
 headings and landmarks, the body's font and colours, every console error, every request
@@ -53,7 +53,7 @@ from harness.workspace import WorkspaceError
 #: Beside `threads/`, `processes/` and `servers/`. Images from a tool server land here too.
 SCREENSHOTS = Path("~/.harness/screenshots")
 
-#: Chromium's own ceiling for a headless viewport.
+#: The ceiling `wkrender` accepts for a viewport.
 WIDEST, TALLEST = 3840, 2160
 
 
@@ -139,7 +139,7 @@ class Screenshot:
 
         if self.renderer is None or not self.settings.render:
             return ToolResult(
-                f"no browser is available here to capture {target}. Install one with: "
+                f"no browser is available here to capture {target}. Install it with: "
                 + INSTALL,
                 ok=False,
             )

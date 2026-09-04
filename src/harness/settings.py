@@ -126,7 +126,7 @@ class Shell:
 #: or a missing `Mozilla/5.0` prefix is each enough on its own to be answered with a
 #: challenge page instead of the article. Measured 2026-09-03 on a Cloudflare-fronted
 #: site: the same request was 403 with a script-shaped header set and 200 with a
-#: browser's. Kept in step with the Chromium `harness install-browser` fetches.
+#: browser's. Used by the fetch alone; the browser itself is Safari's engine.
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     + "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"

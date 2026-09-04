@@ -28,6 +28,43 @@ async def test_a_binary_that_fails_says_what_it_said(tmp_path: Path) -> None:
         _ = await webkit.render("https://example.com/")
 
 
+async def test_a_render_passes_what_it_was_asked_for(tmp_path: Path) -> None:
+    """Viewport, dark, the script, the PNG path, the folder a file page may read, and the
+    private-address guard all travel as flags; nothing else does."""
+    fake = tmp_path / "wkrender"
+    log = tmp_path / "argv.txt"
+    _ = fake.write_text(
+        "#!/bin/sh\n"
+        + f"printf '%s\\n' \"$@\" > {log}\n"
+        + "printf '%s' '{\"url\": \"u\", \"title\": \"t\", \"html\": \"h\", "
+        + "\"eval\": {\"n\": 1}, \"errors\": [\"e\"], \"failed\": [\"f\"]}'\n"
+    )
+    fake.chmod(0o755)
+    page = await WebKit(path=str(fake), timeout=7).render(
+        "file:///x/index.html",
+        width=390,
+        height=800,
+        dark=True,
+        script="() => 1",
+        png=tmp_path / "shot.png",
+        full_page=True,
+        files_under=tmp_path,
+        block_private=True,
+    )
+    argv = log.read_text().splitlines()
+    assert argv[:4] == ["--json", "--timeout", "7", "--viewport"] and argv[4] == "390x800"
+    assert "--dark" in argv and "--full-page" in argv and "--block-private" in argv
+    assert argv[argv.index("--eval") + 1] == "() => 1"
+    assert argv[argv.index("--png") + 1] == str(tmp_path / "shot.png")
+    assert argv[argv.index("--files-under") + 1] == str(tmp_path)
+    assert argv[-1] == "file:///x/index.html"
+    assert page.eval == {"n": 1} and page.errors == ("e",) and page.failed == ("f",)
+
+    _ = await WebKit(path=str(fake)).render("https://example.com/")
+    plain = log.read_text().splitlines()
+    assert "--dark" not in plain and "--eval" not in plain and "--png" not in plain
+
+
 async def test_a_binary_that_answers_is_read_as_json(tmp_path: Path) -> None:
     fake = tmp_path / "wkrender"
     _ = fake.write_text(

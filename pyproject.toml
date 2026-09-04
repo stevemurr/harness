@@ -25,10 +25,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The browser `open_url` falls back to for a page that builds itself with JavaScript.
-# Optional because it is a few hundred megabytes of Chromium for a case seen once so far;
-# `harness install-browser` fetches the browser after `uv sync --extra browser`.
-browser = ["playwright>=1.45"]
+# The browser is not a Python dependency: `open_url`, `web_search` and `screenshot` go
+# through `wkrender`, a Swift command in the repository beside this one, installed by
+# `harness install-webkit`. Playwright's Chromium was the browser until 2026-09-03.
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

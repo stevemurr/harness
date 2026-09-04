@@ -3,6 +3,20 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-03: one browser, and it is Safari's
+
+Following the measurement below, `wkrender` took over `open_url`'s render and
+`screenshot` as well, and Playwright's Chromium left the project: no Python browser
+dependency, no `install-browser`, one engine for search, reading and pictures. What
+Chromium's route interception did -- checking every request a page makes against the
+private-address guard -- `wkrender` does by refusing navigations whose host resolves to
+a private address and blocking subresources at a literal private address or `localhost`
+by rule. The gap, a subresource named by a hostname that resolves to a private address,
+is stated in both places rather than papered over. The site rung's checker runs on the
+same binary. Checked on a local page: the blocked image and a stylesheet from outside
+the folder both come back as failed loads, and a navigation to `127.0.0.1` or
+`localhost` is refused by name.
+
 ## 2026-09-03: the search engine refuses everything but Safari
 
 Across every thread to date, 64 of 133 `web_search` calls were answered with

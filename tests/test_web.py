@@ -585,14 +585,14 @@ async def test_without_a_browser_the_tool_says_how_to_get_one(ctx: ToolContext) 
     from harness.tools.browser import INSTALL, RenderUnavailable
 
     renderer = _FakeRenderer(
-        error=RenderUnavailable(f"no browser is installed. Install one with: {INSTALL}")
+        error=RenderUnavailable(f"no browser is installed. Install it with: {INSTALL}")
     )
     opener = Open(OPEN_ANYWHERE, _shell_transport(), renderer)
 
     result = await bind(opener).call({"url": "https://example.com/app"}, ctx)
 
     assert not result.ok and not result.refused
-    assert "install-browser" in result.content
+    assert "install-webkit" in result.content
 
 
 async def test_a_render_that_still_reads_as_empty_says_so(ctx: ToolContext) -> None:

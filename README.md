@@ -58,8 +58,7 @@ uv run harness threads                                   # what has been run
 | `harness init-agents` | write a starter `AGENTS.md` in the folder, read at the start of every run |
 | `harness init-skill NAME` | write a starter skill under `.harness/skills/NAME`, offered to the model when it applies |
 | `harness install-servers` | provision the language servers code search uses |
-| `harness install-browser` | fetch the headless Chromium `open_url` falls back to, after `uv sync --extra browser` |
-| `harness install-webkit` | build and install `wkrender`, the Safari engine `web_search` goes through (macOS) |
+| `harness install-webkit` | build and install `wkrender`, the Safari engine the web tools go through (macOS) |
 | `harness evals run` / `report` | the eval ladder, from a checkout of this repository |
 
 `run`, `serve` and `acp` share the provider flags (`--model`, `--base-url`, `--api-key`,
@@ -240,23 +239,24 @@ Mac's Safari and parses that, the way talkie searches, because that is the one e
 the endpoint does not challenge: measured on a machine it was blocking, the fetch got the
 anomaly page every time, headless Chromium got an error page, and WebKit got the results.
 `wkrender` is a small Swift command in its own repository beside this one; `harness
-install-webkit` builds it and puts it under `~/.harness/bin`. Without it, or when a render
-fails, the search is one POST and one parse, and a challenge says how to install the
-engine. `open_url` fetches one page and returns its main content as text, reader-mode
-style, with links kept so the model can open what it finds. A long page is cut at a paragraph and says which `start` to call
+install-webkit` builds it and puts it under `~/.harness/bin`. It is the harness's one
+browser: `web_search`, `open_url`'s render and `screenshot` all go through it, and there
+is no Python browser dependency. Without it, or when a render fails, the search is one
+POST and one parse, and a challenge says how to install the engine. `open_url` fetches
+one page and returns its main content as text, reader-mode style, with links kept so the
+model can open what it finds. A long page is cut at a paragraph and says which `start` to call
 again with for the rest, so nothing on a page is out of reach. A GitHub blob URL is read
 as the raw file. The fetch sends what a browser sends when a person opens a page -- a
 current Chrome's user agent, the navigation and client-hint headers that must agree with
 it -- because bot checks read the whole request and answer a script-shaped one with a
 challenge page. A page whose fetch reads as empty, or a site that answers with a bot check
-anyway, is rendered in a headless Chromium, if one is installed (`uv sync --extra browser`,
-then `harness install-browser`), and read the same way; the result says it was rendered and
-why. The browser is a fallback and nothing else: every request a page makes is checked
-against the same private-address guard as the fetch, images and fonts are not loaded,
-downloads are refused, and a page gets fifteen seconds to settle. Without the browser, the
-tool says the page needs one and how to install it.
+anyway, is rendered in `wkrender` and read the same way; the result says it was rendered
+and why. The browser is a fallback for reading and nothing else: a navigation or redirect
+to this machine or its private network is refused, a subresource at a private address is
+blocked, downloads and popups do not happen, and a page gets fifteen seconds to settle.
+Without the browser, the tool says the page needs one and how to install it.
 
-`screenshot` uses the same browser to look at a page the agent is building: a URL, or an
+`screenshot` uses the same engine to look at a page the agent is building: a URL, or an
 HTML file in the folder, at a viewport it chooses, light or dark. The PNG goes under
 `~/.harness/screenshots/` for a person to open. What the model gets back is a reading of
 the page rather than the picture -- title, document width against the viewport, headings,
