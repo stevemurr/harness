@@ -76,7 +76,7 @@ _MCP_SERVER_KEYS = frozenset({"command", "args", "env", "url", "headers"})
 _APPROVAL_KEYS = frozenset({"policy", "always_allow"})
 _WEB_KEYS = frozenset({
     "user_agent", "accept_language", "block_private", "render", "render_timeout",
-    "timeout", "max_chars",
+    "timeout", "max_chars", "webkit",
 })
 _TABLES = frozenset({
     "provider", "server", "compaction", "output", "limits", "mcp", "approval", "web",
@@ -223,6 +223,7 @@ def load(path: Path | None = None) -> Config:
                 render_timeout=web.number("render_timeout", Web().render_timeout),
                 timeout=web.number("timeout", Web().timeout),
                 max_chars=web.integer("max_chars", Web().max_chars),
+                webkit=web.text("webkit", ""),
             ),
         ),
         mcp=mcp,
@@ -440,6 +441,7 @@ def write_example(path: Path | None = None) -> Path:
         + '# accept_language = "en-US,en;q=0.9"\n'
         + "# block_private = true\n"
         + "# render = true          # fall back to a headless browser when a page needs one\n"
+        + '# webkit = ""            # wkrender, if not under ~/.harness/bin\n'
         + "\n"
         + "# Tool servers (MCP), one table each. Their tools join the built-in ones as\n"
         + "# <server>__<tool>, and each is asked about before it runs unless the server\n"

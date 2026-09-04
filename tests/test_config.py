@@ -158,6 +158,7 @@ def test_the_web_table_sets_who_the_tools_say_they_are(tmp_path: Path) -> None:
     assert web.user_agent == "Mozilla/5.0 test"
     assert web.block_private is False and web.max_chars == 5000
     assert web.render is True  # untouched keys keep their defaults
+    assert web.webkit == ""
 
     _ = path.write_text("[web]\nuser_agnet = 'x'\n")
     with pytest.raises(ConfigError, match="user_agnet"):

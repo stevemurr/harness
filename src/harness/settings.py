@@ -147,6 +147,9 @@ class Web:
     user_agent: str = DEFAULT_USER_AGENT
     #: The `Accept-Language` sent with every request, and the browser's locale.
     accept_language: str = "en-US,en;q=0.9"
+    #: Where `wkrender` is, when it is not in the harness's own bin folder. The Safari
+    #: engine `web_search` goes through; see `tools/webkit.py`.
+    webkit: str = ""
 
     #: Seconds for one request. Well under `Shell.timeout`: a search that has not answered
     #: in this long is a search being refused slowly, and a run has better things to wait on.

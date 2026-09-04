@@ -59,6 +59,7 @@ uv run harness threads                                   # what has been run
 | `harness init-skill NAME` | write a starter skill under `.harness/skills/NAME`, offered to the model when it applies |
 | `harness install-servers` | provision the language servers code search uses |
 | `harness install-browser` | fetch the headless Chromium `open_url` falls back to, after `uv sync --extra browser` |
+| `harness install-webkit` | build and install `wkrender`, the Safari engine `web_search` goes through (macOS) |
 | `harness evals run` / `report` | the eval ladder, from a checkout of this repository |
 
 `run`, `serve` and `acp` share the provider flags (`--model`, `--base-url`, `--api-key`,
@@ -110,6 +111,7 @@ user_agent = "Mozilla/5.0 (...) Chrome/151.0.0.0 Safari/537.36"   # a current br
 accept_language = "en-US,en;q=0.9"
 block_private = true       # open_url and screenshot stay off this machine and its network
 render = true              # fall back to a headless browser when a page needs one
+webkit = ""                # wkrender, when it is not under ~/.harness/bin
 
 [mcp.servers.files]        # a tool server, one table each; see "Tool servers" below
 command = "npx"
@@ -121,8 +123,8 @@ file only its owner can read beats an environment variable that leaks into every
 process. `init` writes it 0600, and a file readable by others is refused if it holds a key.
 
 Everything the harness keeps lives under `~/.harness/`: `threads/` (one JSONL transcript per
-thread), `boards/` (one work board per folder), `servers/` (language servers), and
-`processes/` (background command output).
+thread), `boards/` (one work board per folder), `servers/` (language servers), `bin/`
+(`wkrender`), `screenshots/`, and `processes/` (background command output).
 
 ## How it works
 
@@ -232,9 +234,16 @@ prints them, the server and the editor forward them. The transcript is unchanged
 the loop still appends one whole message per turn, and a provider only streams when
 someone is listening.
 
-**The web.** `web_search` returns ranked results with snippets; `open_url` fetches one
-page and returns its main content as text, reader-mode style, with links kept so the model
-can open what it finds. A long page is cut at a paragraph and says which `start` to call
+**The web.** `web_search` returns ranked results with snippets. When `wkrender` is
+installed it loads DuckDuckGo's results page in a headless WKWebView presenting as this
+Mac's Safari and parses that, the way talkie searches, because that is the one engine
+the endpoint does not challenge: measured on a machine it was blocking, the fetch got the
+anomaly page every time, headless Chromium got an error page, and WebKit got the results.
+`wkrender` is a small Swift command in its own repository beside this one; `harness
+install-webkit` builds it and puts it under `~/.harness/bin`. Without it, or when a render
+fails, the search is one POST and one parse, and a challenge says how to install the
+engine. `open_url` fetches one page and returns its main content as text, reader-mode
+style, with links kept so the model can open what it finds. A long page is cut at a paragraph and says which `start` to call
 again with for the rest, so nothing on a page is out of reach. A GitHub blob URL is read
 as the raw file. The fetch sends what a browser sends when a person opens a page -- a
 current Chrome's user agent, the navigation and client-hint headers that must agree with

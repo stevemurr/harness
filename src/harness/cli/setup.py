@@ -47,6 +47,19 @@ def configure(commands: Commands) -> None:
         + "itself with JavaScript. Needs the `browser` extra: uv sync --extra browser.",
     )
     browser.set_defaults(handler=handle_install_browser)
+    webkit = commands.add_parser(
+        "install-webkit",
+        help="Build and install wkrender, the Safari engine web_search goes through, into "
+        + "~/.harness/bin. Builds the checkout beside this one by default, or adopts a "
+        + "wkrender already on PATH. macOS only.",
+    )
+    _ = webkit.add_argument(
+        "--from",
+        dest="source",
+        default="",
+        help="A wkrender checkout or binary (default: ../wkrender beside this checkout).",
+    )
+    webkit.set_defaults(handler=handle_install_webkit)
 
 
 def handle_init(args: argparse.Namespace) -> int:
@@ -112,6 +125,44 @@ def handle_install_browser(_args: argparse.Namespace) -> int:
     print(dim("fetching Chromium for playwright"))
     done = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
     return done.returncode
+
+
+def handle_install_webkit(args: argparse.Namespace) -> int:
+    """Build `wkrender` from its checkout and put the binary where the harness looks.
+
+    A sibling repository rather than a part of this one: it is Swift, built with a
+    toolchain this package does not need for anything else, and it is useful on its own.
+    The build is a subprocess of `swift`, never something a run does for itself.
+    """
+    import subprocess
+
+    from harness.tools.webkit import BIN, BINARY, adopt
+
+    given = flag(args, "source")
+    source = Path(given).expanduser() if given else _sibling("wkrender")
+    if source.is_dir() and (source / "Package.swift").is_file():
+        print(dim(f"building {source}"))
+        done = subprocess.run(
+            ["swift", "build", "-c", "release", "--package-path", str(source)]
+        )
+        if done.returncode != 0:
+            raise CliError(f"swift build failed in {source}")
+    elif not source.exists() and not given:
+        print(dim(f"no checkout at {source}; looking on PATH"))
+    try:
+        installed = adopt(source if source.exists() else None)
+    except FileNotFoundError as exc:
+        raise CliError(
+            f"{exc}. Clone it beside this checkout as {source.name}, or give --from."
+        ) from exc
+    print(f"installed {installed}")
+    print(dim(f"web_search now goes through Safari's engine ({BINARY} in {BIN})"))
+    return 0
+
+
+def _sibling(name: str) -> Path:
+    """The repository beside this checkout, when this is a checkout."""
+    return Path(__file__).resolve().parents[3].parent / name
 
 
 async def _install_servers() -> int:

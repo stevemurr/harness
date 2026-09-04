@@ -63,6 +63,7 @@ Closing that means connecting to the address that was checked while carrying the
 
 from __future__ import annotations
 
+import logging
 import re
 import urllib.parse
 from collections.abc import Iterator
@@ -85,6 +86,8 @@ from harness.tools.base import (
     spec_for,
 )
 from harness.tools.browser import Renderer, RenderFailed, RenderUnavailable
+from harness.tools.webkit import INSTALL as WEBKIT_INSTALL
+from harness.tools.webkit import WebKit
 from harness.types import ToolResult, ToolSpec
 
 #: What the challenge page says. Checked only when a `200` yielded nothing, to tell "the
@@ -210,7 +213,15 @@ class Query(Arguments):
 
 @dataclass(frozen=True, slots=True)
 class Search:
-    """`web_search`. One POST, one parse, no retry.
+    """`web_search`. Safari's engine when it is installed; one POST and one parse when not.
+
+    The results page is loaded through `wkrender` -- a headless WKWebView presenting as
+    this Mac's Safari -- and parsed, the way talkie searches. Measured 2026-09-03, on a
+    machine DuckDuckGo was challenging: the fetch was answered with the anomaly page on
+    every call, the headless Chromium was refused with an error page on every surface,
+    and WebKit got ten results. Across every thread before that, 64 of 133 searches had
+    been challenges. The fetch stays as the path for a machine without the binary, and
+    as the second try when a render fails.
 
     Deliberately no retry on the challenge page. A retry doubles the latency of the case it
     cannot fix -- being refused is a decision about the client, not a transient -- and the
@@ -222,6 +233,8 @@ class Search:
     #: Injected by tests. `None` is the real network; anything else is handed to `httpx` as
     #: its transport, which is the seam that keeps `tests/test_web.py` off the internet.
     transport: httpx.AsyncBaseTransport | None = None
+    #: The Safari engine, when the harness has it. `None` is the fetch alone.
+    webkit: WebKit | None = None
     spec: ToolSpec = field(
         default=spec_for(
             Query,
@@ -261,6 +274,13 @@ class Search:
         wanted = self.settings.max_results if args.max_results is None else args.max_results
         limit = max(1, wanted)
 
+        if self.webkit is not None and self.webkit.available:
+            found = await self._through_webkit(query)
+            if found is not None:
+                if not found:
+                    return ToolResult(f'no results for "{query}"')
+                return ToolResult(_render_results(query, found[:limit]))
+
         try:
             async with self._client() as client:
                 response = await client.post(
@@ -288,6 +308,7 @@ class Search:
                 + (
                     " with an anti-bot challenge rather than results; it is rate-limiting "
                     + "this machine, so wait before searching again"
+                    + self._webkit_hint()
                     if _challenged(page)
                     else ""
                 ),
@@ -298,7 +319,8 @@ class Search:
         if not results and _challenged(page):
             return ToolResult(
                 "the search endpoint returned an anti-bot challenge instead of results; "
-                + "it is rate-limiting this machine, so wait before searching again",
+                + "it is rate-limiting this machine, so wait before searching again"
+                + self._webkit_hint(),
                 ok=False,
             )
         if not results:
@@ -308,6 +330,35 @@ class Search:
             # the loop's refusal cap for a model asking a reasonable question.
             return ToolResult(f'no results for "{query}"')
         return ToolResult(_render_results(query, results[:limit]))
+
+    async def _through_webkit(self, query: str) -> list[Result] | None:
+        """The results as Safari's engine sees the page, or `None` to try the fetch.
+
+        `None` for a render that failed or came back as a challenge -- the fetch is the
+        second try, not a worse first one. An empty list is a page that rendered and
+        held no results, which is the honest answer. A GET with the region set, as
+        talkie does it: the region parameter is what skips the consent wall.
+        """
+        assert self.webkit is not None
+        url = self.settings.endpoint + "?" + urllib.parse.urlencode({"q": query, "kl": "us-en"})
+        try:
+            page = await self.webkit.render(url)
+        except (RenderUnavailable, RenderFailed) as exc:
+            log.info("web_search through webkit failed, trying the fetch: %s", exc)
+            return None
+        found = results_from(page.html)
+        if not found and _challenged(page.html):
+            log.info("web_search through webkit was challenged, trying the fetch")
+            return None
+        return found
+
+    def _webkit_hint(self) -> str:
+        if self.webkit is not None and self.webkit.available:
+            return ""
+        return (
+            ". Searches through Safari's engine are not challenged: install it with "
+            + f"`{WEBKIT_INSTALL}`"
+        )
 
     def _client(self) -> httpx.AsyncClient:
         """A client per call, closed by its own `async with`.
@@ -437,6 +488,8 @@ MIN_ARTICLE = 200
 MAX_DEPTH = 200
 
 #: Parsed as a document. Anything else is either handed back verbatim or refused.
+log = logging.getLogger(__name__)
+
 HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 TEXT_TYPES = frozenset(
     {
@@ -1037,6 +1090,12 @@ def web_tools(
     settings: WebSettings | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     renderer: Renderer | None = None,
+    webkit: WebKit | None = None,
 ) -> list[Handler]:
     settings = settings or WebSettings()
-    return [bind(Search(settings, transport)), bind(Open(settings, transport, renderer))]
+    if webkit is None:
+        webkit = WebKit(path=settings.webkit, timeout=settings.render_timeout)
+    return [
+        bind(Search(settings, transport, webkit=webkit)),
+        bind(Open(settings, transport, renderer)),
+    ]

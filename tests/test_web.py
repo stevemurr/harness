@@ -772,3 +772,86 @@ async def test_a_github_blob_url_is_read_as_the_raw_file(ctx: ToolContext) -> No
     )
     assert result.ok and asked == ["https://raw.githubusercontent.com/o/r/main/Docs/Spec.md"]
     assert "the file itself" in result.content
+
+
+# -- through Safari's engine ----------------------------------------------------------------
+
+
+class _FakeWebKit:
+    """Stands in for `wkrender`: installed or not, and what it prints."""
+
+    def __init__(self, html: str | None = None, error: Exception | None = None, installed=True):
+        self.html, self.error, self.available = html, error, installed
+        self.rendered: list[str] = []
+
+    async def render(self, url: str):
+        from harness.tools.webkit import Rendered
+
+        self.rendered.append(url)
+        if self.error is not None:
+            raise self.error
+        return Rendered(url=url, title="results", html=self.html or "")
+
+
+def _never_fetches() -> httpx.AsyncBaseTransport:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the fetch path was used")
+
+    return transport(handler)
+
+
+async def test_search_goes_through_webkit_when_it_is_installed(ctx: ToolContext) -> None:
+    """The default path, as talkie does it: a GET with the region set, rendered in a
+    WKWebView, parsed the same way. The fetch is never made."""
+    webkit = _FakeWebKit(html=RESULTS_PAGE)
+    tool = bind(Search(transport=_never_fetches(), webkit=webkit))
+
+    result = await tool.call({"query": "qwen3"}, ctx)
+
+    assert result.ok and "1. GitHub - QwenLM/Qwen3" in result.content
+    assert webkit.rendered == ["https://html.duckduckgo.com/html/?q=qwen3&kl=us-en"]
+
+
+async def test_a_rendered_page_with_no_results_is_an_honest_no(ctx: ToolContext) -> None:
+    webkit = _FakeWebKit(html="<div id='links' class='results'></div>")
+    result = await bind(Search(transport=_never_fetches(), webkit=webkit)).call(
+        {"query": "zxqw"}, ctx
+    )
+    assert result.ok and result.content.startswith("no results")
+
+
+async def test_the_fetch_is_the_second_try_when_webkit_fails_or_is_challenged(
+    ctx: ToolContext,
+) -> None:
+    from harness.tools.browser import RenderFailed
+
+    fetched: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched.append(request)
+        return httpx.Response(200, text=RESULTS_PAGE)
+
+    failing = _FakeWebKit(error=RenderFailed("wkrender could not load it"))
+    result = await bind(Search(transport=transport(handler), webkit=failing)).call(
+        {"query": "qwen3"}, ctx
+    )
+    assert result.ok and len(fetched) == 1
+
+    challenged = _FakeWebKit(html=CHALLENGE_PAGE)
+    result = await bind(Search(transport=transport(handler), webkit=challenged)).call(
+        {"query": "qwen3"}, ctx
+    )
+    assert result.ok and len(fetched) == 2
+
+
+async def test_without_webkit_a_challenge_says_how_to_install_it(ctx: ToolContext) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202, text=CHALLENGE_PAGE)
+
+    absent = _FakeWebKit(installed=False)
+    result = await bind(Search(transport=transport(handler), webkit=absent)).call(
+        {"query": "qwen3"}, ctx
+    )
+
+    assert not result.ok and absent.rendered == []
+    assert "install-webkit" in result.content

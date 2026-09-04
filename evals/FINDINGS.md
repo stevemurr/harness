@@ -3,6 +3,25 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-03: the search engine refuses everything but Safari
+
+Across every thread to date, 64 of 133 `web_search` calls were answered with
+DuckDuckGo's anomaly challenge, in two bursts where the block stuck for dozens of calls.
+Talkie, on the same machine and network, is rarely challenged; it loads the results page
+in a headless WKWebView presenting as the installed Safari and scrapes that.
+
+Measured on this machine during a block, same minute, same query: the fetch with a
+browser's user agent and navigation headers was answered 202 with the challenge on every
+call; the headless Chromium `open_url` renders with was served DuckDuckGo's error page on
+the html, lite and app surfaces alike; Playwright's WebKit, with its own user agent and
+`navigator.webdriver` true, got ten parsed results. So the block keys on the engine, not
+the headers, and it is not a rate limit a slower cadence would avoid.
+
+`wkrender` is the port of talkie's renderer to a standalone Swift command, in its own
+repository beside this one, installed under `~/.harness/bin` by `harness install-webkit`.
+`web_search` goes through it by default and falls back to the fetch when it is absent
+or fails. Not yet measured across a sweep; the claim is the one measurement above.
+
 ## 2026-09-03: a page cut where the answer was, and a bot check taken for a 403
 
 Thread `thr_a123fb388eec4ea5`, the Emby player again. The model opened XcodeGen's project
