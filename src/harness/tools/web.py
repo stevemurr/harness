@@ -262,7 +262,7 @@ class Search:
         object.__setattr__(self, "spec", spec)
 
     def preview(self, args: Query, /) -> tuple[str, str]:
-        return f"web search: {args.query}", "web_search"
+        return f"Search the web for '{args.query}'", "web_search"
 
     async def run(self, args: Query, _ctx: ToolContext, /) -> ToolResult:
         query = args.query.strip()
@@ -818,7 +818,7 @@ class Open:
         object.__setattr__(self, "spec", spec)
 
     def preview(self, args: Address, /) -> tuple[str, str]:
-        return f"open: {args.url}", "open_url"
+        return f"Open {args.url}", "open_url"
 
     async def run(self, args: Address, _ctx: ToolContext, /) -> ToolResult:
         url = raw_github(args.url.strip())

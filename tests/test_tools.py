@@ -285,7 +285,7 @@ async def test_a_mutating_tool_is_asked_about(registry: Registry, ctx: ToolConte
     await runner.run(ToolCall("1", "write_file", {"path": "x.txt", "content": "hi"}))
 
     assert len(asked) == 1
-    assert asked[0].summary == "write x.txt (2 bytes)"
+    assert asked[0].summary == "Write x.txt (2 bytes)"
 
 
 async def test_a_denial_is_a_readable_result_and_nothing_happens(
@@ -397,7 +397,7 @@ def test_a_shell_grant_covers_the_program_not_the_command_line() -> None:
     cover other git. The line is drawn at the program deliberately; approving whole command
     lines would never match twice."""
     shell = Shell()
-    assert shell.preview(Command("git status")) == ("run: git status", "run:git")
+    assert shell.preview(Command("git status")) == ("git status", "run:git")
     assert shell.preview(Command("rm -rf build"))[1] == "run:rm"
     assert bind(shell).preview({"command": "ls -la"})[1] == "run:ls"
 
@@ -1167,3 +1167,31 @@ async def test_run_refuses_a_misspelt_root_and_a_cd_to_nowhere_before_running(
     assert here.ok and "hi" in here.content
     plain = await run.call({"command": "echo plain"}, ctx)
     assert plain.ok and "plain" in plain.content
+
+
+def test_every_file_tool_says_what_a_call_would_do_in_a_sentence() -> None:
+    """The title an editor shows for a call. A tool without a preview gets its name and
+    its arguments as JSON, which reads as data; these read as what is about to happen."""
+    previews = {tool.spec.name: tool for tool in file_tools()}
+    assert previews["read_file"].preview({"path": "a.py"})[0] == "Read a.py"
+    assert previews["read_file"].preview({"path": "a.py", "offset": 40})[0] == (
+        "Read a.py from line 40"
+    )
+    assert previews["list_dir"].preview({})[0] == "List the workspace"
+    assert previews["list_dir"].preview({"path": "src"})[0] == "List src"
+    assert previews["glob"].preview({"pattern": "**/*.py"})[0] == "Find files matching **/*.py"
+    assert previews["grep"].preview({"pattern": "harness"})[0] == (
+        "Search for 'harness' in the workspace"
+    )
+    assert previews["grep"].preview({"pattern": "harness", "glob": "*.log"})[0] == (
+        "Search for 'harness' in *.log files"
+    )
+    assert previews["write_file"].preview({"path": "x", "content": "ab"})[0] == (
+        "Write x (2 bytes)"
+    )
+    assert previews["edit_file"].preview({"path": "x", "old": "a", "new": "b"})[0] == "Edit x"
+    # The grant is the tool's name for every one of them: a read is not a program.
+    assert {previews[n].preview({"path": "x"})[1] for n in ("read_file", "list_dir")} == {
+        "read_file",
+        "list_dir",
+    }

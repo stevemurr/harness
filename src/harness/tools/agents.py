@@ -88,6 +88,9 @@ class Delegate:
         )
     )
 
+    def preview(self, args: Delegation, /) -> tuple[str, str]:
+        return f"Delegate: {args.task.strip()[:80]}", "delegate"
+
     async def run(self, args: Delegation, ctx: ToolContext, /) -> ToolResult:
         started = await self.children.delegate(
             args.task, call_id=ctx.call_id, wait=args.wait, max_turns=args.max_turns
@@ -120,7 +123,7 @@ class TellAgent:
     )
 
     def preview(self, args: Instruction, /) -> tuple[str, str]:
-        return f"tell {args.agent_id}: {args.text[:80]}", "tell_agent"
+        return f"Tell {args.agent_id}: {args.text[:80]}", "tell_agent"
 
     async def run(self, args: Instruction, _ctx: ToolContext, /) -> ToolResult:
         if not self.children.tell(args.agent_id, args.text):
@@ -152,7 +155,7 @@ class WaitAgents:
     )
 
     def preview(self, args: Waiting, /) -> tuple[str, str]:
-        return f"wait for {args.agent_id or 'every agent'}", "wait_agents"
+        return f"Wait for {args.agent_id or 'every agent'}", "wait_agents"
 
     async def run(self, args: Waiting, _ctx: ToolContext, /) -> ToolResult:
         finished = await self.children.wait(args.agent_id)
@@ -185,7 +188,7 @@ class ReadAgent:
     )
 
     def preview(self, args: AgentRef, /) -> tuple[str, str]:
-        return f"read {args.agent_id}", "read_agent"
+        return f"Read agent {args.agent_id}", "read_agent"
 
     async def run(self, args: AgentRef, _ctx: ToolContext, /) -> ToolResult:
         text = self.children.read(args.agent_id)
@@ -209,7 +212,7 @@ class StopAgent:
     )
 
     def preview(self, args: AgentRef, /) -> tuple[str, str]:
-        return f"stop {args.agent_id}", "stop_agent"
+        return f"Stop agent {args.agent_id}", "stop_agent"
 
     async def run(self, args: AgentRef, _ctx: ToolContext, /) -> ToolResult:
         what = await self.children.stop(args.agent_id)
@@ -239,6 +242,9 @@ class Report:
             ),
         )
     )
+
+    def preview(self, args: Progress, /) -> tuple[str, str]:
+        return f"Report: {args.text.strip()[:80]}", "report"
 
     async def run(self, args: Progress, ctx: ToolContext, /) -> ToolResult:
         if self.lineage.record is not None:

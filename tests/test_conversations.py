@@ -364,7 +364,7 @@ async def test_an_approval_parks_the_run_until_a_client_answers(folder, tmp_path
 
     request = payloads(run, "approval.requested")[0]
     assert run.status is RunStatus.AWAITING_APPROVAL
-    assert request["title"] == "run: ls -la"
+    assert request["title"] == "ls -la"
     assert request["risk"] == "high"
     assert request["allowed_decisions"] == ["approve", "approve_bash_always", "reject"]
     # What "always" would cover, said on the request so the client can say it on the choice.
@@ -836,8 +836,8 @@ async def test_a_thread_replays_its_runs_after_a_restart(folder, tmp_path) -> No
     ]
     rows = payloads(replayed, "run.progress")
     assert [(r["text"], r["status"]) for r in rows] == [
-        ('read_file {"path": "notes.md"}', "completed"),
-        ('read_file {"path": "missing.md"}', "failed"),
+        ("Read notes.md", "completed"),
+        ("Read missing.md", "failed"),
     ]
     # The same row identities the live wrapper used, so a client's upserts line up.
     assert rows[0]["update_id"] == progress_id(1, "read_file", {"path": "notes.md"})

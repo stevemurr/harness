@@ -69,6 +69,7 @@ from harness.types import (
     Agent,
     Outcome,
     Role,
+    ToolCall,
     ToolResult,
     ToolSpec,
     Transcript,
@@ -188,7 +189,7 @@ class Session:
         describing it would be describing something that will not happen.
         """
         path = as_str(arguments.get("path"))
-        if not path or name not in {"read_file", "write_file", "edit_file", "list_dir"}:
+        if not path or name not in LOCATED:
             return {}
         try:
             resolved = Workspace.at(self.root).resolve(path)
@@ -725,6 +726,12 @@ def _servers(params: JSON) -> list[McpServer]:
     return found
 
 
+#: The tools whose `path` argument names a place the editor can jump to.
+LOCATED = frozenset(
+    {"read_file", "write_file", "edit_file", "list_dir", "find_definition", "find_references"}
+)
+
+
 class _Unopened:
     """The agent a session holds before its own is built. Never called: `_open` replaces
     it before the session is offered to anything."""
@@ -748,6 +755,18 @@ class _Unopened:
 _unopened = _Unopened()
 
 
+def _title(handlers: dict[str, Handler], call: ToolCall) -> str:
+    """A stored call's title, in the same words it had live. A tool that has since gone,
+    or arguments its parser now rejects, get the bare name rather than nothing."""
+    handler = handlers.get(call.name)
+    if handler is None:
+        return call.name
+    try:
+        return first_line(handler.preview(call.arguments)[0]) or call.name
+    except Exception:  # noqa: BLE001 -- an old transcript's arguments are not ours to fix
+        return call.name
+
+
 def _replay(session: Session, transcript: Transcript) -> None:
     """The stored conversation, sent as the editor would have seen it live.
 
@@ -755,6 +774,7 @@ def _replay(session: Session, transcript: Transcript) -> None:
     Not the system prompt, not arrivals, not compaction notes: those are the run's own
     bookkeeping, and an editor replaying them would show a person text they never saw.
     """
+    handlers = {handler.spec.name: handler for handler in session.kit.tools()}
     for message in transcript.messages:
         if message.role is Role.USER:
             session.update(
@@ -770,7 +790,7 @@ def _replay(session: Session, transcript: Transcript) -> None:
                     {
                         "sessionUpdate": "tool_call",
                         "toolCallId": call.call_id,
-                        "title": call.name,
+                        "title": _title(handlers, call),
                         "kind": kind_for(call.name),
                         "status": "completed",
                         "rawInput": call.arguments,

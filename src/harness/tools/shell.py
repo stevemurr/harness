@@ -90,7 +90,7 @@ class Shell:
         object.__setattr__(self, "spec", spec)
 
     def preview(self, args: Command, /) -> tuple[str, str]:
-        return f"run: {args.command}", f"run:{_program(args.command)}"
+        return args.command, f"run:{_program(args.command)}"
 
     async def run(self, args: Command, ctx: ToolContext, /) -> ToolResult:
         command = args.command
@@ -334,7 +334,7 @@ class ReadProcess:
 
     def preview(self, args: Reading, /) -> tuple[str, str]:
         if args.wait:
-            return f"read {args.process_id}, waiting up to {args.wait}s", "read_process"
+            return f"Read process {args.process_id}, waiting up to {args.wait}s", "read_process"
         return f"read {args.process_id}", "read_process"
 
     async def run(self, args: Reading, _ctx: ToolContext, /) -> ToolResult:
@@ -395,7 +395,7 @@ class StopProcess:
     ))
 
     def preview(self, args: ProcessRef, /) -> tuple[str, str]:
-        return f"stop {args.process_id}", "stop_process"
+        return f"Stop process {args.process_id}", "stop_process"
 
     async def run(self, args: ProcessRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
@@ -444,7 +444,7 @@ class MonitorProcess:
     ))
 
     def preview(self, args: Watch, /) -> tuple[str, str]:
-        return f"monitor: {args.command}", f"monitor:{_program(args.command)}"
+        return f"Monitor {args.command}", f"monitor:{_program(args.command)}"
 
     async def run(self, args: Watch, ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
@@ -470,7 +470,7 @@ class ReadMonitor:
     ))
 
     def preview(self, args: MonitorRef, /) -> tuple[str, str]:
-        return f"read {args.monitor_id}", "read_monitor"
+        return f"Read monitor {args.monitor_id}", "read_monitor"
 
     async def run(self, args: MonitorRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:
@@ -501,7 +501,7 @@ class StopMonitor:
     ))
 
     def preview(self, args: MonitorRef, /) -> tuple[str, str]:
-        return f"stop {args.monitor_id}", "stop_monitor"
+        return f"Stop monitor {args.monitor_id}", "stop_monitor"
 
     async def run(self, args: MonitorRef, _ctx: ToolContext, /) -> ToolResult:
         if self.processes is None:

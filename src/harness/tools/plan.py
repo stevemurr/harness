@@ -61,6 +61,9 @@ class UpdatePlan:
         )
     )
 
+    def preview(self, args: Checklist, /) -> tuple[str, str]:
+        return f"Update the plan ({len(args.plan)} steps)", "update_plan"
+
     async def run(self, args: Checklist, _ctx: ToolContext, /) -> ToolResult:
         self.plan.replace(
             [Step(entry.step, entry.status) for entry in args.plan],

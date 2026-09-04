@@ -102,7 +102,7 @@ class Screenshot:
     )
 
     def preview(self, args: Shot, /) -> tuple[str, str]:
-        return f"screenshot: {args.url} at {args.width}x{args.height}", "screenshot"
+        return f"Screenshot {args.url} at {args.width}x{args.height}", "screenshot"
 
     async def run(self, args: Shot, ctx: ToolContext, /) -> ToolResult:
         target = args.url.strip()

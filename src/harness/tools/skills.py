@@ -44,7 +44,7 @@ class UseSkill:
     )
 
     def preview(self, args: Named, /) -> tuple[str, str]:
-        return f"skill: {args.name}", "use_skill"
+        return f"Use skill {args.name}", "use_skill"
 
     async def run(self, args: Named, _ctx: ToolContext, /) -> ToolResult:
         skills = load_skills(self.root)

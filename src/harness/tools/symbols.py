@@ -78,6 +78,10 @@ class FindDefinition:
         )
     )
 
+    def preview(self, args: Name, /) -> tuple[str, str]:
+        where = f" in {args.path}" if args.path else ""
+        return f"Find where {args.symbol} is defined{where}", "find_definition"
+
     async def run(self, args: Name, ctx: ToolContext, /) -> ToolResult:
         try:
             near = ctx.paths.resolve(args.path) if args.path else None
@@ -151,6 +155,9 @@ class FindReferences:
             mutates=False,
         )
     )
+
+    def preview(self, args: Definition, /) -> tuple[str, str]:
+        return f"Find uses of {args.symbol} from {args.path}:{args.line}", "find_references"
 
     async def run(self, args: Definition, ctx: ToolContext, /) -> ToolResult:
         # Caught here, exactly as `files.py` catches it. A path outside the folder is the

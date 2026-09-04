@@ -52,6 +52,10 @@ class ReadFile:
         ),
     )
 
+    def preview(self, args: Read, /) -> tuple[str, str]:
+        where = args.path if args.offset <= 1 else f"{args.path} from line {args.offset}"
+        return f"Read {where}", "read_file"
+
     async def run(self, args: Read, ctx: ToolContext, /) -> ToolResult:
         try:
             text = ctx.paths.read(args.path)
@@ -102,7 +106,7 @@ class WriteFile:
     )
 
     def preview(self, args: Write, /) -> tuple[str, str]:
-        return f"write {args.path} ({len(args.content)} bytes)", "write_file"
+        return f"Write {args.path} ({len(args.content)} bytes)", "write_file"
 
     async def run(self, args: Write, ctx: ToolContext, /) -> ToolResult:
         try:
@@ -135,7 +139,7 @@ class EditFile:
     )
 
     def preview(self, args: Edit, /) -> tuple[str, str]:
-        return f"edit {args.path}", "edit_file"
+        return f"Edit {args.path}", "edit_file"
 
     async def run(self, args: Edit, ctx: ToolContext, /) -> ToolResult:
         try:
@@ -210,6 +214,10 @@ class ListDir:
         description="List the entries of a directory in the workspace.",
     )
 
+    def preview(self, args: Listing, /) -> tuple[str, str]:
+        where = "the workspace" if args.path in {"", "."} else args.path
+        return f"List {where}", "list_dir"
+
     async def run(self, args: Listing, ctx: ToolContext, /) -> ToolResult:
         try:
             target = ctx.paths.resolve(args.path)
@@ -241,6 +249,9 @@ class Glob:
         description="Find files by name pattern, e.g. '**/*.py'. Returns paths, not contents.",
     )
 
+    def preview(self, args: Pattern, /) -> tuple[str, str]:
+        return f"Find files matching {args.pattern}", "glob"
+
     async def run(self, args: Pattern, ctx: ToolContext, /) -> ToolResult:
         pattern = args.pattern
         hits = [
@@ -270,6 +281,10 @@ class Grep:
             + "their paths and line numbers."
         ),
     )
+
+    def preview(self, args: Expression, /) -> tuple[str, str]:
+        where = f"{args.glob} files" if args.glob else "the workspace"
+        return f"Search for '{args.pattern}' in {where}", "grep"
 
     async def run(self, args: Expression, ctx: ToolContext, /) -> ToolResult:
         try:

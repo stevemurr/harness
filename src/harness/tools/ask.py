@@ -69,6 +69,9 @@ class AskUser:
         )
     )
 
+    def preview(self, args: Question, /) -> tuple[str, str]:
+        return f"Ask: {args.question.strip()[:120]}", "ask_user"
+
     async def run(self, args: Question, _ctx: ToolContext, /) -> ToolResult:
         if self.ask is None:
             # Fail closed and say why. A run with nobody attached cannot be asked anything,

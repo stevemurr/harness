@@ -87,6 +87,9 @@ class PostTask:
         )
     )
 
+    def preview(self, args: Posting, /) -> tuple[str, str]:
+        return f"Post task: {args.title.strip()[:80]}", "post_task"
+
     async def run(self, args: Posting, _ctx: ToolContext, /) -> ToolResult:
         if not args.title.strip():
             return ToolResult("a task needs a title", ok=False, refused=True)
@@ -110,6 +113,9 @@ class ListTasks:
             description="What is on this folder's board, with who holds each task.",
         )
     )
+
+    def preview(self, args: Listing, /) -> tuple[str, str]:
+        return f"List {args.status} tasks" if args.status else "List tasks", "list_tasks"
 
     async def run(self, args: Listing, _ctx: ToolContext, /) -> ToolResult:
         status: Status | None = None
@@ -143,6 +149,9 @@ class ClaimTask:
         )
     )
 
+    def preview(self, args: TaskRef, /) -> tuple[str, str]:
+        return f"Claim task {args.task_id}", "claim_task"
+
     async def run(self, args: TaskRef, _ctx: ToolContext, /) -> ToolResult:
         claimed = await self.board.claim(args.task_id, by=self.identity)
         if isinstance(claimed, str):
@@ -167,6 +176,10 @@ class FinishTask:
             ),
         )
     )
+
+    def preview(self, args: Finishing, /) -> tuple[str, str]:
+        verb = "Fail" if args.failed else "Finish"
+        return f"{verb} task {args.task_id}", "finish_task"
 
     async def run(self, args: Finishing, _ctx: ToolContext, /) -> ToolResult:
         finished = await self.board.finish(
@@ -194,6 +207,9 @@ class ReleaseTask:
             ),
         )
     )
+
+    def preview(self, args: Releasing, /) -> tuple[str, str]:
+        return f"Release task {args.task_id}", "release_task"
 
     async def run(self, args: Releasing, _ctx: ToolContext, /) -> ToolResult:
         released = await self.board.release(args.task_id, by=self.identity, note=args.note)

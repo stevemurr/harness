@@ -704,3 +704,25 @@ async def test_an_editors_mcp_servers_join_the_session(folder: Path) -> None:
     assert wired.editor.permissions == []  # read-only by the server's own account
     (announced,) = wired.editor.of_kind("tool_call")
     assert announced["title"].startswith("fixture: peek")
+
+
+async def test_a_replayed_call_carries_the_title_it_had_live(folder: Path) -> None:
+    """`session/load` sends each stored call as a finished row. Its title is the tool's
+    own sentence, as when it ran, and not the bare name the transcript stores."""
+    model = ScriptedModel(
+        calls(("c1", "grep", {"pattern": "harness", "glob": "*.log"})),
+        says("found"),
+        says("ok"),
+    )
+    async with Wired(model, folder) as wired:
+        session_id = await wired.new_session()
+        _ = await wired.prompt(session_id, "search")
+        wired.editor.updates.clear()
+
+        _ = await wired.call(
+            "session/load", {"sessionId": session_id, "cwd": str(folder), "mcpServers": []}
+        )
+
+        rows = [u for u in wired.editor.updates if u["sessionUpdate"] == "tool_call"]
+        assert [r["title"] for r in rows] == ["Search for 'harness' in *.log files"]
+        assert rows[0]["kind"] == "search"
