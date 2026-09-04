@@ -2,6 +2,11 @@
 
 A rung is long or fast by which folder it is in. `rung.json` used to say so as well, and a
 fact stated twice is a fact that can disagree with itself.
+
+What else `rung.json` may say, each a fact about what the task needs and not about how
+it is graded: `agents` for delegation, `board` for a work board the seed may pre-fill,
+`setup` for a command the staged folder needs before the model arrives, `local_web` for a
+page the model serves itself, `seed_from` and `verify_timeout`.
 """
 
 from __future__ import annotations
@@ -9,12 +14,23 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
 from evals.verify import verify
 from harness.types import as_dict, as_int, as_str
+
+#: Where a rung's board lives inside the staged folder: a seed ships it pre-filled at the
+#: same path, the runner opens it there, and `verify.sh` reads it there. Beside the
+#: folder's skills, under the harness's own dot-folder.
+BOARD = Path(".harness") / "board.jsonl"
+
+
+class StagingError(Exception):
+    """A rung's seed could not be made ready: its `setup` failed."""
+
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -40,6 +56,17 @@ class Rung:
     #: and nothing at all for one whose checks compile a Swift package first, so a rung
     #: whose checks build something says so in `rung.json`.
     verify_timeout: int = 120
+    #: Whether the agent gets the board. `agents` implies it; a rung about the board on
+    #: its own says so here. The board is a file at `BOARD` in the staged folder, so a
+    #: seed can ship one already holding work and the checks can read what became of it.
+    board: bool = False
+    #: A shell command run in the staged folder before any attempt, and before the
+    #: seed check. For what a seed cannot be as files in this repository: a git history,
+    #: which a checkout cannot nest. Empty for most rungs.
+    setup: str = ""
+    #: Whether `open_url` and `screenshot` may reach this machine. Off, as it is for a
+    #: person, unless the task is to serve a page and read it.
+    local_web: bool = False
 
     @classmethod
     def at(cls, path: Path) -> Rung:
@@ -55,6 +82,9 @@ class Rung:
             long=path.parent == SUITES["long"],
             agents=meta.get("agents") is True,
             verify_timeout=as_int(meta.get("verify_timeout"), 120),
+            board=meta.get("board") is True or meta.get("agents") is True,
+            setup=as_str(meta.get("setup")),
+            local_web=meta.get("local_web") is True,
         )
 
     @property
@@ -76,8 +106,11 @@ def discover(suite: str = "ladder", only: str = "") -> list[Rung]:
 
 
 def stage(rung: Rung, into: Path) -> Path:
-    """A fresh copy of the seed. Never the rung itself: a run that edits its own fixture
-    makes every later run measure a different thing."""
+    """A fresh copy of the seed, set up. Never the rung itself: a run that edits its own
+    fixture makes every later run measure a different thing.
+
+    Raises `StagingError` when the rung's `setup` fails: a folder that is not what the
+    task describes would measure the setup and not the model."""
     work = into / rung.name
     if work.exists():
         shutil.rmtree(work)
@@ -95,6 +128,16 @@ def stage(rung: Rung, into: Path) -> Path:
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
+    if rung.setup:
+        done = subprocess.run(
+            ["sh", "-c", rung.setup], cwd=work, capture_output=True, text=True, timeout=300
+        )
+        if done.returncode != 0:
+            said = (done.stderr or done.stdout).strip().splitlines()
+            raise StagingError(
+                f"{rung.name}: setup failed ({done.returncode})"
+                + (f": {said[-1]}" if said else "")
+            )
     return work
 
 
@@ -120,7 +163,10 @@ def unsolved(rung: Rung, into: Path) -> str | None:
     quietly: every attempt at it would be a green row. The runner's docstring promised this
     check from the start and no code did it until 2026-09-02.
     """
-    work = stage(rung, into)
+    try:
+        work = stage(rung, into)
+    except StagingError as exc:
+        return str(exc)
     if absent := missing(rung, work):
         return f"{rung.name}: names files its seed does not have: {', '.join(absent)}"
     verdict = verify(rung.script, work, timeout=rung.verify_timeout)

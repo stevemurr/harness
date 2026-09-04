@@ -1,0 +1,6 @@
+# date | account | amount | memo
+2026-01-03 | groceries | -42.10 | market
+2026-01-04 | salary | 3200.00 | january
+2026-01-06 | dining | -18.50 | dinner, two
+2026-01-09 | rent | -1450.00 | flat
+2026-01-11 | groceries | -7.25 | bread and milk

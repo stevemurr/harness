@@ -1,0 +1,4 @@
+{
+  "tests": "One agent and a board that already holds work: a task done by someone else whose result the agent must build on, the task the user is asking for, a task another agent holds, and an open task nobody asked for. Whether the agent reads the board before planning, claims and finishes the right task, leaves the held one and the unasked one alone, and says on the board what it did.",
+  "board": true
+}

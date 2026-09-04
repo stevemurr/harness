@@ -28,6 +28,7 @@ _KINDS: dict[str, str] = {
     "delegate": "execute",
     "web_search": "fetch",
     "open_url": "fetch",
+    "screenshot": "fetch",
     "update_plan": "think",
     "exit_plan_mode": "switch_mode",
     "use_skill": "skill",

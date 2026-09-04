@@ -124,7 +124,7 @@ thread), `boards/` (one work board per folder), `servers/` (language servers), a
 one; what the model sees is the transcript rendered for a provider. There is no second
 representation to disagree with it.
 
-**Tools.** Twenty-nine, each an `Arguments` dataclass and a class with `spec` and `run`.
+**Tools.** Thirty, each an `Arguments` dataclass and a class with `spec` and `run`.
 The dataclass is the schema the model sees; arguments are validated against it before
 `run` is called, and `run` receives the class rather than a dict.
 
@@ -132,7 +132,7 @@ The dataclass is the schema the model sees; arguments are validated against it b
 |---|---|
 | files | `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep` |
 | commands | `run`, `read_process`, `stop_process`, `monitor`, `read_monitor`, `stop_monitor` |
-| web | `web_search`, `open_url` |
+| web | `web_search`, `open_url`, `screenshot` |
 | skills | `use_skill` |
 | code search | `find_definition`, `find_references` (Python, Go and Swift, via language servers) |
 | the person | `ask_user`, `update_plan`, `exit_plan_mode` |
@@ -236,12 +236,36 @@ guard as the fetch, images and fonts are not loaded, downloads are refused, and 
 gets fifteen seconds to settle. Without the browser, the tool says the page needs one and
 how to install it.
 
+`screenshot` uses the same browser to look at a page the agent is building: a URL, or an
+HTML file in the folder, at a viewport it chooses, light or dark. The PNG goes under
+`~/.harness/screenshots/` for a person to open. What the model gets back is a reading of
+the page rather than the picture -- title, document width against the viewport, headings,
+landmarks, images without alt text, the body's font and colours, console errors, requests
+that failed -- because the transcript is text and a text-only model can act on every one of
+those. A file page may load files from the working folder and nothing else on the disk.
+
 **Tool servers.** Any MCP server named in `[mcp.servers.<name>]`, or handed over by an
 editor, joins the registry: each of its tools is offered as `<name>__<tool>`, validated
 against the schema the server sent, asked about before it runs unless the server marks it
-read-only, and its result is fenced as someone else's text. A server that is down is
+read-only, and its result is fenced as someone else's text. An image a server returns is
+written under `~/.harness/screenshots/` and the result says where. A server that is down is
 logged and left out rather than keeping the agent from starting. stdio transport only, so
 far.
+
+The one worth naming is Chrome's own: `chrome-devtools-mcp` gives the agent a headless
+Chrome it can drive, inspect and screenshot while it works on a page -- console messages,
+network requests, an accessibility snapshot, a Lighthouse audit.
+
+```toml
+[mcp.servers.chrome]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@1.8.0", "--headless", "--isolated", "--viewport", "1280x900"]
+```
+
+Its tools take a `pageId` from `chrome__list_pages`; `--isolated` gives each run its own
+profile, and `npx` fetches the package on first use. Only its listing tools say they are
+read-only, so under `ask` a navigation or a screenshot prompts; a standing rule such as
+`always_allow = ["mcp:chrome:*"]` lets them through.
 
 ## The editor
 
@@ -376,11 +400,21 @@ that exist, and they share an unmodified core.
 
 The ladder under `evals/` grades behaviour: each rung is a task, a seed folder, and a
 `verify.sh` that runs the artifact and exits zero only if the work was done. The fast suite
-is twelve rungs from a greeting script to a cross-file rename over a 5,000-line codebase; the
-long suite is five rungs of thirty minutes to several hours, including a layout engine built
+is seventeen rungs: from a greeting script to a cross-file rename over a 5,000-line
+codebase, then five that flex one part of the harness each -- a board that already holds
+work (`18-board`), a board shared by delegated agents (`19-board-agents`), three agents on
+one repository through git worktrees (`20-worktrees`), a personal website from a brief
+checked in a real browser (`21-site`), and a page that is nothing until its JavaScript
+runs, served by the agent and read through `open_url`'s browser (`22-rendered`). The long
+suite is five rungs of thirty minutes to several hours, including a layout engine built
 to a spec, a fleet of sixteen packages with one planted bug each, and a native macOS media
 player built against a mock server, whose checks compile a Swift package and so declare a
 longer `verify_timeout` in their `rung.json`.
+
+A rung's `rung.json` says what the task needs: `agents` for delegation, `board` for a
+board the seed may pre-fill at `.harness/board.jsonl`, `setup` for a command the staged
+folder runs first (a git history, which a checkout cannot hold), `local_web` for a page
+the agent serves on this machine, and `verify_timeout`.
 
 ```sh
 uv run harness evals run --repeat 3 --label name                              # every tool

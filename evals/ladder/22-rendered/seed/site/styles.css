@@ -1,0 +1,4 @@
+body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 40rem; color: #222; }
+h1 { font-size: 1.6rem; }
+li { padding: 0.2rem 0; }
+#total { font-weight: bold; }

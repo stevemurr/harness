@@ -57,7 +57,21 @@ keeps the fast one usable.
 
 ## A design loop: screenshot, interpret, change
 
-Back burner, recorded because the interesting part is not the plumbing.
+Half built, on 2026-09-03: the screenshot tool exists and the picture stays out of the
+transcript. What was reasoned through before that, and still holds, follows; the decision
+is `docs/adr/0023`.
+
+**What was built.** `screenshot` loads a page -- a URL, or a file in the folder -- in the
+headless Chromium `open_url` already has, at a viewport, light or dark, and writes the PNG
+under `~/.harness/screenshots/`. The model reads a *reading* of the page: whether the
+document is wider than the viewport, the headings and landmarks, images without alt, the
+body's font and colours, console errors, failed requests. `21-site` is the rung: a personal
+website from a brief, graded by DOM, CSS and behaviour in a real browser, with four
+screenshots written for a person and not graded. That is the "DOM and CSS assertions"
+option below, admitted rather than assumed.
+
+**What was not.** The model does not see the picture. The paragraphs below say why that
+is a real change and not a flag, and what it would take.
 
 **The model is not the blocker.** Qwen3.6-35B-A3B is `image-text-to-text` --
 `Qwen3_5MoeForConditionalGeneration` -- so it can already read a screenshot.
@@ -67,7 +81,7 @@ the request body. Multimodal content is a list of parts, so this reaches `types.
 provider together. That is a real change to the type the whole transcript is made of, and
 `store/codec.py` and every provider would follow.
 
-There is also no screenshot tool, which is the easy half: a headless browser, a bounded
+The screenshot tool was the easy half, and it is built: a headless browser, a bounded
 image, the same `ToolSpec` contract as anything else.
 
 **The hard part is verification, and it is a real question.** This ladder's discipline is
@@ -84,9 +98,16 @@ the answer determines whether the tools are worth having.
 
 ## The work board: built, and what it waits on
 
+*Update, 2026-09-03: the measurement now exists. `18-board` seeds a board with a done
+task, the asked-for task, a held task and an unasked one, for one agent; `19-board-agents`
+seeds four open tasks and asks a parent to hand each to a child that claims and finishes
+it on the shared board; `20-worktrees` is three children on one repository through git
+worktrees, merged by the parent. None has been swept yet; what they show goes in
+`FINDINGS.md`. Delivery of board changes into inboxes still waits on it.*
+
 Built on 2026-09-02 with `delegate`, as `board.py`, `store/boards.py` and `tools/board.py`.
 The shape is the one reasoned through here before it existed: units of work with a status
 and an owner, one board per folder, `post`/`claim`/`finish`/`list`, tools that speak as
 the kit's identity, a person posting through the server. Still not built, and waiting on a
 measurement: delivery of board changes into inboxes, and any dependency richer than
-"done before". The first multi-agent rung is the measurement, and there is not one yet.
+"done before". The first multi-agent rung was to be the measurement; see the update above.

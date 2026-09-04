@@ -1,0 +1,4 @@
+{
+  "tests": "A board that already holds the work, and more than one agent to do it: four open tasks, one per plugin with a planted bug, a done task whose result says how to run the tests, and a task another agent holds. Whether the parent hands each task to a delegated agent, whether each agent claims its own task on the shared board and finishes it with what it did, whether the held task is left alone, and whether the parent's report is written from the board rather than from re-doing the work.",
+  "agents": true
+}

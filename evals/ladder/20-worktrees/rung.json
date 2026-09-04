@@ -1,0 +1,5 @@
+{
+  "tests": "Three features on one codebase that touch the same two files, each to be built by a delegated agent in its own git worktree on its own branch, and then merged by the parent. Whether the parent sets the worktrees up and hands them out, whether the children keep to their own folder and commit there, and whether the parent merges three conflicting branches into main, resolves them so every test passes, and cleans up. The seed is a repository made by the rung's setup, since a checkout cannot hold one.",
+  "agents": true,
+  "setup": "git init -q -b main && git config user.name agent && git config user.email agent@example.com && git add -A && git commit -qm 'seed: add and list notes'"
+}

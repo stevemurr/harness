@@ -38,7 +38,18 @@ TOOLS_PAGE_TWO = [
         "description": "Always errors.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "snap",
+        "description": "A one-pixel picture, and a caption.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True},
+    },
 ]
+
+#: A 1x1 PNG, the smallest picture there is.
+PIXEL = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
 
 
 def reply(request_id: object, result: object) -> None:
@@ -95,6 +106,16 @@ def main() -> None:
                 reply(
                     request_id,
                     {"content": [{"type": "text", "text": "it broke"}], "isError": True},
+                )
+            elif name == "snap":
+                reply(
+                    request_id,
+                    {
+                        "content": [
+                            {"type": "text", "text": "one pixel"},
+                            {"type": "image", "data": PIXEL, "mimeType": "image/png"},
+                        ]
+                    },
                 )
             else:
                 sys.stdout.write(

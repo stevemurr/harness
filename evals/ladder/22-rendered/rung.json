@@ -1,0 +1,4 @@
+{
+  "tests": "A page that is nothing until its JavaScript runs, served by the agent itself on this machine. Whether the agent starts the server in the background and keeps working, reads the page through open_url's browser fallback rather than guessing from the shell it fetched, and writes down what the rendered page said. The rules are in the data and the code, so the numbers can also be worked out by hand; the browser is the cheap way, not the only one.",
+  "local_web": true
+}

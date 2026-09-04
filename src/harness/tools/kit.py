@@ -35,6 +35,7 @@ from harness.tools.browser import Renderer, new_renderer
 from harness.tools.files import file_tools
 from harness.tools.mode import mode_tools
 from harness.tools.plan import plan_tools
+from harness.tools.screenshot import screenshot_tools
 from harness.tools.shell import shell_tools
 from harness.tools.skills import skill_tools
 from harness.tools.symbols import symbol_tools
@@ -135,6 +136,7 @@ class Toolkit:
             *file_tools(),
             *shell_tools(self.settings.shell, self.processes),
             *web_tools(self.settings.web, renderer=self.renderer),
+            *screenshot_tools(self.settings.web, renderer=self.renderer),
             *plan_tools(self.plan),
             *symbol_tools(self.indexes),
             *(mode_tools(self.modes) if self.lineage is None else []),

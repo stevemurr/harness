@@ -1,0 +1,21 @@
+{
+  "shop": "Northwind Hardware",
+  "rules": {
+    "discounts": [
+      {"category": "tools", "min_qty": 3, "rate": 0.1},
+      {"category": "fixings", "min_qty": 10, "rate": 0.25}
+    ],
+    "shipping": 4.5,
+    "free_shipping_from": 250
+  },
+  "items": [
+    {"name": "Claw hammer", "category": "tools", "price": 12.6, "qty": 3},
+    {"name": "Wood screws 4x40", "category": "fixings", "price": 0.07, "qty": 250},
+    {"name": "Tape measure", "category": "tools", "price": 8.9, "qty": 1},
+    {"name": "Wall plugs", "category": "fixings", "price": 0.04, "qty": 8},
+    {"name": "Spirit level", "category": "tools", "price": 21.35, "qty": 2},
+    {"name": "Sandpaper pack", "category": "finishing", "price": 5.15, "qty": 4},
+    {"name": "Wood glue", "category": "finishing", "price": 6.8, "qty": 1},
+    {"name": "Chisel set", "category": "tools", "price": 27.9, "qty": 3}
+  ]
+}

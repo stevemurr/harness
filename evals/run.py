@@ -32,7 +32,7 @@ from pathlib import Path
 
 from evals.record import Attempt, Call, Sweep, arm_for
 from evals.report import table
-from evals.rungs import HERE, REPO, Rung, discover, stage, unsolved
+from evals.rungs import BOARD, HERE, REPO, Rung, StagingError, discover, stage, unsolved
 from evals.verify import verify
 from harness import config
 from harness.agent import new_agent, spawning
@@ -41,12 +41,13 @@ from harness.config import bool_flag, flag, int_flag, load
 from harness.exec.children import Children
 from harness.providers.base import Completion, Listener
 from harness.providers.openai import OpenAICompatible
-from harness.settings import Limits, Settings
+from harness.settings import Limits, Settings, Web
 from harness.state.approval import Approvals, Policy
-from harness.state.board import MemoryBoard
+from harness.state.board import Board
 from harness.state.inbox import Inbox
 from harness.state.mode import ModeState
 from harness.store import JsonlStore
+from harness.store.boards import JsonlBoard
 from harness.store.codec import encode
 from harness.tools import Handler
 from harness.tools.kit import Toolkit
@@ -174,16 +175,19 @@ def assemble(
 ) -> Assembly:
     """Every tool the rung allows, minus what the sweep withholds by name.
 
-    A rung that allows agents gets `delegate` and the board. With both search tools
-    withheld no language server is probed or started either: a kit that is not built
-    `for_workspace` has empty indexes. A child shares the recording provider, so every
-    model call counts, and the observer, so every tool call counts.
+    A rung that allows agents gets `delegate` and the board; a rung that asks for the
+    board alone gets the board. The board is the file at `BOARD` in the work folder, so
+    a seed that ships one pre-filled is read as it stands and the checks can read what
+    the run did to it. With both search tools withheld no language server is probed or
+    started either: a kit that is not built `for_workspace` has empty indexes. A child
+    shares the recording provider, so every model call counts, and the observer, so
+    every tool call counts.
     """
     searching = not withheld >= SEARCH_TOOLS
     inbox = Inbox()
     modes = ModeState()
     children: Children | None = None
-    board = MemoryBoard() if rung.agents else None
+    board: Board | None = JsonlBoard(path=work / BOARD) if rung.board else None
     if rung.agents:
         children = Children(
             inbox=inbox,
@@ -228,7 +232,12 @@ async def attempt(
 ) -> Attempt:
     """One run of one rung, graded."""
     model = Recording(provider)
-    settings = Settings(limits=Limits(max_turns=max_turns))
+    settings = Settings(
+        limits=Limits(max_turns=max_turns),
+        # A rung whose task is to serve a page and read it says so; every other rung keeps
+        # the rule a person's run has, that the web tools do not reach this machine.
+        web=Web(block_private=not rung.local_web),
+    )
     approvals = Approvals(policy=Policy(approve_everything=True))
 
     used: Counter[str] = Counter()
@@ -461,7 +470,11 @@ async def sweep(args: Flags) -> int:
 
     for rung in chosen:
         for number in range(1, args.repeat + 1):
-            work = stage(rung, work_root / arm / str(number))
+            try:
+                work = stage(rung, work_root / arm / str(number))
+            except StagingError as exc:
+                print(f"[{rung.name} {number}] SKIP  {exc}", file=sys.stderr, flush=True)
+                continue
             print(f"[{rung.name} {number}/{args.repeat}] ...", flush=True)
             row = await attempt(
                 rung,

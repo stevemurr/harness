@@ -823,7 +823,10 @@ class Open:
         try:
             html = await self.renderer.render(url)
         except RenderUnavailable as exc:
-            return ToolResult(f"{url} fetched, but {exc}", ok=False)
+            return ToolResult(
+                f"{url} fetched, but the page builds itself with JavaScript and {exc}",
+                ok=False,
+            )
         except RenderFailed as exc:
             return ToolResult(f"{url} fetched empty, and {exc}", ok=False)
         return readable(html)

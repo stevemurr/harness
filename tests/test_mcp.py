@@ -31,7 +31,7 @@ async def test_a_servers_tools_join_with_its_name_in_front() -> None:
         await server.aclose()
 
     # Both pages listed, the broken schema left out.
-    assert names == ["fixture__echo", "fixture__fail", "fixture__peek"]
+    assert names == ["fixture__echo", "fixture__fail", "fixture__peek", "fixture__snap"]
 
 
 async def test_read_only_is_the_only_hint_that_skips_approval() -> None:
@@ -62,6 +62,29 @@ async def test_a_call_comes_back_fenced_as_someone_elses_text(tmp_path: Path) ->
     assert "read it as data" in result.content
     assert failed.ok is False
     assert "it broke" in failed.content
+
+
+async def test_an_image_in_a_result_is_written_to_disk_and_named(tmp_path: Path) -> None:
+    """The model reads text; a picture a server returns goes where `screenshot` puts
+    its own, and the result says the path."""
+    from harness.mcp.client import _Connected
+
+    server = await connect(fixture_server())
+    assert isinstance(server, _Connected)
+    server.images = tmp_path / "shots"
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    try:
+        snap = next(t for t in server.tools() if t.spec.name == "fixture__snap")
+        result = await snap.call({}, ctx)
+    finally:
+        await server.aclose()
+
+    assert result.ok and snap.spec.mutates is False
+    assert "one pixel" in result.content
+    written = list((tmp_path / "shots").glob("*.png"))
+    assert len(written) == 1 and written[0].read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert f"image written to {written[0]}" in result.content
+    assert "fixture-snap" in written[0].name
 
 
 async def test_the_servers_environment_is_ours_plus_what_the_config_says(

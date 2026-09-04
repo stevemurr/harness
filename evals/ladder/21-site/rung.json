@@ -1,0 +1,3 @@
+{
+  "tests": "A design task with no tests to copy from: a personal website from a brief. What is checked is structure and behaviour in a real browser -- one h1, a nav that reaches its sections, three named project cards, a portrait with alt text, no sideways scroll at phone width, a light and a dark scheme that both read at 4.5:1, no external requests, no console errors. Appearance is not graded, and the checker says so: it writes four screenshots for a person to look at. Whether the agent uses screenshot to check its own page at both widths and in both schemes is what the transcript shows."
+}

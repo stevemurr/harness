@@ -209,6 +209,61 @@ def test_the_table_reads_from_the_record_not_the_file() -> None:
 # -- withholding -------------------------------------------------------------------------------
 
 
+def test_a_rung_may_ask_for_the_board_a_setup_and_the_local_web(tmp_path: Path) -> None:
+    """`board` gives a board without `delegate`, read from the seed's file; `setup` runs
+    in the staged folder and a failure refuses the rung; `local_web` is a settings
+    fact the runner reads."""
+    import asyncio
+
+    from evals.run import Recording, assemble
+    from evals.rungs import BOARD, StagingError, stage, unsolved
+
+    from harness.providers.openai import OpenAICompatible
+    from harness.settings import Settings
+    from harness.state.approval import Approvals
+    from harness.state.board import Status
+
+    rung = _rung(tmp_path, "#!/bin/sh\nexit 1\n", name="boarded")
+    _ = (rung.path / "rung.json").write_text(
+        '{"tests": "t", "board": true, "setup": "echo made > made.txt", "local_web": true}\n'
+    )
+    seed_board = rung.path / "seed" / BOARD
+    seed_board.parent.mkdir(parents=True)
+    _ = seed_board.write_text(
+        '{"kind": "task", "task_id": "task_one", "title": "the work", "status": "open"}\n'
+    )
+    rung = type(rung).at(rung.path)
+    assert rung.board and not rung.agents and rung.local_web
+    assert rung.setup == "echo made > made.txt"
+
+    work = stage(rung, tmp_path / "work")
+    assert (work / "made.txt").read_text().strip() == "made"
+    assert (work / BOARD).exists()
+
+    made = assemble(
+        rung,
+        work,
+        withheld=frozenset(),
+        settings=Settings(),
+        model=Recording(OpenAICompatible(base_url="http://x/v1", model="m")),
+        threads=tmp_path / "threads",
+        approvals=Approvals(),
+        observers=[],
+    )
+    names = {t.spec.name for t in made.tools}
+    assert {"post_task", "claim_task", "screenshot"} <= names and "delegate" not in names
+    assert made.kit.board is not None
+    tasks = asyncio.run(made.kit.board.list())
+    assert [(t.task_id, t.status) for t in tasks] == [("task_one", Status.OPEN)]
+
+    # A setup that fails refuses the rung before any model call, and says so.
+    _ = (rung.path / "rung.json").write_text('{"tests": "t", "setup": "exit 3"}\n')
+    broken = type(rung).at(rung.path)
+    with pytest.raises(StagingError, match="setup failed"):
+        _ = stage(broken, tmp_path / "work2")
+    assert "setup failed" in (unsolved(broken, tmp_path / "work3") or "")
+
+
 def test_every_tool_unless_withheld_by_name(tmp_path: Path) -> None:
     """A rung that allows agents gets `delegate` and the board; a control withholds tools
     by name and nothing else changes. On any other rung nobody gets the agent tools."""
