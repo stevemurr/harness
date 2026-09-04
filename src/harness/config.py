@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import cast
 
 from harness.mcp.base import McpServer
-from harness.settings import Approval, Compaction, Limits, Output, Settings
+from harness.settings import Approval, Compaction, Limits, Output, Settings, Web
 from harness.state.approval import POLICY_NAMES, named_policy
 from harness.types import JSON
 
@@ -74,8 +74,12 @@ _LIMITS_KEYS = frozenset({"max_turns", "max_consecutive_refusals"})
 _MCP_KEYS = frozenset({"servers"})
 _MCP_SERVER_KEYS = frozenset({"command", "args", "env", "url", "headers"})
 _APPROVAL_KEYS = frozenset({"policy", "always_allow"})
+_WEB_KEYS = frozenset({
+    "user_agent", "accept_language", "block_private", "render", "render_timeout",
+    "timeout", "max_chars",
+})
 _TABLES = frozenset({
-    "provider", "server", "compaction", "output", "limits", "mcp", "approval",
+    "provider", "server", "compaction", "output", "limits", "mcp", "approval", "web",
 })
 
 
@@ -155,6 +159,7 @@ def load(path: Path | None = None) -> Config:
     limits = _table(raw, "limits", _LIMITS_KEYS, resolved)
     mcp = _mcp_servers(_table(raw, "mcp", _MCP_KEYS, resolved))
     approval = _table(raw, "approval", _APPROVAL_KEYS, resolved)
+    web = _table(raw, "web", _WEB_KEYS, resolved)
     policy = approval.text("policy", Approval().policy)
     if named_policy(policy) is None:
         raise ConfigError(
@@ -209,6 +214,15 @@ def load(path: Path | None = None) -> Config:
             approval=Approval(
                 policy=policy,
                 always_allow=tuple(str(rule) for rule in _strings(approval, "always_allow")),
+            ),
+            web=Web(
+                user_agent=web.text("user_agent", Web().user_agent),
+                accept_language=web.text("accept_language", Web().accept_language),
+                block_private=web.flag("block_private", Web().block_private),
+                render=web.flag("render", Web().render),
+                render_timeout=web.number("render_timeout", Web().render_timeout),
+                timeout=web.number("timeout", Web().timeout),
+                max_chars=web.integer("max_chars", Web().max_chars),
             ),
         ),
         mcp=mcp,
@@ -416,6 +430,16 @@ def write_example(path: Path | None = None) -> Path:
         + "# [limits]\n"
         + "# max_turns = 0   # 0 means no limit\n"
         + "# max_consecutive_refusals = 10\n"
+        + "\n"
+        + "# The web tools: who they say they are, and where they may reach. The user\n"
+        + "# agent must be a current browser's, or bot checks answer with a challenge\n"
+        + "# page; the default is a current Chrome on a Mac. block_private = true keeps\n"
+        + "# open_url and screenshot off this machine and its network.\n"
+        + "# [web]\n"
+        + '# user_agent = "Mozilla/5.0 (...) Chrome/151.0.0.0 Safari/537.36"\n'
+        + '# accept_language = "en-US,en;q=0.9"\n'
+        + "# block_private = true\n"
+        + "# render = true          # fall back to a headless browser when a page needs one\n"
         + "\n"
         + "# Tool servers (MCP), one table each. Their tools join the built-in ones as\n"
         + "# <server>__<tool>, and each is asked about before it runs unless the server\n"

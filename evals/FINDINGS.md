@@ -3,6 +3,26 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-03: a page cut where the answer was, and a bot check taken for a 403
+
+Thread `thr_a123fb388eec4ea5`, the Emby player again. The model opened XcodeGen's project
+spec and the call succeeded -- but the target type it needed sits at character 24,167 of
+a 63,790-character page, `open_url` cut at 20,000, and there was no way to read on. Five
+searches later it opened a Medium article and got "answered 403": Cloudflare's challenge,
+with `cf-mitigated: challenge`, to a fetch that carried a browser's user agent and a
+script's other headers. The same request with a browser's navigation and client-hint
+headers is 200, same client; the headless browser gets the article too; the tool tried
+neither, because it fell back to the browser only for a 200 that read as empty. The
+model guessed `unitTest` and XcodeGen refused it twice.
+
+Four changes, each tested: `open_url` takes a `start` and a cut says which start to call
+again with; the fetch sends a current Chrome's user agent and the headers a navigation
+carries, with the client hints derived from the user agent so they agree, and the user
+agent is a `[web]` setting; a 403, 429 or 503 that is a bot check is rendered in the
+browser, and the result says so; a GitHub blob URL is read as the raw file. Checked live
+against the two pages: the article now comes back from the fetch, and the docs page reads
+on from 24,000.
+
 ## 2026-09-03: a stall a person could not break
 
 Thread `thr_a9f1f2e3ad5548c3`, through the server, the Emby player. The model prefixed 197

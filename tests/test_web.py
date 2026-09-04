@@ -415,7 +415,8 @@ async def test_a_long_page_is_cut_and_says_so(ctx: ToolContext) -> None:
     )
 
     assert result.ok
-    assert "[cut here: the page is longer than 500 characters]" in result.content
+    assert "[cut here: the page is longer than 500 characters." in result.content
+    assert "start=" in result.content
 
 
 async def test_a_page_with_no_text_says_which_kind_of_empty_it_is(ctx: ToolContext) -> None:
@@ -614,3 +615,160 @@ async def test_rendering_can_be_switched_off(ctx: ToolContext) -> None:
 
     assert not result.ok and renderer.rendered == []
     assert "rendering is not available" in result.content
+
+
+# -- a bot check, a cut page read on, and a GitHub file -----------------------------------
+
+
+async def test_the_fetch_sends_a_browsers_navigation_headers(ctx: ToolContext) -> None:
+    """Measured 2026-09-03: a Cloudflare-fronted page answered 403 to a browser user agent
+    with a script-shaped header set, and 200 to the same client sending what a browser
+    sends on navigation. The client hints have to agree with the user agent."""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return httpx.Response(200, text=ARTICLE_PAGE, headers={"content-type": "text/html"})
+
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
+        {"url": "https://example.com/a"}, ctx
+    )
+
+    assert result.ok
+    assert seen["user-agent"].startswith("Mozilla/5.0") and "Chrome/" in seen["user-agent"]
+    assert seen["sec-fetch-mode"] == "navigate" and seen["sec-fetch-dest"] == "document"
+    assert seen["upgrade-insecure-requests"] == "1"
+    major = seen["user-agent"].split("Chrome/")[1].split(".")[0]
+    assert f'v="{major}"' in seen["sec-ch-ua"] and seen["sec-ch-ua-platform"] == '"macOS"'
+    assert "text/html" in seen["accept"]
+
+
+def test_a_user_agent_that_is_not_chrome_sends_no_chrome_hints() -> None:
+    from harness.tools.addresses import navigation_headers
+
+    safari = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+    )
+    headers = navigation_headers(safari, "de-DE,de;q=0.9")
+    assert "sec-ch-ua" not in headers and headers["Accept-Language"] == "de-DE,de;q=0.9"
+
+
+BOT_CHECK_PAGE = (
+    "<!DOCTYPE html><html><head><title>Just a moment...</title></head>"
+    + '<body><div id="challenge-platform">Enable JavaScript and cookies to continue</div>'
+    + "</body></html>"
+)
+
+
+async def test_a_bot_check_is_rendered_in_the_browser_and_says_so(ctx: ToolContext) -> None:
+    """Medium behind Cloudflare: 403 with a challenge to the fetch, the article to the
+    browser. A 403 that is a bot check is a page that needs a browser, not a failure."""
+    renderer = _FakeRenderer(html=ARTICLE_PAGE)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            text=BOT_CHECK_PAGE,
+            headers={"content-type": "text/html", "cf-mitigated": "challenge"},
+        )
+
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler), renderer)).call(
+        {"url": "https://example.com/article"}, ctx
+    )
+
+    assert result.ok, result.content
+    assert renderer.rendered == ["https://example.com/article"]
+    assert "bot check, which the browser passed" in result.content
+    assert "How wrapping works" in result.content
+
+
+async def test_a_bot_check_without_a_browser_is_a_failure_that_says_why(
+    ctx: ToolContext,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text=BOT_CHECK_PAGE, headers={"content-type": "text/html"})
+
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler), None)).call(
+        {"url": "https://example.com/article"}, ctx
+    )
+
+    assert not result.ok and not result.refused
+    assert "answered 403 with a bot check" in result.content
+    assert "not available" in result.content
+
+
+async def test_a_plain_403_is_still_a_failure_and_never_rendered(ctx: ToolContext) -> None:
+    renderer = _FakeRenderer(html=ARTICLE_PAGE)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="<html><body><h1>Forbidden</h1></body></html>")
+
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler), renderer)).call(
+        {"url": "https://example.com/private"}, ctx
+    )
+
+    assert not result.ok and "answered 403" in result.content
+    assert renderer.rendered == []
+
+
+def test_only_a_refusing_status_can_be_a_challenge() -> None:
+    from harness.tools.web import challenged
+
+    assert challenged(403, "challenge", "")
+    assert challenged(503, "", BOT_CHECK_PAGE)
+    assert not challenged(200, "", BOT_CHECK_PAGE)  # a page about challenges is a page
+    assert not challenged(403, "", "<h1>Forbidden</h1>")
+
+
+async def test_a_cut_page_says_which_start_to_read_on_from(ctx: ToolContext) -> None:
+    """The run that motivated this opened a 64k-character page, was cut at 20k, and had no
+    way to read the part that held the answer -- so it searched five more times and
+    guessed. Measured 2026-09-03."""
+    body = "".join(f"<p>paragraph {n} " + "word " * 20 + "</p>" for n in range(60))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=f"<html><body><article>{body}</article></body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    opener = bind(Open(OPEN_ANYWHERE, transport(handler)))
+    first = await opener.call({"url": "https://example.com/long", "max_chars": 800}, ctx)
+    assert first.ok
+    assert "Call open_url again with start=" in first.content
+    start = int(first.content.split("start=")[1].split()[0])
+    assert 600 <= start <= 800
+
+    second = await opener.call(
+        {"url": "https://example.com/long", "max_chars": 800, "start": start}, ctx
+    )
+    assert second.ok and f"(characters {start}-" in second.content
+    assert "paragraph 0 " not in second.content  # past the first page of it
+    past = await opener.call({"url": "https://example.com/long", "start": 10**6}, ctx)
+    assert past.ok and "past the end" in past.content
+
+
+async def test_a_github_blob_url_is_read_as_the_raw_file(ctx: ToolContext) -> None:
+    from harness.tools.web import raw_github
+
+    assert (
+        raw_github("https://github.com/o/r/blob/main/Docs/Spec.md")
+        == "https://raw.githubusercontent.com/o/r/main/Docs/Spec.md"
+    )
+    assert raw_github("https://github.com/o/r/blob/main/a.md#L10").endswith("#L10")
+    assert raw_github("https://github.com/o/r/issues/731") == "https://github.com/o/r/issues/731"
+
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(
+            200, text="# Spec\n\nthe file itself\n", headers={"content-type": "text/plain"}
+        )
+
+    result = await bind(Open(OPEN_ANYWHERE, transport(handler))).call(
+        {"url": "https://github.com/o/r/blob/main/Docs/Spec.md"}, ctx
+    )
+    assert result.ok and asked == ["https://raw.githubusercontent.com/o/r/main/Docs/Spec.md"]
+    assert "the file itself" in result.content

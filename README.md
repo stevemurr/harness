@@ -68,7 +68,7 @@ the config file beats the built-in default, for every setting, in both commands.
 
 ## Configuration
 
-`~/.harness/config.toml` has seven tables. Unknown tables and keys are errors, so a typo
+`~/.harness/config.toml` has eight tables. Unknown tables and keys are errors, so a typo
 cannot become a setting that silently does nothing.
 
 ```toml
@@ -104,6 +104,12 @@ max_consecutive_refusals = 10
 [approval]
 policy = "ask"             # ask | edits | full-access; what a run gets unless the client says
 always_allow = ["run:git", "run:uv"]   # never ask about these; a grant key, fnmatch allowed
+
+[web]
+user_agent = "Mozilla/5.0 (...) Chrome/151.0.0.0 Safari/537.36"   # a current browser's, or bot checks refuse
+accept_language = "en-US,en;q=0.9"
+block_private = true       # open_url and screenshot stay off this machine and its network
+render = true              # fall back to a headless browser when a page needs one
 
 [mcp.servers.files]        # a tool server, one table each; see "Tool servers" below
 command = "npx"
@@ -228,13 +234,18 @@ someone is listening.
 
 **The web.** `web_search` returns ranked results with snippets; `open_url` fetches one
 page and returns its main content as text, reader-mode style, with links kept so the model
-can open what it finds. A page whose fetch reads as empty is rendered in a headless
-Chromium, if one is installed (`uv sync --extra browser`, then `harness install-browser`),
-and read the same way; the result says it was rendered. The browser is a fallback and
-nothing else: every request a page makes is checked against the same private-address
-guard as the fetch, images and fonts are not loaded, downloads are refused, and a page
-gets fifteen seconds to settle. Without the browser, the tool says the page needs one and
-how to install it.
+can open what it finds. A long page is cut at a paragraph and says which `start` to call
+again with for the rest, so nothing on a page is out of reach. A GitHub blob URL is read
+as the raw file. The fetch sends what a browser sends when a person opens a page -- a
+current Chrome's user agent, the navigation and client-hint headers that must agree with
+it -- because bot checks read the whole request and answer a script-shaped one with a
+challenge page. A page whose fetch reads as empty, or a site that answers with a bot check
+anyway, is rendered in a headless Chromium, if one is installed (`uv sync --extra browser`,
+then `harness install-browser`), and read the same way; the result says it was rendered and
+why. The browser is a fallback and nothing else: every request a page makes is checked
+against the same private-address guard as the fetch, images and fonts are not loaded,
+downloads are refused, and a page gets fifteen seconds to settle. Without the browser, the
+tool says the page needs one and how to install it.
 
 `screenshot` uses the same browser to look at a page the agent is building: a URL, or an
 HTML file in the folder, at a viewport it chooses, light or dark. The PNG goes under

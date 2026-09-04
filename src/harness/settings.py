@@ -120,14 +120,33 @@ class Shell:
     timeout: int = 120
 
 
+#: What the web tools say they are: a current Chrome on a Mac. Current matters. Bot
+#: checks compare the version here with the client hints sent beside it and with what
+#: the browser market actually looks like, and a two-year-old Chrome, a bare `python-httpx`
+#: or a missing `Mozilla/5.0` prefix is each enough on its own to be answered with a
+#: challenge page instead of the article. Measured 2026-09-03 on a Cloudflare-fronted
+#: site: the same request was 403 with a script-shaped header set and 200 with a
+#: browser's. Kept in step with the Chromium `harness install-browser` fetches.
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    + "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Web:
-    """The two research tools, `web_search` and `open_url`.
+    """The research tools: `web_search`, `open_url`, and the browser behind `screenshot`.
 
-    One group for both, because they share a timeout and a `User-Agent` and are always
+    One group for all, because they share a timeout and a `User-Agent` and are always
     added together -- splitting them would be two objects that must agree about the same
     endpoint's manners.
     """
+
+    #: Who the fetch and the browser say they are. `DEFAULT_USER_AGENT` says why it is
+    #: what it is; a deployment that needs another sets it in `[web]`.
+    user_agent: str = DEFAULT_USER_AGENT
+    #: The `Accept-Language` sent with every request, and the browser's locale.
+    accept_language: str = "en-US,en;q=0.9"
 
     #: Seconds for one request. Well under `Shell.timeout`: a search that has not answered
     #: in this long is a search being refused slowly, and a run has better things to wait on.

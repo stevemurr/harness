@@ -10,15 +10,60 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
 import urllib.parse
 
+from harness.settings import DEFAULT_USER_AGENT
+
 #: A browser's, because the alternative is the challenge page. Sending `python-httpx` as a
 #: `User-Agent` to an endpoint with anomaly detection is asking to be classified correctly.
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+#: The string itself lives in `settings`, where a deployment can change it.
+USER_AGENT = DEFAULT_USER_AGENT
+
+_CHROME = re.compile(r"Chrome/(\d+)")
+
+
+def navigation_headers(
+    user_agent: str = USER_AGENT, accept_language: str = "en-US,en;q=0.9"
+) -> dict[str, str]:
+    """The headers a browser sends when a person opens a page, for a fetch to send too.
+
+    A `User-Agent` alone is no longer enough. A bot check reads the whole request: the
+    `Accept` a browser sends for a document, the `Sec-Fetch-*` headers that say this is a
+    top-level navigation, `Upgrade-Insecure-Requests`, and the client hints
+    (`sec-ch-ua`, platform, mobile) -- which must agree with the user agent, because a
+    Chrome that says it is version 151 in one header and something else in another is
+    the fingerprint of a script. Measured 2026-09-03: a Cloudflare-fronted page answered
+    403 with a challenge to the old header set and 200 to this one, same client.
+
+    The client hints are derived from the user agent, so changing it in `[web]` keeps
+    them consistent; a user agent that is not Chrome's sends none, as that browser would.
+    """
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        + "image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": accept_language,
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if (chrome := _CHROME.search(user_agent)) is not None:
+        major = chrome.group(1)
+        platform = "Linux"
+        if "Mac" in user_agent:
+            platform = "macOS"
+        elif "Windows" in user_agent:
+            platform = "Windows"
+        headers["sec-ch-ua"] = (
+            f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not-A.Brand";v="24"'
+        )
+        headers["sec-ch-ua-mobile"] = "?0"
+        headers["sec-ch-ua-platform"] = f'"{platform}"'
+    return headers
 
 
 async def address_error(url: str, block_private: bool) -> str:

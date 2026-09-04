@@ -179,7 +179,8 @@ class _Chromium:
     async def render(self, url: str) -> str:
         browser = await self._launched()
         context = await browser.new_context(
-            user_agent=_user_agent(),
+            user_agent=self.settings.user_agent,
+            locale=self.settings.accept_language.split(",")[0],
             java_script_enabled=True,
             accept_downloads=False,
             viewport={"width": 1280, "height": 900},
@@ -204,7 +205,8 @@ class _Chromium:
     ) -> Capture:
         browser = await self._launched()
         context = await browser.new_context(
-            user_agent=_user_agent(),
+            user_agent=self.settings.user_agent,
+            locale=self.settings.accept_language.split(",")[0],
             java_script_enabled=True,
             accept_downloads=False,
             viewport={"width": width, "height": height},
@@ -315,12 +317,6 @@ class _Chromium:
                 await playwright.stop()
             except Exception:
                 log.debug("playwright did not stop cleanly", exc_info=True)
-
-
-def _user_agent() -> str:
-    from harness.tools.addresses import USER_AGENT
-
-    return USER_AGENT
 
 
 def _watch(page: Page, errors: list[str], failed: list[str]) -> None:
