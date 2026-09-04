@@ -12,7 +12,15 @@ from pathlib import Path
 from harness.agent.loop import AgentLoop, Turn, assistant_with_calls, share, system, user
 from harness.settings import Limits, Output
 from harness.state.approval import Approvals, Policy
-from harness.types import Message, Role, ToolCall, ToolResult, Transcript, parse_arguments
+from harness.types import (
+    Message,
+    Role,
+    Source,
+    ToolCall,
+    ToolResult,
+    Transcript,
+    parse_arguments,
+)
 
 OUT = Output()
 
@@ -454,7 +462,9 @@ async def test_an_arrival_is_appended_before_the_next_model_call() -> None:
 
 async def test_an_arrival_resets_the_refusal_count() -> None:
     """A person intervening is the clearest sign a stall may now be breakable, so the run
-    should not carry on towards the cap as though nothing had happened."""
+    should not carry on towards the cap as though nothing had happened -- provided the
+    model then does something different. The model here changes its command after the
+    arrival; the test below it is the one that does not."""
 
     async def refused(_call: ToolCall) -> ToolResult:
         return ToolResult("no", ok=False, refused=True)
@@ -468,7 +478,11 @@ async def test_an_arrival_resets_the_refusal_count() -> None:
         return [Message(Role.ARRIVAL, "try something else")] if turns == 3 else []
 
     loop = AgentLoop(
-        complete=scripted(calls(("c1", "run", {"command": "x"}))),
+        complete=scripted(
+            calls(("c1", "run", {"command": "x"})),
+            calls(("c2", "run", {"command": "x"})),
+            calls(("c3", "run", {"command": "y"})),
+        ),
         run_tool=refused,
         limits=Limits(max_turns=12, max_consecutive_refusals=4),
         pending=pending,
@@ -534,3 +548,117 @@ async def test_a_halt_ends_the_run_before_the_next_turn_whatever_the_model_wante
     assert outcome.turns == 2 and seen == 2
     # Every call made was answered: the transcript is still one a provider would accept.
     assert not outcome.transcript.unanswered_calls()
+
+
+# -- a stall that a person could not break -----------------------------------------------
+
+
+async def test_a_steer_answered_with_the_same_calls_does_not_reset_the_cap() -> None:
+    """Measured 2026-09-03: three steers naming a misspelt path, each answered with the
+    same misspelt command, each resetting the refusal cap and keeping the run alive. A
+    person's words reset the cap only when the next turn does something different."""
+
+    async def always_refuses(call: ToolCall) -> ToolResult:
+        return ToolResult("no such folder", ok=False, refused=True)
+
+    async def steering(turn: int) -> list[Message]:
+        return [Message(Role.ARRIVAL, "the path is wrong", source=Source.PERSON)]
+
+    same = calls(("a", "run", {"command": "cd /nope && ls"}))
+    loop = AgentLoop(
+        complete=scripted(same),
+        run_tool=always_refuses,
+        limits=Limits(max_turns=50, max_consecutive_refusals=3),
+        pending=steering,
+    )
+
+    outcome = await loop.run(Transcript([user("go")]))
+
+    assert outcome.stop.kind == "refused"
+    assert outcome.turns == 3
+
+
+async def test_a_steer_answered_with_a_different_call_resets_the_cap() -> None:
+    async def always_refuses(call: ToolCall) -> ToolResult:
+        return ToolResult("no", ok=False, refused=True)
+
+    async def steering(turn: int) -> list[Message]:
+        return [Message(Role.ARRIVAL, "try again", source=Source.PERSON)]
+
+    loop = AgentLoop(
+        complete=scripted(
+            calls(("a", "run", {"command": "ls one"})),
+            calls(("b", "run", {"command": "ls two"})),
+            calls(("c", "run", {"command": "ls three"})),
+            Message(Role.ASSISTANT, "giving up"),
+        ),
+        run_tool=always_refuses,
+        limits=Limits(max_turns=50, max_consecutive_refusals=2),
+        pending=steering,
+    )
+
+    outcome = await loop.run(Transcript([user("go")]))
+
+    assert outcome.stop.kind == "done"
+
+
+async def test_a_resumed_run_counts_the_repeats_already_in_the_transcript(
+    tmp_path: Path,
+) -> None:
+    """The runner is built per run and the transcript is the state, so the streak is
+    read from the transcript's tail -- past what the person said, up to a compaction."""
+    from harness.agent.runner import ToolRunner
+    from harness.tools import ToolContext, new_registry
+    from harness.tools.files import file_tools
+    from harness.workspace import Workspace
+
+    _ = (tmp_path / "a.txt").write_text("same\n")
+    read = {"path": "a.txt"}
+    plain = ToolRunner(
+        new_registry(file_tools()),
+        ToolContext(paths=Workspace.at(tmp_path)),
+        Approvals(policy=Policy(approve_everything=True)),
+    )
+    same = (await plain.run(ToolCall("c0", "read_file", read))).content
+    history = Transcript(
+        [
+            user("go"),
+            calls(("c1", "read_file", read)),
+            Message(Role.TOOL, same, call_id="c1"),
+            calls(("c2", "read_file", read)),
+            Message(Role.TOOL, same, call_id="c2"),
+            calls(("c3", "read_file", read)),
+            Message(Role.TOOL, same, call_id="c3"),
+            calls(("c4", "read_file", read)),
+            Message(
+                Role.TOOL,
+                "You have called read_file 4 times",
+                call_id="c4",
+                ok=False,
+                refused=True,
+            ),
+            Message(Role.ARRIVAL, "stop reading that", source=Source.PERSON),
+            user("continue"),
+        ]
+    )
+
+    def runner(transcript: Transcript) -> ToolRunner:
+        return ToolRunner(
+            new_registry(file_tools()),
+            ToolContext(paths=Workspace.at(tmp_path)),
+            Approvals(policy=Policy(approve_everything=True)),
+        ).seeded(transcript)
+
+    again = await runner(history).run(ToolCall("c5", "read_file", read))
+    assert again.refused and "5 times in a row" in again.content
+
+    # A changed answer is a change in the world, and is given as it is.
+    _ = (tmp_path / "a.txt").write_text("different\n")
+    changed = await runner(history).run(ToolCall("c6", "read_file", read))
+    assert changed.ok and "different" in changed.content
+
+    # A compaction boundary ends the count: a re-read after one is recovery.
+    _ = (tmp_path / "a.txt").write_text("same\n")
+    compacted = Transcript([*history.messages, Message(Role.COMPACTION, "handoff")])
+    fresh = await runner(compacted).run(ToolCall("c7", "read_file", read))
+    assert fresh.ok

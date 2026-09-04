@@ -23,6 +23,7 @@ import re
 import shlex
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated
 
 from harness.exec.processes import Processes
@@ -30,6 +31,7 @@ from harness.exec.spawn import scoped
 from harness.settings import Shell as ShellSettings
 from harness.tools.base import Arguments, Handler, ToolContext, bind, described, spec_for
 from harness.types import ToolResult, ToolSpec
+from harness.workspace import Workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +110,9 @@ class Shell:
                 f"this command backgrounds itself with `&`: {detail}", ok=False, refused=True
             )
 
+        if (misspelt := _misspelt_path(command, ctx.paths)) is not None:
+            return ToolResult(misspelt, ok=False, refused=True)
+
         if args.background:
             if self.processes is None:
                 return ToolResult(
@@ -170,6 +175,36 @@ class Shell:
         # What is `ok=False` here is the tool genuinely not doing its job: a timeout, or a
         # command that could not be started at all.
         return ToolResult(f"exit {code}\n{body}")
+
+
+def _misspelt_path(command: str, paths: Workspace) -> str | None:
+    """Why this command would fail on a path before it is run, or `None`.
+
+    Two cases, both certain to fail, and both answered by the shell in a way a model has
+    been measured to ignore -- `cd: No such file or directory` under `exit 1`, thirteen
+    times running (2026-09-03). An absolute path in the command that does not exist and
+    is a misspelling of the working folder is named as one, with the right spelling. A
+    leading `cd` to a folder that does not exist is refused with where commands already
+    run. Anything else -- a path a `mkdir` in the same command will create, a typo the
+    workspace cannot recognise -- is left to the shell, as before.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        if token.startswith("/") and (hint := paths.near_miss(token)):
+            return hint
+    if len(tokens) >= 2 and tokens[0] == "cd":
+        target = Path(os.path.expanduser(tokens[1]))
+        where = target if target.is_absolute() else paths.root / target
+        if not where.is_dir():
+            return (
+                f"cd {tokens[1]}: no such folder, so the command cannot run. Commands "
+                + f"already run in {paths.root}; leave the cd out, or name a folder that "
+                + "exists."
+            )
+    return None
 
 
 def _backgrounds(command: str) -> bool:

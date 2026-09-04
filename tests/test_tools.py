@@ -964,7 +964,10 @@ async def test_the_fourth_identical_answer_is_refused_and_names_the_loop(
     assert [a.ok for a in answers] == [True, True, True, False]
     assert answers[3].refused
     assert "4 times in a row" in answers[3].content
-    assert "wait" in answers[3].content
+    # A file read is not something to wait on; the refusal quotes the answer and says to
+    # change the call. The waiting advice is for the process and agent readers.
+    assert "It was:" in answers[3].content and "change the call" in answers[3].content
+    assert "read_process takes" not in answers[3].content
 
 
 async def test_a_different_call_in_between_starts_the_count_again(
@@ -1069,3 +1072,61 @@ async def test_read_process_without_wait_answers_at_once(tmp_path: Path) -> None
 
     assert "still running, no output yet" in seen.content
     await processes.aclose()
+
+
+# -- a misspelt path, named as one --------------------------------------------------------
+
+
+def test_a_path_one_folder_name_off_the_root_is_named_as_a_misspelling(tmp_path: Path) -> None:
+    """Measured twice: a model retyped the working folder's absolute path into every
+    command and got one character of it wrong, and nothing it was told said which."""
+    root = tmp_path / "stevemurr" / "reel-player"
+    root.mkdir(parents=True)
+    ws = Workspace.at(root)
+    wrong = tmp_path / "stevemurm" / "reel-player" / "Sources" / "App.swift"
+
+    hint = ws.near_miss(wrong)
+    assert "'stevemurm' should be 'stevemurr'" in hint
+    assert "relative paths" in hint
+
+    # The escape message carries the hint, so every file tool says it.
+    with pytest.raises(PathEscape, match="should be 'stevemurr'"):
+        ws.resolve(str(wrong))
+
+    # A path that exists is never a typo, however similar; a path that is nothing like
+    # the root is outside, not misspelt; a second wrong component is not one typo.
+    (tmp_path / "stevemurm").mkdir()
+    assert ws.near_miss(tmp_path / "stevemurm") == ""
+    assert ws.near_miss("/etc/passwd") == ""
+    assert ws.near_miss(tmp_path / "stevemurm" / "real-player" / "x") == ""
+    assert ws.near_miss("Sources/App.swift") == ""  # relative: not this check's business
+
+
+async def test_run_refuses_a_misspelt_root_and_a_cd_to_nowhere_before_running(
+    tmp_path: Path,
+) -> None:
+    """`cd: No such file or directory` under `exit 1` was answered thirteen times
+    running. The shell's answer is true and was not read; the harness's names the fix."""
+    from harness.tools.shell import shell_tools
+
+    root = tmp_path / "stevemurr" / "reel-player"
+    root.mkdir(parents=True)
+    ctx = ToolContext(paths=Workspace.at(root))
+    run = next(t for t in shell_tools() if t.spec.name == "run")
+    wrong = tmp_path / "stevemurm" / "reel-player"
+
+    typo = await run.call({"command": f"cd {wrong} && swift test 2>&1 | tail -20"}, ctx)
+    assert typo.refused and "'stevemurm' should be 'stevemurr'" in typo.content
+
+    nowhere = await run.call({"command": "cd build/nope && ls"}, ctx)
+    assert nowhere.refused and "no such folder" in nowhere.content
+    assert str(root) in nowhere.content
+
+    # A folder the command makes first, a cd to the root itself, and an ordinary
+    # command all run as before.
+    made = await run.call({"command": "mkdir -p build/out && cd build/out && pwd"}, ctx)
+    assert made.ok and not made.refused and "build/out" in made.content
+    here = await run.call({"command": f"cd {root} && echo hi"}, ctx)
+    assert here.ok and "hi" in here.content
+    plain = await run.call({"command": "echo plain"}, ctx)
+    assert plain.ok and "plain" in plain.content

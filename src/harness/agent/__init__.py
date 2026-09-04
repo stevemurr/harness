@@ -267,7 +267,9 @@ class _Agent:
                 self.approvals,
                 modes=self.modes,
                 paths=lambda: self.workspace,
-            ).run,
+            )
+            .seeded(transcript)
+            .run,
             limits=self.settings.limits,
             output=self.settings.output,
             observers=[*self.observers, self._recorder(thread_id)],

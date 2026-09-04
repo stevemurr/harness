@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -37,6 +38,11 @@ from harness.types import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _fingerprint(call: ToolCall) -> str:
+    """A call's identity for telling one turn from the next: name and arguments."""
+    return json.dumps([call.name, call.arguments], sort_keys=True)
 
 @dataclass(frozen=True, slots=True)
 class Turn:
@@ -88,6 +94,11 @@ class AgentLoop:
     async def run(self, transcript: Transcript) -> Outcome:
         turns = 0
         consecutive_refusals = 0
+        #: The last turn's calls, and whether anything arrived since. A person's words
+        #: are a reason to think a stall may now be breakable -- unless the next turn is
+        #: the same calls again, which is the surest sign they were not read.
+        previous: tuple[str, ...] = ()
+        intervened = False
 
         while True:
             if self.limits.max_turns and turns >= self.limits.max_turns:
@@ -116,10 +127,7 @@ class AgentLoop:
             # between a call and its result is the request every provider rejects.
             for arrived in (await self.pending(turns + 1)) if self.pending else ():
                 transcript.append(arrived)
-                # A person or a process intervening is the clearest sign that a stall may
-                # now be breakable, so the count of turns-where-everything-was-refused
-                # starts again rather than carrying on towards the cap.
-                consecutive_refusals = 0
+                intervened = True
 
             try:
                 assistant = await self.complete(transcript)
@@ -137,6 +145,18 @@ class AgentLoop:
                 # the only ordinary way a run ends.
                 await self._observe(Turn(assistant))
                 return Outcome(transcript, StopReason("done"), turns)
+
+            # Something intervened and the model did something different: the count of
+            # turns-where-everything-was-refused starts again rather than carrying on
+            # towards the cap. Something intervened and the model made the same calls
+            # again: it did not read what arrived, and the cap stands. Measured
+            # 2026-09-03: three steers naming a misspelt path, each answered with the
+            # same misspelt command, each resetting the cap and keeping the run alive.
+            asked = tuple(_fingerprint(call) for call in assistant.tool_calls)
+            if intervened and asked != previous:
+                consecutive_refusals = 0
+            intervened = False
+            previous = asked
 
             results = await self._run_calls(assistant.tool_calls)
             for call, result in results:

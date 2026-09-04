@@ -16,8 +16,13 @@ from harness.state.approval import Approvals, Request
 from harness.state.mode import ModeState
 from harness.tools import Registry, ToolContext
 from harness.tools.kinds import kind_for
-from harness.types import ToolCall, ToolResult
+from harness.types import Role, ToolCall, ToolResult, Transcript
 from harness.workspace import Workspace
+
+#: Tools whose unchanged answer may mean "not yet": the refusal for repeating one of
+#: these says how to wait instead. For any other tool the same answer means the same
+#: call, and the refusal says to change it.
+WAITING = frozenset({"read_process", "read_monitor", "read_agent", "list_tasks"})
 
 
 @dataclass
@@ -43,6 +48,51 @@ class ToolRunner:
     #: call is refused. Three is enough to be sure it is not looking for a change that
     #: takes a moment, and few enough that the fourth is not the two-hundredth.
     STREAK: ClassVar[int] = 3
+
+    def seeded(self, transcript: Transcript) -> ToolRunner:
+        """This runner, with its streak read from the transcript's tail.
+
+        The transcript is the state, and the streak was not in it. A runner is built per
+        run, so a model that made the same failing call thirteen times, was stopped by
+        the refusal cap, and was resumed with "continue" got three more real runs of the
+        same call before the guard noticed again -- and each steer the person sent in
+        between counted for nothing. Measured 2026-09-03.
+
+        So the count is what the transcript shows: identical calls at the tail, looking
+        past what the person and the harness said in between, and stopping at a
+        compaction, where a re-read is recovery and not a loop. The answer remembered is
+        the last one the tool actually gave, not the refusal that replaced it, so the
+        next identical answer is the fourth and not the first.
+        """
+        calls: dict[str, ToolCall] = {}
+        pairs: list[tuple[str, str | None]] = []
+        for message in transcript.messages:
+            if message.role is Role.COMPACTION:
+                pairs.clear()
+            elif message.role is Role.ASSISTANT:
+                for call in message.tool_calls:
+                    calls[call.call_id] = call
+                    pairs.append((self._fingerprint(call), None))
+            elif message.role is Role.TOOL and message.call_id in calls:
+                key = self._fingerprint(calls[message.call_id])
+                answer = None if message.refused else message.content
+                for index in range(len(pairs) - 1, -1, -1):
+                    if pairs[index] == (key, None):
+                        pairs[index] = (key, answer)
+                        break
+        if not pairs:
+            return self
+        key = pairs[-1][0]
+        trailing = list(reversed(pairs))
+        count = 0
+        for pair_key, _ in trailing:
+            if pair_key != key:
+                break
+            count += 1
+        answered = next((answer for _, answer in trailing[:count] if answer is not None), None)
+        if count and answered is not None:
+            self._streak = (key, answered, count)
+        return self
 
     async def run(self, call: ToolCall) -> ToolResult:
         if (again := self._looping(call)) is not None:
@@ -137,13 +187,25 @@ class ToolRunner:
         count = self._streak[2]
         if not result.ok or count <= self.STREAK:
             return result
+        # The answer is quoted, because the model has evidently not read it: "exit 1,
+        # cd: No such file or directory" thirteen times is a model that never looked at
+        # the second line. The advice depends on the tool. A process read may be
+        # answered the same way because nothing has happened yet; a command or a file
+        # read that answers the same way is the same call, and the fix is a different one.
+        said = " ".join(result.content.split())[:200] or "(no output)"
+        advice = (
+            "If you are waiting for something, wait for it: read_process takes a `wait` "
+            + "in seconds and answers when the process exits or prints more, and a "
+            + "background command that exits when a condition holds tells you once. "
+            if call.name in WAITING
+            else "Read that answer, then change the call -- the path, the command, the "
+            + "spelling -- or do something else. "
+        )
         return ToolResult(
             f"You have called {call.name} with exactly these arguments {count} times in a "
-            + "row and the answer has not changed. Calling it again will not change it. If "
-            + "you are waiting for something, wait for it: read_process takes a `wait` in "
-            + "seconds and answers when the process exits or prints more, and a background "
-            + "command that exits when a condition holds tells you once. If nothing you can "
-            + "do will change the answer, say so and stop.",
+            + f"row and the answer has not changed. It was: {said}. Calling it again will "
+            + f"not change it. {advice}If nothing you can do will change the answer, say "
+            + "so and stop.",
             ok=False,
             refused=True,
         )

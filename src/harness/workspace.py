@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from uuid import uuid4
 
@@ -100,13 +101,56 @@ class Workspace:
 
         if not self._inside(resolved):
             where = self.root if not self.extra else ", ".join(str(r) for r in self.roots)
-            raise PathEscape(f"path {path!r} resolves to {resolved}, outside {where}")
+            hint = self.near_miss(resolved)
+            raise PathEscape(
+                f"path {path!r} resolves to {resolved}, outside {where}"
+                + (f". {hint}" if hint else "")
+            )
         if resolved.is_symlink():
             # `resolve()` follows links, so an ordinary link is already its target here.
             # What survives is a cycle (a -> b -> a), where resolution gives up. `os.stat`
             # on one raises ELOOP, which would surface as a harness bug.
             raise PathEscape(f"path {path!r} is a symlink resolution cycle")
         return resolved
+
+    def near_miss(self, path: Path | str) -> str:
+        """A sentence naming the misspelling, when `path` does not exist and is one
+        folder name away from one of this workspace's roots -- or an empty string.
+
+        Measured twice, on 2026-09-01 and 2026-09-03: a model retyping the absolute path
+        of the working folder into every command got one character of it wrong --
+        `stevemurm` for `stevemurr` -- and then made the same call 13 times, because the
+        answer it got ("outside the folder", "No such file or directory") never said what
+        was wrong with the path. This says it: the folder name that differs, and what it
+        should be. Only when the path does not exist, so a real second folder that
+        happens to have a similar name is never called a typo.
+        """
+        candidate = Path(path)
+        if not candidate.is_absolute() or candidate.exists():
+            return ""
+        parts = candidate.parts
+        for root in self.roots:
+            expected = root.parts
+            compared = min(len(parts), len(expected))
+            if compared < 2:
+                continue
+            differing = [
+                index
+                for index in range(compared)
+                if parts[index] != expected[index]
+            ]
+            if len(differing) != 1:
+                continue
+            index = differing[0]
+            wrong, right = parts[index], expected[index]
+            if SequenceMatcher(None, wrong, right).ratio() < 0.75:
+                continue
+            return (
+                f"{candidate} does not exist, and looks like a misspelling of the working "
+                + f"folder {root}: {wrong!r} should be {right!r}. Use relative paths, which "
+                + "resolve against the working folder, rather than retyping it."
+            )
+        return ""
 
     def resolve_for_write(self, path: str) -> Path:
         """Resolve for writing. Containment AND write authority.

@@ -3,6 +3,28 @@
 Measurements, and the ones that were wrong. A number in a commit message cannot be edited
 once it is pushed; this file can, so it is where a claim goes to be checked.
 
+## 2026-09-03: a stall a person could not break
+
+Thread `thr_a9f1f2e3ad5548c3`, through the server, the Emby player. The model prefixed 197
+commands with `cd <absolute working folder> &&` against the environment block's
+instruction, and at the 198th retype got one character wrong: `stevemurm`. `edit_file`
+with that path was refused as outside the folder, named as a repeat on the second try, and
+the model switched to a relative path and succeeded. `run` with the same path answered
+`exit 1` and `cd: No such file or directory` -- an ok result, since the command ran -- and
+the model made the identical call **13 times** until ten refusals ended the run. Resumed
+with "continue", it made it three more times before the guard, rebuilt with the run, fired
+again; three steers naming the misspelling were each answered with the same command, and
+each reset the refusal cap.
+
+Four changes, each tested: an absolute path that does not exist and is one folder name off
+the working folder is refused as a misspelling with the right spelling, by every file tool
+and by `run` before the command runs; a leading `cd` to a folder that does not exist is
+refused with where commands already run; the repeat streak is read from the transcript's
+tail at the start of a run, so a resumed run refuses the first repetition; and a person's
+words reset the refusal cap only when the next turn's calls differ from the last. Not yet
+measured on the ladder -- there is no rung that makes a model mistype -- so the claim is
+that the mechanism exists, not that it pays.
+
 ## 2026-09-03: the fleet, and delegation does not pay at this size
 
 `16-fleet`: sixteen independent packages, one planted bug each, ~130k characters of
