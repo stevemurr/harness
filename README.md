@@ -108,9 +108,13 @@ always_allow = ["run:git", "run:uv"]   # never ask about these; a grant key, fnm
 [web]
 user_agent = "Mozilla/5.0 (...) Chrome/151.0.0.0 Safari/537.36"   # a current browser's, or bot checks refuse
 accept_language = "en-US,en;q=0.9"
-block_private = true       # open_url and screenshot stay off this machine and its network
+block_private = true       # web tools refuse private destinations, including redirect hops
 render = true              # fall back to a headless browser when a page needs one
 webkit = ""                # wkrender, when it is not under ~/.harness/bin
+timeout = 20               # total seconds per search/open, including browser fallback
+render_timeout = 15        # seconds per browser attempt, within the total budget
+max_results = 8            # ranked, deduplicated search hits; about ten available
+max_bytes = 5000000         # decoded HTTP or rendered HTML input cap
 
 [mcp.servers.files]        # a tool server, one table each; see "Tool servers" below
 command = "npx"
@@ -241,20 +245,31 @@ anomaly page every time, headless Chromium got an error page, and WebKit got the
 `wkrender` is a small Swift command in its own repository beside this one; `harness
 install-webkit` builds it and puts it under `~/.harness/bin`. It is the harness's one
 browser: `web_search`, `open_url`'s render and `screenshot` all go through it, and there
-is no Python browser dependency. Without it, or when a render fails, the search is one
-POST and one parse, and a challenge says how to install the engine. `open_url` fetches
+is no Python browser dependency. Without it, or when rendering fails or yields unrecognized
+markup, search tries the HTML form over HTTP within the remaining time budget. Only an
+explicit no-results marker counts as an empty search; a challenge or changed layout is
+reported as a failure. Results are deduplicated, capped, and framed as untrusted text.
+Search returns snippets; the agent chooses which results to read with `open_url`.
+`open_url` fetches
 one page and returns its main content as text, reader-mode style, with links kept so the
 model can open what it finds. A long page is cut at a paragraph and says which `start` to call
 again with for the rest, so nothing on a page is out of reach. A GitHub blob URL is read
 as the raw file. The fetch sends what a browser sends when a person opens a page -- a
 current Chrome's user agent, the navigation and client-hint headers that must agree with
 it -- because bot checks read the whole request and answer a script-shaped one with a
-challenge page. A page whose fetch reads as empty, or a site that answers with a bot check
-anyway, is rendered in `wkrender` and read the same way; the result says it was rendered
-and why. The browser is a fallback for reading and nothing else: a navigation or redirect
-to this machine or its private network is refused, a subresource at a private address is
-blocked, downloads and popups do not happen, and a page gets fifteen seconds to settle.
-Without the browser, the tool says the page needs one and how to install it.
+challenge page. Empty/loading shells and bot checks, including those sent with HTTP 200,
+use `wkrender --reader`; older binaries fall back to the full DOM. Reader extraction uses
+the final URL and HTML base URL for links. A browser response is checked again for a
+remaining challenge or loading screen before it is reported as readable content.
+
+Search and opening share one twenty-second deadline per call, with a fifteen-second cap
+per browser attempt. HTTP and rendered HTML are limited to five million bytes; oversized
+responses fail explicitly. Renderer JSON and diagnostics have separate pipe limits, and
+timeout, cancellation or overflow kills and reaps the process. HTTP redirect hops are
+checked before connecting. DNS can still change between validation and connection;
+WebKit also cannot check hostname-based subresources with its public API. Literal private
+subresources are blocked. Without the browser, the tool says the page needs one and how
+to install it.
 
 `screenshot` uses the same engine to look at a page the agent is building: a URL, or an
 HTML file in the folder, at a viewport it chooses, light or dark. The PNG goes under

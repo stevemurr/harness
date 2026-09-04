@@ -85,6 +85,21 @@ def ctx(tmp_path: Path) -> ToolContext:
     return ToolContext(paths=Workspace.at(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def search_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The HTTP mock also needs deterministic DNS now that search checks destinations."""
+    import socket
+
+    original = socket.getaddrinfo
+
+    def resolve(host, *args, **kwargs):
+        if host == "html.duckduckgo.com":
+            host = "93.184.216.34"
+        return original(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
 def transport(handler) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
@@ -274,6 +289,23 @@ async def test_search_returns_ranked_results_with_their_urls(ctx: ToolContext) -
     assert b"q=qwen3" in seen[0].content
 
 
+async def test_search_fetch_uses_the_configured_identity(ctx: ToolContext) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=RESULTS_PAGE)
+
+    settings = replace(
+        WebSettings(), user_agent="Mozilla/5.0 Search Test", accept_language="fr-FR,fr;q=0.9"
+    )
+    result = await bind(Search(settings, transport(handler))).call({"query": "qwen3"}, ctx)
+
+    assert result.ok
+    assert seen[0].headers["user-agent"] == "Mozilla/5.0 Search Test"
+    assert seen[0].headers["accept-language"] == "fr-FR,fr;q=0.9"
+
+
 async def test_search_honours_the_result_count_it_was_asked_for(ctx: ToolContext) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=RESULTS_PAGE)
@@ -305,7 +337,9 @@ async def test_a_query_that_matches_nothing_is_a_successful_search(ctx: ToolCont
     cap for a model asking a reasonable question."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text="<div id='links' class='results'></div>")
+        return httpx.Response(
+            200, text="<div class='no-results__message'>No results found</div>"
+        )
 
     result = await bind(Search(transport=transport(handler))).call({"query": "zxqw"}, ctx)
 
@@ -538,11 +572,13 @@ class _FakeRenderer:
         self.rendered: list[str] = []
         self.closed = False
 
-    async def render(self, url: str) -> str:
+    async def render(self, url: str):
+        from harness.tools.webkit import Rendered
+
         self.rendered.append(url)
         if self.error is not None:
             raise self.error
-        return self.html or ""
+        return Rendered(url=url, title="", html=self.html or "")
 
     async def aclose(self) -> None:
         self.closed = True
@@ -711,12 +747,13 @@ async def test_a_plain_403_is_still_a_failure_and_never_rendered(ctx: ToolContex
     assert renderer.rendered == []
 
 
-def test_only_a_refusing_status_can_be_a_challenge() -> None:
+def test_challenge_detection_includes_successful_interstitial_responses() -> None:
     from harness.tools.web import challenged
 
     assert challenged(403, "challenge", "")
     assert challenged(503, "", BOT_CHECK_PAGE)
-    assert not challenged(200, "", BOT_CHECK_PAGE)  # a page about challenges is a page
+    assert challenged(200, "", BOT_CHECK_PAGE)
+    assert not challenged(200, "", ARTICLE_PAGE.replace("wrapping", "bot challenges"))
     assert not challenged(403, "", "<h1>Forbidden</h1>")
 
 
@@ -757,7 +794,9 @@ async def test_a_github_blob_url_is_read_as_the_raw_file(ctx: ToolContext) -> No
         == "https://raw.githubusercontent.com/o/r/main/Docs/Spec.md"
     )
     assert raw_github("https://github.com/o/r/blob/main/a.md#L10").endswith("#L10")
-    assert raw_github("https://github.com/o/r/issues/731") == "https://github.com/o/r/issues/731"
+    assert (
+        raw_github("https://github.com/o/r/issues/731") == "https://github.com/o/r/issues/731"
+    )
 
     asked: list[str] = []
 
@@ -783,11 +822,13 @@ class _FakeWebKit:
     def __init__(self, html: str | None = None, error: Exception | None = None, installed=True):
         self.html, self.error, self.available = html, error, installed
         self.rendered: list[str] = []
+        self.options: list[dict[str, bool]] = []
 
-    async def render(self, url: str):
+    async def render(self, url: str, *, reader: bool = False, block_private: bool = False):
         from harness.tools.webkit import Rendered
 
         self.rendered.append(url)
+        self.options.append({"reader": reader, "block_private": block_private})
         if self.error is not None:
             raise self.error
         return Rendered(url=url, title="results", html=self.html or "")
@@ -810,10 +851,11 @@ async def test_search_goes_through_webkit_when_it_is_installed(ctx: ToolContext)
 
     assert result.ok and "1. GitHub - QwenLM/Qwen3" in result.content
     assert webkit.rendered == ["https://html.duckduckgo.com/html/?q=qwen3&kl=us-en"]
+    assert webkit.options == [{"reader": False, "block_private": True}]
 
 
 async def test_a_rendered_page_with_no_results_is_an_honest_no(ctx: ToolContext) -> None:
-    webkit = _FakeWebKit(html="<div id='links' class='results'></div>")
+    webkit = _FakeWebKit(html="<div class='no-results__message'>No results found</div>")
     result = await bind(Search(transport=_never_fetches(), webkit=webkit)).call(
         {"query": "zxqw"}, ctx
     )

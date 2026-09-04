@@ -31,6 +31,7 @@ So the file is created 0600, and `load` says so plainly when it finds one that i
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import stat
 import tomllib
@@ -76,7 +77,7 @@ _MCP_SERVER_KEYS = frozenset({"command", "args", "env", "url", "headers"})
 _APPROVAL_KEYS = frozenset({"policy", "always_allow"})
 _WEB_KEYS = frozenset({
     "user_agent", "accept_language", "block_private", "render", "render_timeout",
-    "timeout", "max_chars", "webkit",
+    "timeout", "max_chars", "max_bytes", "max_results", "webkit",
 })
 _TABLES = frozenset({
     "provider", "server", "compaction", "output", "limits", "mcp", "approval", "web",
@@ -160,6 +161,10 @@ def load(path: Path | None = None) -> Config:
     mcp = _mcp_servers(_table(raw, "mcp", _MCP_KEYS, resolved))
     approval = _table(raw, "approval", _APPROVAL_KEYS, resolved)
     web = _table(raw, "web", _WEB_KEYS, resolved)
+    for key in ("timeout", "render_timeout", "max_chars", "max_bytes", "max_results"):
+        value = web.optional_number(key)
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ConfigError(f"{resolved}: web.{key} must be positive and finite")
     policy = approval.text("policy", Approval().policy)
     if named_policy(policy) is None:
         raise ConfigError(
@@ -223,6 +228,8 @@ def load(path: Path | None = None) -> Config:
                 render_timeout=web.number("render_timeout", Web().render_timeout),
                 timeout=web.number("timeout", Web().timeout),
                 max_chars=web.integer("max_chars", Web().max_chars),
+                max_bytes=web.integer("max_bytes", Web().max_bytes),
+                max_results=web.integer("max_results", Web().max_results),
                 webkit=web.text("webkit", ""),
             ),
         ),

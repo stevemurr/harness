@@ -151,8 +151,8 @@ class Web:
     #: engine `web_search` goes through; see `tools/webkit.py`.
     webkit: str = ""
 
-    #: Seconds for one request. Well under `Shell.timeout`: a search that has not answered
-    #: in this long is a search being refused slowly, and a run has better things to wait on.
+    #: Total seconds for one search/open, including DNS, redirects, streaming and browser
+    #: fallback. Each browser attempt also observes render_timeout within this budget.
     timeout: float = 20.0
     #: Results one search returns unless the caller asks for fewer. DuckDuckGo's page holds
     #: about ten, so asking for more than that returns what there was rather than failing.
@@ -164,7 +164,8 @@ class Web:
     #: larger answer anyway; cutting here means the cut lands on a paragraph boundary and
     #: says so, rather than arriving as a sentence that stops.
     max_chars: int = 20_000
-    #: Bytes read off the wire before giving up. A page this size is not an article.
+    #: Decoded HTTP bytes or UTF-8 rendered HTML bytes accepted before giving up.
+    #: Oversized pages fail explicitly, rather than returning a silently truncated article.
     max_bytes: int = 5_000_000
     #: Redirect hops followed. Each one is re-checked against the address rules, which is
     #: why they are followed here rather than by `httpx`.
@@ -173,11 +174,9 @@ class Web:
     #: a person who genuinely wants an agent reading their intranet can say so -- and has
     #: to say so.
     block_private: bool = True
-    #: Whether a page that fetches as empty is rendered in a headless browser before the
-    #: tool gives up. Only ever a fallback: the fetch is the common path, and it stays so.
+    #: Whether empty/loading shells and bot checks use a headless browser fallback.
     render: bool = True
-    #: Seconds a render may take to settle. A page that has not stopped loading in this
-    #: long is answered with what it has by then.
+    #: Maximum seconds for a browser attempt, including process startup and output.
     render_timeout: float = 15.0
 
 

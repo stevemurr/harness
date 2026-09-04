@@ -72,13 +72,15 @@ async def address_error(url: str, block_private: bool) -> str:
     Resolution happens in a thread: `getaddrinfo` is blocking, and blocking the event loop
     inside a tool stalls every other thing the run is doing.
     """
-    parts = urllib.parse.urlsplit(url)
     try:
+        parts = urllib.parse.urlsplit(url)
         # Reading `.port` is where a malformed authority raises -- `http://x:80a/` parses
         # fine until something asks for the number.
         port = parts.port
     except ValueError:
-        return f"{url!r} does not have a usable port"
+        return "the URL does not have a usable port or host"
+    if parts.username is not None or parts.password is not None:
+        return "URLs containing credentials cannot be opened"
     if parts.scheme not in ("http", "https"):
         return f"only http and https URLs can be opened, not {parts.scheme or 'a bare path'!r}"
     host = parts.hostname
@@ -88,20 +90,21 @@ async def address_error(url: str, block_private: bool) -> str:
         return ""
 
     try:
-        found = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
-    except (socket.gaierror, UnicodeError) as exc:
-        return f"could not resolve {host}: {exc}"
-
-    for entry in found:
-        address = ipaddress.ip_address(entry[4][0])
-        if (
-            address.is_loopback
-            or address.is_private
-            or address.is_link_local
-            or address.is_reserved
-            or address.is_multicast
-            or address.is_unspecified
-        ):
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            found = await asyncio.to_thread(
+                socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM
+            )
+        except (socket.gaierror, UnicodeError) as exc:
+            return f"could not resolve {host}: {exc}"
+        addresses = [ipaddress.ip_address(entry[4][0]) for entry in found]
+    if not addresses:
+        return f"could not resolve {host}: no addresses"
+    for address in addresses:
+        # is_global also excludes shared address space (100.64/10), which is neither
+        # private nor reserved in ipaddress. Multicast has its own global classification.
+        if not address.is_global or address.is_multicast:
             return (
                 f"{host} resolves to {address}, which is on this machine or its private "
                 + "network. Only public addresses can be opened."

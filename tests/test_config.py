@@ -171,13 +171,24 @@ def test_the_web_table_sets_who_the_tools_say_they_are(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     _ = path.write_text(
         '[web]\nuser_agent = "Mozilla/5.0 test"\nblock_private = false\nmax_chars = 5000\n'
+        + "max_bytes = 1000000\nmax_results = 10\n"
     )
     web = load(path).settings.web
     assert web.user_agent == "Mozilla/5.0 test"
     assert web.block_private is False and web.max_chars == 5000
+    assert web.max_bytes == 1000000 and web.max_results == 10
     assert web.render is True  # untouched keys keep their defaults
     assert web.webkit == ""
 
     _ = path.write_text("[web]\nuser_agnet = 'x'\n")
     with pytest.raises(ConfigError, match="user_agnet"):
         _ = load(path)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("timeout", "inf"), ("render_timeout", "nan"), ("max_bytes", "-1"), ("max_results", "0")],
+)
+def test_web_budgets_cannot_disable_bounds(tmp_path: Path, key: str, value: str) -> None:
+    with pytest.raises(ConfigError, match="positive and finite"):
+        load(written(tmp_path, f"[web]\n{key} = {value}\n"))

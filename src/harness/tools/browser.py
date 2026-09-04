@@ -20,7 +20,7 @@ Three rules, because a browser is a much larger thing than an HTTP client:
     a private address is the one gap, stated in `wkrender`'s own notes.
   * **It is bounded.** A capture of a file in the working folder may load files under
     that folder and nothing else on disk; downloads and popups do not happen; there is no
-    profile; and a page gets `render_timeout` seconds to settle before it is read as it is.
+    profile; and each attempt gets at most `render_timeout` seconds, including startup.
   * **It is optional.** A harness without the binary says so in the tool result, with the
     command that installs it.
 """
@@ -36,6 +36,7 @@ from typing import Protocol
 from harness.settings import Web as WebSettings
 from harness.tools.webkit import (
     INSTALL,
+    Rendered,
     RenderFailed,
     RenderUnavailable,
     WebKit,
@@ -90,7 +91,7 @@ class Renderer(Protocol):
     """What `open_url` falls back to and `screenshot` uses. Two methods, and the way to
     hang up."""
 
-    async def render(self, url: str) -> str:
+    async def render(self, url: str) -> Rendered:
         """The page's HTML after it has run, or raise `RenderUnavailable` / `RenderFailed`."""
         ...
 
@@ -149,9 +150,11 @@ class _Safari:
     settings: WebSettings
     webkit: WebKit = field(default_factory=WebKit)
 
-    async def render(self, url: str) -> str:
-        page = await self.webkit.render(url, block_private=self.settings.block_private)
-        return page.html
+    async def render(self, url: str) -> Rendered:
+        page = await self.webkit.render(
+            url, reader=True, block_private=self.settings.block_private
+        )
+        return page
 
     async def capture(
         self,
@@ -231,8 +234,7 @@ def reading_of(shot: Capture, written: Path) -> str:
         + f"background {shot.background or '?'}"
     )
     lines.append(
-        "console errors: "
-        + ("; ".join(shot.console_errors) if shot.console_errors else "none")
+        "console errors: " + ("; ".join(shot.console_errors) if shot.console_errors else "none")
     )
     lines.append(
         "failed requests: "
