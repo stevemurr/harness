@@ -143,7 +143,15 @@ class Watched:
         if not planning:
             run.progress(update_id, text, "active", args, name, agent_id=self.label)
 
-        result = await self.inner.call(args, ctx)
+        try:
+            result = await self.inner.call(args, ctx)
+        except asyncio.CancelledError:
+            # A cancel lands here mid-call, and the terminal event follows from `_execute`
+            # -- after which the log takes nothing. Settle the row now, or it is "active"
+            # in every replay of a run that ended.
+            if not planning:
+                run.progress(update_id, text, "cancelled", args, name, agent_id=self.label)
+            raise
 
         if planning:
             if result.ok:

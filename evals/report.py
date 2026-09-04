@@ -22,7 +22,15 @@ from pathlib import Path
 from evals.record import Attempt, Sweep
 
 #: Header fields that make two sweeps a different experiment when they differ.
-COMPARABLE = ("prompt", "model", "temperature", "top_p", "presence_penalty", "max_turns")
+COMPARABLE = (
+    "prompt",
+    "model",
+    "base_url",
+    "temperature",
+    "top_p",
+    "presence_penalty",
+    "max_turns",
+)
 
 
 def median(values: list[float]) -> float:

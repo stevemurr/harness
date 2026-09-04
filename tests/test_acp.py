@@ -11,6 +11,7 @@ import pytest
 from conftest import ScriptedModel, calls, says
 from harness.acp import new_sessions
 from harness.acp.protocol import RESOURCE_NOT_FOUND, prompt_text
+from harness.acp.sessions import _Sessions
 from harness.jsonrpc import METHOD_NOT_FOUND, Peer, RpcError, new_peer
 from harness.store import MemoryStore
 from harness.types import JSON, Message, Role, as_dict, as_list, as_str
@@ -139,6 +140,23 @@ async def test_a_session_is_a_thread_and_offers_both_modes(folder: Path) -> None
             "normal",
             "plan",
         ]
+
+
+async def test_a_new_session_hands_its_id_to_its_children_and_its_board(
+    folder: Path,
+) -> None:
+    """The id is minted before the children table and the kit are built, so a child's
+    lineage and a board post both say which session they came from."""
+    async with Wired(ScriptedModel(says("hi")), folder) as wired:
+        session_id = await wired.new_session()
+        assert isinstance(wired.sessions, _Sessions)
+        session = wired.sessions.sessions[session_id]
+
+        assert session.kit.identity == session_id
+        children = session.kit.children
+        assert children is not None
+        assert children.parent_thread == session_id
+        assert children.lineage("agent_x", "c1").parent_thread == session_id
 
 
 async def test_a_prompt_over_a_missing_folder_is_refused(folder: Path) -> None:
@@ -557,6 +575,28 @@ async def test_edits_read_the_buffer_and_write_back_through_the_editor(folder: P
     (asked,) = wired.editor.permissions
     diff = as_dict(as_list(as_dict(asked.get("toolCall")).get("content"))[0])
     assert (diff["oldText"], diff["newText"]) == ("unsaved", "saved")
+
+
+async def test_a_writes_diff_is_against_the_buffer_the_write_lands_in(folder: Path) -> None:
+    model = ScriptedModel(
+        calls(("c1", "write_file", {"path": "notes.md", "content": "# rewritten\n"})),
+        says("written"),
+    )
+    async with BufferedWired(model, folder) as wired:
+        await wired.initialize()
+        wired.editor.buffers[str(folder / "notes.md")] = "# unsaved\n"
+        session_id = await wired.new_session()
+        _ = await wired.prompt(session_id, "rewrite")
+
+    assert wired.editor.buffers[str(folder / "notes.md")] == "# rewritten\n"
+    assert (folder / "notes.md").read_text() == "# notes\n"
+    (asked,) = wired.editor.permissions
+    tool_call = as_dict(asked.get("toolCall"))
+    diff = as_dict(as_list(tool_call.get("content"))[0])
+    assert (diff["oldText"], diff["newText"]) == ("# unsaved\n", "# rewritten\n")
+    # The pending announcement showed the same diff, not the disk's.
+    (announced,) = [u for u in wired.editor.of_kind("tool_call") if "content" in u]
+    assert as_dict(as_list(announced["content"])[0])["oldText"] == "# unsaved\n"
 
 
 async def test_an_ambiguous_edit_is_refused_through_the_editor_too(folder: Path) -> None:

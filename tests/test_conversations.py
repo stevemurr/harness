@@ -924,3 +924,33 @@ async def test_stop_reaches_the_model_and_then_ends_the_run_whatever_it_does(
     assert any("Write your work to the board" in m.content for m in steered)
     assert run.turns <= 4
     assert len(model.seen) < len(replies)
+
+
+async def test_a_cancel_mid_call_settles_the_row_the_call_was_in(
+    folder, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row went out "active", the cancel skipped the settle, and the terminal event
+    followed -- after which the log takes nothing. So every replay of a cancelled run
+    showed a tool still running."""
+    started = asyncio.Event()
+    runtime = runtime_for(
+        ScriptedModel(calls(("c1", "run", {"command": "sleep"})), says("done")), tmp_path
+    )
+    conversation = runtime.conversation("thr_1", folder, "ws_1")
+
+    async def forever(self, args, ctx):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(Shell, "run", forever)
+    run = runtime.start(conversation, "go", mode="normal", policy="full-access")
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run.task
+
+    rows = payloads(run, "run.progress")
+    assert [r["status"] for r in rows] == ["active", "cancelled"]
+    assert len({r["update_id"] for r in rows}) == 1
+    assert types_of(run)[-1] == "run.cancelled"

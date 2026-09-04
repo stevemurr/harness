@@ -235,3 +235,47 @@ async def test_a_stream_with_no_choices_is_a_provider_error() -> None:
 
     with pytest.raises(ProviderError, match="no choices"):
         await provider.complete(Transcript([Message(Role.USER, "hi")]), listen=lambda _c: None)
+
+
+async def test_a_stream_that_ends_without_done_is_a_cut_reply() -> None:
+    """A proxy can close the connection cleanly enough that `httpx` raises nothing, and
+    the words delivered so far are not the reply. Not retried, because the listener has
+    already been told them."""
+    provider = _streaming_provider(
+        _Streamed(200, [_event({"content": "Hel"}), _event({"content": "lo"})])
+    )
+
+    with pytest.raises(ProviderError, match="cut off") as caught:
+        await provider.complete(Transcript([Message(Role.USER, "hi")]), listen=lambda _c: None)
+
+    assert caught.value.retryable is False
+    assert provider._client.calls == 1
+
+
+async def test_a_stream_closed_by_done_is_whole() -> None:
+    provider = _streaming_provider(
+        _Streamed(200, [_event({"content": "Hello"}), "data: [DONE]"])
+    )
+
+    completion = await provider.complete(
+        Transcript([Message(Role.USER, "hi")]), listen=lambda _c: None
+    )
+
+    assert completion.message.content == "Hello"
+
+
+async def test_a_reply_cut_by_the_token_limit_is_surfaced() -> None:
+    """`finish_reason: length` is half an answer: prose that stops mid-sentence, or a
+    tool call whose arguments no longer parse. It is named rather than returned."""
+    provider = _provider(
+        None,
+        _Response(
+            200,
+            '{"choices": [{"message": {"content": "half an"}, "finish_reason": "length"}]}',
+        ),
+    )
+
+    with pytest.raises(ProviderError, match="token limit"):
+        await provider.complete(Transcript([Message(Role.USER, "hi")]))
+
+    assert provider._client.calls == 1

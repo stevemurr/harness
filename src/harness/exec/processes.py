@@ -55,7 +55,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from harness.exec.monitor import Monitor
-from harness.exec.spawn import OWN_SESSION, Child, Stopping
+from harness.exec.spawn import LINE_LIMIT, OWN_SESSION, Child, Stopping
 from harness.state.inbox import Inbox
 from harness.types import Envelope, Source
 
@@ -220,6 +220,7 @@ class Processes:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            limit=LINE_LIMIT,
             start_new_session=OWN_SESSION,
         )
         process = Process(

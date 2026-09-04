@@ -416,3 +416,113 @@ async def test_a_folder_that_is_not_one_is_refused_and_one_already_reached_is_no
     with pytest.raises(WorkspaceError, match="not a directory"):
         _ = await agent.widen(folder / "missing")
     assert await agent.widen(folder) == (folder,)
+
+
+async def test_resuming_a_thread_torn_after_a_tool_call_answers_the_call_first(
+    folder: Path,
+) -> None:
+    """A thread that ends on an assistant message asking for tools -- a crash between
+    the call and its answer -- would otherwise be resumed as `assistant(tool_calls) ->
+    user`, which every provider rejects. The call is answered with a note, and the note
+    is written to the thread."""
+    store = MemoryStore()
+    thread = await store.create(folder)
+    await store.append(
+        thread,
+        [
+            Message(Role.SYSTEM, "sys"),
+            Message(Role.USER, "first"),
+            calls(("c1", "read_file", {"path": "notes.md"})),
+        ],
+    )
+    model = ScriptedModel(says("resumed"))
+
+    outcome = await agent_over(folder, model, store=store).run("continue", thread)
+
+    assert outcome.stop.ok
+    sent = model.seen[0].messages
+    assert [m.role for m in sent] == [
+        Role.SYSTEM,
+        Role.USER,
+        Role.ASSISTANT,
+        Role.TOOL,
+        Role.USER,
+    ]
+    assert sent[3].call_id == "c1" and not sent[3].ok
+    assert "no result was recorded" in sent[3].content
+    stored = await store.load(thread)
+    assert stored is not None
+    assert [m.role for m in stored.messages][3:] == [Role.TOOL, Role.USER, Role.ASSISTANT]
+
+
+async def test_a_steer_during_the_final_model_call_stays_in_this_thread(
+    folder: Path,
+) -> None:
+    """Words that arrive while the model is giving its last answer used to sit in the
+    inbox after the run returned, and the next run -- of any thread on this agent --
+    drained them. They belong to the thread they were sent to: recorded there, and
+    answered by one more turn."""
+    from harness.types import Envelope, Source
+
+    store = MemoryStore()
+    holder: list[Agent] = []
+
+    class Steering(ScriptedModel):
+        async def complete(self, transcript, tools=(), *, listen=None):
+            if not self.seen:
+                holder[0].tell(Envelope(Source.PERSON, "also add a docstring"))
+            return await super().complete(transcript, tools, listen=listen)
+
+    model = Steering(says("done"), says("done, with a docstring"))
+    agent = agent_over(folder, model, store=store)
+    holder.append(agent)
+
+    first = await agent.open_thread()
+    outcome = await agent.run("write it", first)
+
+    assert outcome.stop.ok and outcome.turns == 2
+    stored = await store.load(first)
+    assert stored is not None
+    assert any(
+        m.role is Role.ARRIVAL and "docstring" in m.content for m in stored.messages
+    )
+    assert model.seen[1].messages[-1].role is Role.ARRIVAL
+
+    second = await agent.open_thread()
+    _ = await agent.run("something else", second)
+
+    later = await store.load(second)
+    assert later is not None
+    assert not any(m.role is Role.ARRIVAL for m in later.messages)
+    assert not any(m.role is Role.ARRIVAL for m in model.seen[-1].messages)
+
+
+async def test_widening_lets_a_refused_path_be_asked_for_again(
+    folder: Path, tmp_path: Path
+) -> None:
+    """A refusal is remembered so the identical call is named as a loop. A widening is
+    the one thing besides a mode change that makes the same call answer differently, so
+    after one the call is dispatched rather than told nothing has changed."""
+    other = tmp_path.parent / f"{tmp_path.name}-lib"
+    other.mkdir()
+    (other / "util.py").write_text("shared = True\n")
+    read = {"path": str(other / "util.py")}
+    model = ScriptedModel(
+        calls(("c1", "read_file", read)), calls(("c2", "read_file", read)), says("done")
+    )
+    holder: list[Agent] = []
+
+    async def widen_after_the_refusal(turn) -> None:
+        if turn.results and turn.results[0][1].refused:
+            _ = await holder[0].widen(other)
+
+    agent = agent_over(folder, model, observers=[widen_after_the_refusal])
+    holder.append(agent)
+
+    outcome = await agent.run("read util")
+
+    assert outcome.stop.ok
+    results = [m for m in model.seen[-1].messages if m.role is Role.TOOL]
+    assert results[0].refused
+    assert results[1].ok and "shared = True" in results[1].content
+    assert "Nothing has changed" not in results[1].content

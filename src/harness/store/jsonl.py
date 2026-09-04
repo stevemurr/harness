@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -113,8 +114,13 @@ class JsonlStore:
             # concurrent reader can see the last line half-written. Anything tailing this
             # file has to ignore an unterminated final line -- `server.complete_lines` is
             # where that is done, and why.
+            #
+            # And a torn last line is ended first. `load` skips what it cannot decode, so
+            # a crash mid-append followed by a plain append made one undecodable line of
+            # the torn tail and the first new record -- the first write after a restart
+            # was lost. (2026-09-04)
             with path.open("a", encoding="utf-8") as handle:
-                _ = handle.write(lines)
+                _ = handle.write(("\n" if torn_tail(path) else "") + lines)
 
         await asyncio.to_thread(_append)
 
@@ -164,6 +170,28 @@ class JsonlStore:
             return found
 
         return await asyncio.to_thread(_list)
+
+    async def thread(self, thread_id: str) -> ThreadInfo | None:
+        """One thread by id, however old. `threads` lists the newest and stops."""
+        try:
+            path = self.path_for(thread_id)
+        except StoreError:
+            return None
+        if not path.exists():
+            return None
+        return await asyncio.to_thread(_describe, path)
+
+
+def torn_tail(path: Path) -> bool:
+    """Whether the file ends mid-line: what a crash during an append leaves behind."""
+    try:
+        with path.open("rb") as handle:
+            if handle.seek(0, os.SEEK_END) == 0:
+                return False
+            _ = handle.seek(-1, os.SEEK_END)
+            return handle.read(1) != b"\n"
+    except OSError:
+        return False
 
 
 def _describe(path: Path) -> ThreadInfo | None:

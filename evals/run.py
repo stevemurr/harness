@@ -43,7 +43,7 @@ from harness.providers.base import Completion, Listener
 from harness.providers.openai import OpenAICompatible
 from harness.settings import Limits, Settings, Web
 from harness.state.approval import Approvals, Policy
-from harness.state.board import Board
+from harness.state.board import Board, MemoryBoard
 from harness.state.inbox import Inbox
 from harness.state.mode import ModeState
 from harness.store import JsonlStore
@@ -153,6 +153,36 @@ def commit() -> str:
         return "unknown"
 
 
+def check_withheld(withheld: frozenset[str], offered: set[str]) -> None:
+    """Refuse a name no tool answers to.
+
+    A misspelt `--without` withheld nothing, and the sweep was still recorded as a control
+    arm under that name: a full run labelled as the experiment. Raises `ValueError`.
+    """
+    if unknown := withheld - offered:
+        raise ValueError(
+            f"--without names tools nobody offers: {', '.join(sorted(unknown))}. "
+            + f"Offered: {', '.join(sorted(offered))}."
+        )
+
+
+def offered(provider: OpenAICompatible) -> set[str]:
+    """Every name any rung could offer: the bare kit, the search tools a workspace kit
+    adds, the agent tools and the board's. Built without a workspace, so nothing is
+    probed or started."""
+    inbox, modes = Inbox(), ModeState()
+    kit = Toolkit(
+        settings=Settings(),
+        modes=modes,
+        inbox=inbox,
+        children=Children(
+            inbox=inbox, spawner=spawning(provider), approvals=Approvals(), modes=modes
+        ),
+        board=MemoryBoard(),
+    )
+    return {t.spec.name for t in kit.tools()} | SEARCH_TOOLS
+
+
 @dataclass
 class Assembly:
     """What one attempt's agent is built from. Separated so the withholding is testable."""
@@ -211,6 +241,9 @@ def assemble(
             settings=settings, modes=modes, inbox=inbox, children=children, board=board
         )
     )
+    # The search tools count as offered whether or not this kit was built with them:
+    # withholding both is what makes it a bare kit in the first place.
+    check_withheld(withheld, {t.spec.name for t in kit.tools()} | SEARCH_TOOLS)
     return Assembly(
         kit=kit,
         tools=[t for t in kit.tools() if t.spec.name not in withheld],
@@ -441,6 +474,12 @@ async def sweep(args: Flags) -> int:
     if not chosen:
         print("no rungs matched", file=sys.stderr)
         return 2
+    provider = OpenAICompatible.from_settings(load().provider, timeout=600)
+    try:
+        check_withheld(withheld, offered(provider))
+    except ValueError as exc:
+        print(f"refusing to run: {exc}", file=sys.stderr)
+        return 2
 
     if not args.trust_seeds:
         staging = work_root / "seed-check"
@@ -450,7 +489,6 @@ async def sweep(args: Flags) -> int:
         if untrusted:
             return 2
 
-    provider = OpenAICompatible.from_settings(load().provider, timeout=600)
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     out = RESULTS / f"{day}-{args.label}"
     record = Sweep.begin(

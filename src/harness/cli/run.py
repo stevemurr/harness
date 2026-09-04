@@ -10,7 +10,7 @@ from pathlib import Path
 
 from harness.agent import new_agent, spawning
 from harness.cli.person import approve, ask_user
-from harness.cli.resolve import Commands, provider_flags, require_key, resolve
+from harness.cli.resolve import CliError, Commands, provider_flags, require_key, resolve
 from harness.cli.terminal import (
     Narrator,
     dim,
@@ -87,10 +87,20 @@ def configure(commands: Commands) -> None:
 def handle(args: argparse.Namespace) -> int:
     config = resolve(args)
     require_key(config)
-    return asyncio.run(_run(Flags.read(args), config))
+    try:
+        return asyncio.run(_run(Flags.read(args), config))
+    except KeyboardInterrupt:
+        # `asyncio.run` cancels the task, lets its cleanup finish, and then raises this
+        # itself; caught inside the coroutine it was a traceback.
+        print(dim("\ninterrupted."))
+        return 130
 
 
 async def _run(args: Flags, config: Config) -> int:
+    folder = Path(args.folder).expanduser().resolve()
+    if not folder.is_dir():
+        # Caller input, refused before anything is connected on its behalf.
+        raise CliError(f"not a folder: {args.folder}")
     provider = OpenAICompatible.from_settings(config.provider, max_tokens=args.max_tokens)
     # `-y` is full access; otherwise the config's policy and its standing rules, the same
     # ones the server and the editor read, so a rule set once holds through every door.
@@ -101,7 +111,6 @@ async def _run(args: Flags, config: Config) -> int:
         ),
         ask=approve,
     )
-    folder = Path(args.folder).expanduser().resolve()
     store = JsonlStore(THREADS.expanduser())
     board = JsonlBoard(path=BOARDS.expanduser() / f"{board_id_for(folder)}.jsonl")
     # Only when a person is actually there. Piped or redirected, `input` would block on a
@@ -164,9 +173,6 @@ async def _run(args: Flags, config: Config) -> int:
             print(red(str(exc)), file=sys.stderr)
             return 2
         outcome = await agent.run(args.prompt, thread_id)
-    except KeyboardInterrupt:
-        print(dim("\ninterrupted."))
-        return 130
     finally:
         # The agent first: it owns language servers and background commands, and a
         # provider connection is the one thing here that closes itself when the process

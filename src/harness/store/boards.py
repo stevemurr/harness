@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import cast, override
 
 from harness.state.board import MemoryBoard, Status, Task
+from harness.store.jsonl import torn_tail
 from harness.types import as_dict
 
 
@@ -28,30 +29,34 @@ class JsonlBoard(MemoryBoard):
 
     path: Path = field(default_factory=lambda: Path("board.jsonl"))
     _loaded: bool = field(default=False, repr=False)
+    #: One replay, whoever asks first. `_loaded` used to be set before the read, so a
+    #: second caller arriving during it saw an empty board and answered from it.
+    _loading: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     async def load(self) -> None:
         """Replay the file. Idempotent; called by every operation, so a caller need not."""
         if self._loaded:
             return
-        self._loaded = True
-        if not self.path.exists():
-            return
+        async with self._loading:
+            if self._loaded:
+                return
+            if self.path.exists():
+                for task in await asyncio.to_thread(self._read):
+                    self.tasks[task.task_id] = task
+            self._loaded = True
 
-        def _read() -> list[Task]:
-            found: list[Task] = []
-            for line in self.path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    row = as_dict(cast("object", json.loads(line)))
-                except json.JSONDecodeError:
-                    continue  # a torn final line, as in a transcript
-                if row.get("kind") == "task":
-                    found.append(Task.read(row))
-            return found
-
-        for task in await asyncio.to_thread(_read):
-            self.tasks[task.task_id] = task
+    def _read(self) -> list[Task]:
+        found: list[Task] = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = as_dict(cast("object", json.loads(line)))
+            except json.JSONDecodeError:
+                continue  # a torn final line, as in a transcript
+            if row.get("kind") == "task":
+                found.append(Task.read(row))
+        return found
 
     @override
     async def _put(self, task: Task) -> None:
@@ -61,8 +66,10 @@ class JsonlBoard(MemoryBoard):
 
         def _append() -> None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            # End a torn last line first, as a transcript does: appended straight after
+            # it, this row would be dropped with it on the next replay.
             with self.path.open("a", encoding="utf-8") as handle:
-                _ = handle.write(line)
+                _ = handle.write(("\n" if torn_tail(self.path) else "") + line)
 
         await asyncio.to_thread(_append)
 

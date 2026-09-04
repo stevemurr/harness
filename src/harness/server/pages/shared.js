@@ -11,6 +11,16 @@ const near = () => {
 };
 const brief = (n) => n >= 1024 ? `${Math.round(n / 1024)}K` : String(n);
 
+// The bearer token, when the server was started with one. A page cannot set a header on
+// the request that opened it and an EventSource cannot set one at all, so it arrives as
+// `?token=` on the page's own URL and rides the same way on everything the page asks for.
+// Kept for the tab, so the next page reached by a link has it without carrying it.
+const TOKEN = new URLSearchParams(location.search).get("token")
+  || sessionStorage.getItem("harness.token") || "";
+if (TOKEN) sessionStorage.setItem("harness.token", TOKEN);
+const withToken = (url) =>
+  TOKEN ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}` : url;
+
 function human(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;

@@ -166,10 +166,22 @@ class Workspace:
                     f"refusing to write {path!r}: {entry} is this harness's own directory "
                     + "and is not writable from inside a run"
                 )
+        # The final component as named, not as resolved: `resolve()` has already followed
+        # a link there, so the resolved path is its target and never a link. A link inside
+        # the folder pointing at a file inside the folder passed every check above.
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        if (candidate.parent.resolve() / candidate.name).is_symlink():
+            raise PathRefused(
+                f"refusing to write {path!r}: it is a symbolic link. Name the file it "
+                + "points at, or delete the link first."
+            )
         return resolved
 
     def write(self, path: str, content: str) -> int:
-        """Write atomically, refusing a symlink at the final component.
+        """Write atomically. A symlink at the final component was refused in
+        `resolve_for_write`.
 
         Write-then-rename so a crash cannot leave a half-file that the next read reports as
         a syntax error. The temporary name carries a nonce because two runs writing the
@@ -177,11 +189,6 @@ class Workspace:
         the other's bytes into place.
         """
         target = self.resolve_for_write(path)
-        if target.is_symlink():
-            raise PathRefused(
-                f"refusing to write {path!r}: it is a symbolic link. Name the file it "
-                + "points at, or delete the link first."
-            )
         data = content.encode("utf-8")
         tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")
         try:

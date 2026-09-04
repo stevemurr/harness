@@ -147,6 +147,24 @@ def test_the_example_is_written_private_and_never_overwrites(tmp_path: Path) -> 
         write_example(path)
 
 
+def test_the_example_shows_the_compaction_default_it_ships_with(tmp_path: Path) -> None:
+    """The commented example is what a person uncomments; it said 0.8 after the default
+    had moved to 0.5."""
+    from harness.settings import Compaction
+
+    body = write_example(tmp_path / "config.toml").read_text()
+    assert f"# at = {Compaction().at}" in body
+    assert "0.8\n" not in body.split("[compaction]")[1].split("\n\n")[0]
+
+
+def test_a_flag_spelt_as_a_string_is_an_error_not_true(tmp_path: Path) -> None:
+    """`render = "false"` is a non-empty string, and `bool()` of one is `True`."""
+    path = written(tmp_path, '[web]\nrender = "false"\n')
+    with pytest.raises(ConfigError, match="render must be true or false"):
+        _ = load(path)
+    assert load(written(tmp_path, "[web]\nrender = false\n")).settings.web.render is False
+
+
 def test_the_web_table_sets_who_the_tools_say_they_are(tmp_path: Path) -> None:
     from harness.config import load
 

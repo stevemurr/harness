@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from conftest import ScriptedModel, calls, says
@@ -58,6 +59,33 @@ async def test_a_jsonl_board_replays_its_file_and_the_last_row_wins(tmp_path: Pa
     assert found.status is Status.FAILED and found.owner == "a" and found.result == "r"
     assert path.read_text().count('"kind": "task"') == 3
     assert board_id_for(tmp_path) == board_id_for(tmp_path / "." / ".")
+
+
+async def test_a_boards_first_row_after_a_torn_line_survives(tmp_path: Path) -> None:
+    """A crash mid-append leaves no newline; the next row must not join the torn one."""
+    path = tmp_path / "b.jsonl"
+    board = JsonlBoard(path=path)
+    _ = await board.post("first", by="thr_1")
+    with path.open("a") as handle:
+        _ = handle.write('{"kind": "task", "task_id": "tor')
+
+    reopened = JsonlBoard(path=path)
+    _ = await reopened.post("second", by="thr_1")
+
+    titles = sorted(t.title for t in await JsonlBoard(path=path).list())
+    assert titles == ["first", "second"]
+
+
+async def test_two_callers_arriving_together_both_see_the_file(tmp_path: Path) -> None:
+    """The first `list` on a persisted board replays the file in a thread; a second
+    arriving during that replay used to find `_loaded` already set and answer empty."""
+    path = tmp_path / "b.jsonl"
+    _ = await JsonlBoard(path=path).post("t", by="thr_1")
+
+    reopened = JsonlBoard(path=path)
+    first, second = await asyncio.gather(reopened.list(), reopened.list())
+
+    assert [t.title for t in first] == ["t"] and [t.title for t in second] == ["t"]
 
 
 # -- the tools ---------------------------------------------------------------------------

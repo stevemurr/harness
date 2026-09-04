@@ -46,7 +46,7 @@ function ago(ms) {
 async function refresh() {
   let rows = [];
   try {
-    rows = (await (await fetch("/api/v1/threads?limit=100")).json()).threads || [];
+    rows = (await (await fetch(withToken("/api/v1/threads?limit=100"))).json()).threads || [];
     $("status").textContent = "watching";
   } catch (e) {
     $("status").textContent = "no server";
@@ -73,7 +73,7 @@ async function refresh() {
       quiet = true;
     }
     const link = document.createElement("a");
-    link.href = `/watch/${row.thread_id}`;
+    link.href = withToken(`/watch/${row.thread_id}`);
     const item = document.createElement("button");
     item.className = "row";
     const top = el("top");

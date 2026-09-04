@@ -14,6 +14,7 @@ protocol. Everything asserted below is asserted against both.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -561,3 +562,36 @@ def test_swift_is_offered_only_where_there_is_swift(tmp_path: Path) -> None:
     assert "sourcekit-lsp" not in {
         index.name for index in for_workspace(other).available
     }
+
+
+async def test_a_second_absent_symbol_does_not_wait_out_the_warmup_again(
+    tmp_path: Path,
+) -> None:
+    """Only ever slow once. Until 2026-09-04 the index counted as warm only once something
+    was found, so a run asking about two names that were not there paid the full warmup
+    for each."""
+    from harness.symbols.lsp import LspIndex
+
+    class Silent(LspIndex):
+        asked = 0
+
+        async def _ensure(self) -> None:
+            pass
+
+        async def _ask(self, method: str, params: object) -> object:
+            self.asked += 1
+            return []
+
+    index = Silent(tmp_path, settings=Symbols(warmup=0.6))
+    loop = asyncio.get_running_loop()
+
+    started = loop.time()
+    assert await index._indexed("workspace/symbol", {"query": "Nope"}) == []
+    first = loop.time() - started
+    after_first = index.asked
+    started = loop.time()
+    assert await index._indexed("workspace/symbol", {"query": "Nope"}) == []
+    second = loop.time() - started
+
+    assert first >= 0.6 and after_first > 1
+    assert second < 0.2 and index.asked == after_first + 1

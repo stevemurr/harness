@@ -97,6 +97,25 @@ def test_adopt_copies_a_built_binary_into_the_harness_folder(
         _ = adopt(tmp_path / "elsewhere")
 
 
+def test_adopting_the_installed_binary_itself_does_not_delete_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--from ~/.harness/bin`, or that folder on `PATH`: the candidate is the target,
+    and unlinking the target first left nothing to copy."""
+    import harness.tools.webkit as module
+
+    monkeypatch.setattr(module, "BIN", tmp_path / "bin")
+    installed = tmp_path / "bin" / "wkrender"
+    installed.parent.mkdir()
+    _ = installed.write_text("#!/bin/sh\necho installed\n")
+    installed.chmod(0o755)
+
+    assert adopt(installed) == installed
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    assert adopt() == installed
+    assert installed.read_text() == "#!/bin/sh\necho installed\n"
+
+
 async def test_the_real_binary_renders_a_local_page_as_safari(tmp_path: Path) -> None:
     """Runs only where `harness install-webkit` has been run. A page built by script,
     and the user agent WebKit builds for itself: Safari's, not a hand-written one."""

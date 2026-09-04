@@ -423,3 +423,105 @@ def test_the_observer_is_told_what_becomes_of_each_child(tmp_path: Path) -> None
     assert kinds[:2] == [("started", "count"), ("finished", "did: count")]
     assert kinds[2:4] == [("started", "later"), ("finished", "did: later")]
     assert kinds[4] == ("started", "forever") and kinds[5] == ("stopped", "")
+
+
+# -- ending badly ----------------------------------------------------------------------------
+
+
+def test_a_failed_or_stopped_child_is_not_running_and_stop_is_safe_twice(
+    tmp_path: Path,
+) -> None:
+    """A child that raised, or was stopped, has no outcome -- and until 2026-09-04 that
+    meant it counted as running forever: against `most`, in `read_agent`, in `wait`."""
+
+    class Broken(Fake):
+        async def run(self, prompt: str, thread_id: str | None = None) -> Outcome:
+            raise RuntimeError("no model")
+
+    async def scenario() -> tuple[str, str, str, str, int]:
+        children, made = parent(tmp_path, most=1)
+        gate = asyncio.Event()
+        original = children.spawner
+
+        def spawn(task: str, lineage: Lineage) -> Agent:
+            child = Broken(lineage=lineage) if task == "break" else original(task, lineage)
+            if isinstance(child, Fake):
+                child.release = gate
+            made.append(child)
+            return child
+
+        children.spawner = spawn
+        broken = await call(kit_for(children), tmp_path, "delegate", task="break", wait=False)
+        agent_id = broken.split()[0]
+        waited = await call(kit_for(children), tmp_path, "wait_agents", agent_id=agent_id)
+        read = await call(kit_for(children), tmp_path, "read_agent", agent_id=agent_id)
+        assert not children.started[agent_id].running
+
+        held = await call(kit_for(children), tmp_path, "delegate", task="hold", wait=False)
+        held_id = held.split()[0]
+        first = await call(kit_for(children), tmp_path, "stop_agent", agent_id=held_id)
+        second = await call(kit_for(children), tmp_path, "stop_agent", agent_id=held_id)
+        assert not children.started[held_id].running
+        closed = made[-1].closed  # before the table's own aclose closes every child again
+        gate.set()
+        await children.aclose()
+        return waited, read, first, second, closed
+
+    waited, read, first, second, closed = asyncio.run(scenario())
+
+    assert "failed before answering" in waited
+    assert "[failed: RuntimeError: no model]" in read
+    assert first.endswith(" stopped") and "had already stopped" in second
+    assert closed == 1
+
+
+def test_a_childs_own_report_tool_shows_in_read_agent(tmp_path: Path) -> None:
+    """The child's `report` posts to the inbox and, until 2026-09-04, nowhere else: the
+    row `read_agent` reads never saw it."""
+
+    async def scenario() -> str:
+        children, made = parent(tmp_path)
+        gate = asyncio.Event()
+        original = children.spawner
+
+        def gated(task: str, lineage: Lineage) -> Agent:
+            child = original(task, lineage)
+            assert isinstance(child, Fake)
+            child.release = gate
+            return child
+
+        children.spawner = gated
+        started = await call(kit_for(children), tmp_path, "delegate", task="t", wait=False)
+        lineage = made[0].lineage
+        assert lineage is not None
+        _ = await call(kit_for(lineage=lineage), tmp_path, "report", text="halfway there")
+        during = await call(
+            kit_for(children), tmp_path, "read_agent", agent_id=started.split()[0]
+        )
+        gate.set()
+        await children.aclose()
+        return during
+
+    during = asyncio.run(scenario())
+
+    assert "1 reports" in during and "- halfway there" in during
+
+
+def test_a_delegations_max_turns_reaches_the_childs_settings(tmp_path: Path) -> None:
+    """Declared on the tool since it existed, and dropped on the floor until 2026-09-04."""
+    from conftest import ScriptedModel, says
+    from harness.agent import _Agent, spawning
+    from harness.settings import Limits, Settings
+
+    children, made = parent(tmp_path)
+    asyncio.run(call(kit_for(children), tmp_path, "delegate", task="t", max_turns=1))
+    lineage = made[0].lineage
+    assert lineage is not None and lineage.max_turns == 1
+
+    spawn = spawning(ScriptedModel(says("ok")), settings=Settings(limits=Limits(max_turns=50)))
+    child = spawn("t", lineage)
+    assert isinstance(child, _Agent)
+    assert child.settings.limits.max_turns == 1
+    unset = spawn("t", children.lineage("agent_y", "c2"))
+    assert isinstance(unset, _Agent)
+    assert unset.settings.limits.max_turns == 50

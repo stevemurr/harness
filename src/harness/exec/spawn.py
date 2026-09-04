@@ -78,6 +78,11 @@ OWN_SESSION = True
 #: what turned a 120s timeout into 2748s.
 REAP_SECONDS = 5.0
 
+#: The longest line a child may print before `read_lines` cuts it. asyncio's default is
+#: 64 KiB, which a minified bundle or a JSON dump passes easily; past it the reader must
+#: still drain the pipe, or the child blocks writing and the monitor never sees its end.
+LINE_LIMIT = 16 * 1024 * 1024
+
 
 @runtime_checkable
 class Spawned(Protocol):
@@ -246,9 +251,21 @@ class Child:
 
         Stderr is folded in: these children spawn with `stderr=STDOUT`.
         """
-        if self.handle.stdout is None:
+        stdout = self.handle.stdout
+        if stdout is None:
             return
-        async for line in self.handle.stdout:
+        while True:
+            try:
+                line = await stdout.readuntil(b"\n")
+            except asyncio.IncompleteReadError as exc:
+                if exc.partial:
+                    yield exc.partial
+                return
+            except asyncio.LimitOverrunError as exc:
+                # A line past the stream's limit. Take what is buffered as one line and
+                # read on: a reader that stops here leaves the child blocked on a full
+                # pipe. Measured 2026-09-04 as a monitor wedged by one 64 KiB line.
+                line = await stdout.read(exc.consumed + 1)
             yield line
 
 
@@ -274,6 +291,7 @@ async def scoped(
         env=env,
         stdout=stdout,
         stderr=stderr,
+        limit=LINE_LIMIT,
         start_new_session=OWN_SESSION,
     )
     child = Child(handle, stopping or Stopping())

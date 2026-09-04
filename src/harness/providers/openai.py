@@ -193,6 +193,7 @@ class OpenAICompatible:
         choices = as_list(payload.get("choices"))
         if not choices:
             raise ProviderError(f"response carried no choices: {json.dumps(payload)[:300]}")
+        self._whole(as_str(as_dict(choices[0]).get("finish_reason")))
 
         # The endpoint has already counted the tokens this request cost. Nothing else here
         # can count them as well -- a tokeniser would be this model's only by coincidence --
@@ -203,6 +204,20 @@ class OpenAICompatible:
             prompt_tokens if isinstance(prompt_tokens, int) else None,
             _body_size(body),
         )
+
+    def _whole(self, finish_reason: str) -> None:
+        """Refuse a reply the token limit cut short.
+
+        A cut reply is not a shorter answer: an argument string sliced mid-JSON parses
+        to `{}` and fails validation with a message about a missing field, and prose
+        stops mid-sentence with nothing saying so. Not retried, because the same
+        request gets the same cut.
+        """
+        if finish_reason == "length":
+            raise ProviderError(
+                "the reply was cut off by the token limit"
+                + (f" ({self.max_tokens})" if self.max_tokens is not None else "")
+            )
 
 
     async def _stream(self, body: JSON, listen: Listener) -> Completion:
@@ -223,6 +238,11 @@ class OpenAICompatible:
         prompt_tokens: int | None = None
         delivered = False
         choices_seen = False
+        #: Whether the endpoint said the reply was over -- `[DONE]`, or a `finish_reason`
+        #: on a choice. A body that simply ends is a connection that closed mid-reply,
+        #: which a proxy can do cleanly enough that `httpx` raises nothing.
+        ended = False
+        finish_reason = ""
         try:
             async with self._http().stream("POST", "/chat/completions", json=body) as response:
                 if response.status_code >= 400:
@@ -238,6 +258,7 @@ class OpenAICompatible:
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        ended = True
                         break
                     try:
                         event = as_dict(cast("object", json.loads(data)))
@@ -249,6 +270,9 @@ class OpenAICompatible:
                         prompt_tokens = usage
                     for choice in as_list(event.get("choices")):
                         choices_seen = True
+                        if reason := as_str(as_dict(choice).get("finish_reason")):
+                            ended = True
+                            finish_reason = reason
                         delta = as_dict(as_dict(choice).get("delta"))
                         if text := as_str(delta.get("content")):
                             content.append(text)
@@ -270,6 +294,14 @@ class OpenAICompatible:
 
         if not choices_seen:
             raise ProviderError("stream carried no choices")
+        if not ended:
+            # Surfaced the way a transport error is: retried only if nobody has been
+            # told any of the words yet.
+            raise ProviderError(
+                "stream ended without [DONE] or a finish reason; the reply was cut off",
+                retryable=not delivered,
+            )
+        self._whole(finish_reason)
         return Completion(
             Message(Role.ASSISTANT, "".join(content), tuple(merge_tool_call_deltas(deltas))),
             prompt_tokens,

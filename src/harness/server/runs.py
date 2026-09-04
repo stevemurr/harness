@@ -258,6 +258,12 @@ class Run:
         """
         self._halt_at = self.turns + max(turns, 1)
         self._running.set()
+        # A run parked on an approval or a question never reaches a turn boundary, so the
+        # halt above would never be read. Answer for the person: no, and nothing.
+        for approval_id in self.approvals_open():
+            _ = self.resolve_approval(approval_id, Decision.DENY)
+        for question_id in self.questions_open():
+            _ = self.resolve_question(question_id, "")
 
     def halt(self) -> str:
         """Why the loop should end before its next turn, or empty. `AgentLoop.halt`."""

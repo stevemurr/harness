@@ -20,6 +20,7 @@ import pytest
 from conftest import ScriptedModel, calls, says
 from harness.server import create_app
 from harness.server.app import complete_lines, is_id, workspace_id_for
+from harness.server.workspaces import Workspaces, WorkspaceTaken
 from harness.store import JsonlStore
 from harness.types import Message, Role, ToolCall
 
@@ -1123,3 +1124,112 @@ async def test_the_stop_command_steers_then_ends_the_run(folder, tmp_path) -> No
     assert len(model.seen) < len(replies)
     steered = [m for m in model.seen[-1].messages if m.role is Role.ARRIVAL]
     assert any("write your work to the board" in m.content for m in steered)
+
+
+async def test_stop_answers_an_approval_the_run_is_parked_on(folder, tmp_path) -> None:
+    """A stop that only set a halt for the next turn boundary never reached a run parked on
+    an approval: a parked run has no next turn until somebody answers, and nobody was
+    going to. Now the stop answers for the person -- no -- and the run ends."""
+    app = app_for(
+        ScriptedModel(calls(("c1", "run", {"command": "ls"})), says("done")), tmp_path
+    )
+    async with client_for(app) as client:
+        _, thread_id, accepted = await start(client, folder)
+        run_id = accepted.json()["run_id"]
+        await _wait_for(client, run_id, "approval.requested")
+
+        answer = await client.post(f"/runs/{run_id}/commands", json={"type": "stop"})
+        await _settle(app)
+        resolved = await _wait_for(client, run_id, "approval.resolved")
+        listed = await client.get("/runs", params={"thread_id": thread_id})
+
+    assert answer.json() == {"status": "stopping"}
+    assert resolved["decision"] == "deny"
+    assert listed.json()["runs"][0]["status"] in {"completed", "cancelled"}
+
+
+async def test_a_thread_past_the_listings_cut_can_still_be_opened(
+    folder, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening a thread by id used to scan the newest 500 the store listed, so the 501st
+    was a 404 after a restart with its transcript right there on disk."""
+    store = JsonlStore(tmp_path / "sessions")
+    first = create_app(provider=ScriptedModel(says("done")), store=store)
+    async with client_for(first) as client:
+        _, thread_id, _ = await start(client, folder, "the oldest conversation")
+        await _settle(first)
+
+    real = store.threads
+
+    async def cut(limit: int = 50):
+        # The listing's cut, brought down to zero: what being past it looks like.
+        return (await real(limit=limit))[:0]
+
+    monkeypatch.setattr(store, "threads", cut)
+    second = create_app(provider=ScriptedModel(says("again")), store=store)
+    async with client_for(second) as client:
+        opened = await client.get(f"/threads/{thread_id}")
+
+    assert opened.status_code == 200
+    assert opened.json()["workspace_id"] == workspace_id_for(folder)
+
+
+async def test_a_workspace_filter_is_applied_before_the_limit(folder, tmp_path) -> None:
+    """The store cut to `limit` and the filter ran after, so a folder whose threads were
+    older than the newest `limit` of everything listed nothing at all."""
+    other = tmp_path / "other"
+    other.mkdir()
+    store = JsonlStore(tmp_path / "sessions")
+    first = create_app(provider=ScriptedModel(says("done")), store=store)
+    async with client_for(first) as client:
+        _, older, _ = await start(client, folder, "older, in work")
+        await _settle(first)
+        await asyncio.sleep(0.02)
+        _, newer, _ = await start(client, other, "newer, in other")
+        await _settle(first)
+
+    # A fresh process, so both threads come from the store rather than from memory.
+    second = create_app(provider=ScriptedModel(says("again")), store=store)
+    async with client_for(second) as client:
+        unfiltered = await client.get("/threads", params={"limit": 1})
+        filtered = await client.get(
+            "/threads", params={"workspace_id": workspace_id_for(folder), "limit": 1}
+        )
+
+    assert [r["thread_id"] for r in unfiltered.json()["threads"]] == [newer]
+    assert [r["thread_id"] for r in filtered.json()["threads"]] == [older]
+
+
+async def test_the_token_may_ride_on_the_url_for_a_page_and_its_streams(
+    tmp_path: Path,
+) -> None:
+    """A page sets no header on the request that opened it and an EventSource can set
+    none at all, so with a token configured the built-in pages were dead. `?token=` is
+    what both can carry; a missing or wrong one is still refused."""
+    app = app_for(ScriptedModel(says("done")), tmp_path, token="secret")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://harness"
+    ) as client:
+        page = await client.get("/console", params={"token": "secret"})
+        api = await client.get("/api/v1/threads", params={"token": "secret"})
+        bare = await client.get("/console")
+        wrong = await client.get("/api/v1/threads", params={"token": "nope"})
+
+    assert page.status_code == 200
+    assert api.status_code == 200
+    assert bare.status_code == 401
+    assert wrong.status_code == 401
+
+
+async def test_two_registrations_of_one_root_at_once_leave_one_record(tmp_path: Path) -> None:
+    """`repo_identity` yields, and the uniqueness check ran only before it, so two clients
+    registering the same checkout together both succeeded and the second silently won."""
+    folders = Workspaces()
+    outcomes = await asyncio.gather(
+        folders.register("a", tmp_path, "git", replace_existing=False),
+        folders.register("b", tmp_path, "git", replace_existing=False),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(o, WorkspaceTaken) for o in outcomes) == 1
+    assert len(folders.list()) == 1

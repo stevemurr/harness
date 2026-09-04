@@ -318,7 +318,13 @@ class _Table:
 
     def flag(self, key: str, default: bool) -> bool:
         value = self.values.get(key)
-        return default if value is None else bool(value)
+        if value is None:
+            return default
+        # Exactly a bool. `render = "false"` is a non-empty string, and `bool()` of it
+        # was `True`: the one spelling a person reaches for turned the feature on.
+        if not isinstance(value, bool):
+            raise ConfigError(f"{self.path}: {self.name}.{key} must be true or false")
+        return value
 
 
 def _table(raw: JSON, name: str, allowed: frozenset[str], path: Path) -> _Table:
@@ -419,8 +425,8 @@ def write_example(path: Path | None = None) -> Path:
         + "# Summarise and hand off to a smaller context at this fraction of the window.\n"
         + "# [compaction]\n"
         + "# enabled = true\n"
-        + "# at = 0.8\n"
-        + "# keep_turns = 2\n"
+        + f"# at = {Compaction().at}\n"
+        + f"# keep_turns = {Compaction().keep_turns}\n"
         + "\n"
         + "# How much a tool may say: one result, and one whole turn across all its calls.\n"
         + "# [output]\n"

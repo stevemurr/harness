@@ -89,7 +89,9 @@ class Delegate:
     )
 
     async def run(self, args: Delegation, ctx: ToolContext, /) -> ToolResult:
-        started = await self.children.delegate(args.task, call_id=ctx.call_id, wait=args.wait)
+        started = await self.children.delegate(
+            args.task, call_id=ctx.call_id, wait=args.wait, max_turns=args.max_turns
+        )
         if isinstance(started, str):
             return ToolResult(started, ok=False, refused=True)
         if started.outcome is None:
@@ -239,6 +241,8 @@ class Report:
     )
 
     async def run(self, args: Progress, ctx: ToolContext, /) -> ToolResult:
+        if self.lineage.record is not None:
+            self.lineage.record(args.text)
         self.lineage.inbox.post(
             Envelope(Source.AGENT, args.text, sender=self.lineage.agent_id, call_id=ctx.call_id)
         )

@@ -247,6 +247,21 @@ class _Agent:
         # names a skill's trigger word gets a note from the harness, through the inbox
         # so it arrives as the harness's words and not the person's, saying which skill
         # to read first -- a model that only has the index will sometimes not look.
+        # A thread interrupted between a tool call and its answer -- a crash, a cancel
+        # the loop could not settle -- ends on an assistant message asking for tools. A
+        # user message appended after that is the request every provider rejects, so
+        # each call is answered first, saying that nothing was recorded for it.
+        torn = [
+            Message(
+                Role.TOOL,
+                f"no result was recorded for {call.name}; the harness was interrupted "
+                + "before it answered",
+                call_id=call.call_id,
+                ok=False,
+            )
+            for call in transcript.unanswered_calls()
+        ]
+        transcript.extend(torn)
         skills = load_skills(self.workspace.root)
         transcript.append(user(expand(prompt, skills)))
         if (hit := trigger(prompt, skills)) is not None:
@@ -254,7 +269,7 @@ class _Agent:
 
         # The opening messages, before the first turn -- so a run that dies during that
         # turn still leaves a thread showing what was asked.
-        opening = transcript.messages[:] if fresh else [transcript.messages[-1]]
+        opening = transcript.messages[:] if fresh else [*torn, transcript.messages[-1]]
         await self._write(thread_id, opening)
 
         loop = AgentLoop(
@@ -440,7 +455,12 @@ class _Agent:
 
         # Appended only now. A cancel or a failure above must not leave a boundary that
         # claims to summarise a history it never read.
-        before = chars(transcript)
+        #
+        # The render, not the raw transcript: the raw one holds everything behind every
+        # earlier boundary, so on a thread compacted once already it is far larger than
+        # what the provider is sent, and a summary that grew the render still measured as
+        # a saving against it.
+        before = chars(view(transcript))
         boundary = Message(Role.COMPACTION, summary, keep_from=anchor)
         transcript.append(boundary)
 
@@ -672,6 +692,10 @@ def spawning(
     """
 
     def spawn(_task: str, lineage: Lineage) -> Agent:
+        chosen = settings or Settings()
+        if lineage.max_turns is not None:
+            # The parent's budget for it, over whatever the parent runs under.
+            chosen = replace(chosen, limits=replace(chosen.limits, max_turns=lineage.max_turns))
         return new_agent(
             lineage.root,
             provider,
@@ -680,7 +704,7 @@ def spawning(
             ask=ask,
             lineage=lineage,
             board=board,
-            settings=settings,
+            settings=chosen,
             on_compaction=on_compaction,
         )
 

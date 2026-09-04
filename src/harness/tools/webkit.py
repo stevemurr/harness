@@ -177,6 +177,10 @@ def adopt(source: Path | None = None) -> Path:
         candidates.append(Path(found))
     for candidate in candidates:
         if candidate.is_file():
+            # The installed binary itself, offered back -- `--from ~/.harness/bin`, or
+            # `PATH` holding that folder. Unlinking the target first deleted it.
+            if target.exists() and candidate.resolve() == target.resolve():
+                return target
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists() or target.is_symlink():
                 target.unlink()

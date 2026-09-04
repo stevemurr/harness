@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,44 @@ def test_resolve_takes_the_flag_over_the_environment_over_the_file(
 
 def test_a_bad_extra_body_is_one_line_and_exit_two(tmp_path: Path) -> None:
     assert main(["serve", "--extra-body", "{not json", "--config", str(tmp_path / "none")]) == 2
+
+
+def _local(tmp_path: Path) -> str:
+    """A config that needs no key, so `run` gets as far as its own checks."""
+    config = tmp_path / "config.toml"
+    _ = config.write_text('[provider]\nbase_url = "http://localhost:1/v1"\n')
+    return str(config)
+
+
+def test_a_folder_that_is_not_there_is_one_line_and_exit_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main(["run", "x", "-C", "/nonexistent/at/all", "--config", _local(tmp_path)])
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "not a folder" in err
+    assert "Traceback" not in err
+
+
+def test_ctrl_c_is_one_line_and_exit_130(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On 3.13 `asyncio.run` raises the interrupt itself, after cancelling the task."""
+    from harness.cli import run
+
+    def interrupted(coro: Coroutine[object, object, int]) -> int:
+        coro.close()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(run.asyncio, "run", interrupted)
+
+    code = main(["run", "x", "-C", str(tmp_path), "--config", _local(tmp_path)])
+
+    assert code == 130
+    out = capsys.readouterr()
+    assert "interrupted." in out.out
+    assert "Traceback" not in out.err
 
 
 def test_evals_says_where_it_lives_when_the_package_is_not_there(

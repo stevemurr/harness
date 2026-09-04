@@ -195,6 +195,15 @@ def test_compare_says_when_two_sweeps_are_a_different_experiment() -> None:
     assert "NOT THE SAME" not in compare(a, a)
 
 
+def test_compare_treats_a_different_endpoint_as_a_different_experiment() -> None:
+    """The same model name behind another gateway is another quantisation, another
+    template, another sampler: `base_url` is part of what was run."""
+    a = _sweep("a", _attempt("01", "all", 1, passed=True, turns=5))
+    b = replace(_sweep("b", _attempt("01", "all", 1, passed=True, turns=5)), base_url="http://y")
+    assert "NOT THE SAME EXPERIMENT" in compare(a, b)
+    assert "base_url" in compare(a, b)
+
+
 def test_the_table_reads_from_the_record_not_the_file() -> None:
     sweep = _sweep(
         "a",
@@ -299,3 +308,33 @@ def test_every_tool_unless_withheld_by_name(tmp_path: Path) -> None:
     control = names(agents, frozenset({"find_definition", "find_references"}))
     assert "find_definition" not in control and {"delegate", "read_file"} <= control
     assert "delegate" not in names(plain) and "read_file" in names(plain)
+
+
+def test_a_misspelt_withheld_name_is_refused_not_a_false_control(tmp_path: Path) -> None:
+    """`--without find_defintion` withheld nothing and was recorded as a control arm."""
+    from evals.run import Recording, assemble, check_withheld, offered
+
+    from harness.providers.openai import OpenAICompatible
+    from harness.settings import Settings
+    from harness.state.approval import Approvals
+
+    provider = OpenAICompatible(base_url="http://x/v1", model="m")
+    (tmp_path / "work").mkdir()
+    plain = _rung(tmp_path, "#!/bin/sh\nexit 1\n", name="plain")
+    with pytest.raises(ValueError, match="find_defintion"):
+        _ = assemble(
+            plain,
+            tmp_path / "work",
+            withheld=frozenset({"find_defintion", "read_file"}),
+            settings=Settings(),
+            model=Recording(provider),
+            threads=tmp_path / "threads",
+            approvals=Approvals(),
+            observers=[],
+        )
+    # What the sweep checks before it starts: every tool any rung could offer.
+    every = offered(provider)
+    assert {"find_definition", "delegate", "post_task", "read_file"} <= every
+    check_withheld(frozenset({"find_definition", "find_references"}), every)
+    with pytest.raises(ValueError, match="nobody offers: find_defintion"):
+        check_withheld(frozenset({"find_defintion"}), every)

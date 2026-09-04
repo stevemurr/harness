@@ -161,6 +161,23 @@ async def test_a_torn_final_line_loses_only_the_last_turn(tmp_path: Path) -> Non
     assert [m.content for m in loaded.messages] == ["intact"]
 
 
+async def test_the_first_append_after_a_torn_line_is_not_lost(tmp_path: Path) -> None:
+    """A torn tail has no newline, and `load` skips what it cannot decode. Appended to as
+    it stood, the first record written after a restart joined the torn line and was
+    dropped with it."""
+    store = JsonlStore(tmp_path)
+    session = await store.create(Path("/tmp/project"))
+    await store.append(session, [Message(Role.USER, "intact")])
+    with store.path_for(session).open("a") as handle:
+        _ = handle.write('{"role": "assistant", "content": "tor')
+
+    await store.append(session, [Message(Role.USER, "after restart")])
+    loaded = await store.load(session)
+
+    assert loaded is not None
+    assert [m.content for m in loaded.messages] == ["intact", "after restart"]
+
+
 async def test_a_transcript_is_readable_by_a_person(tmp_path: Path) -> None:
     """`cat` and `tail -f` are worth more during development than any query language."""
     store = JsonlStore(tmp_path)

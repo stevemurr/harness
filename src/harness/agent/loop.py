@@ -144,7 +144,18 @@ class AgentLoop:
                 # No tools asked for: the model is answering rather than working. That is
                 # the only ordinary way a run ends.
                 await self._observe(Turn(assistant))
-                return Outcome(transcript, StopReason("done"), turns)
+                # Unless something arrived while the model was answering. The drain at
+                # the top of the loop is what makes an arrival durable, and a return here
+                # would skip it -- leaving a person's words in the inbox for whichever
+                # run drains it next, which may be another thread's. So it is read as a
+                # steer, and the model gets a turn to answer it.
+                late = (await self.pending(turns + 1)) if self.pending else ()
+                if not late:
+                    return Outcome(transcript, StopReason("done"), turns)
+                for arrived in late:
+                    transcript.append(arrived)
+                intervened = True
+                continue
 
             # Something intervened and the model did something different: the count of
             # turns-where-everything-was-refused starts again rather than carrying on
@@ -158,17 +169,16 @@ class AgentLoop:
             intervened = False
             previous = asked
 
-            results = await self._run_calls(assistant.tool_calls)
-            for call, result in results:
-                transcript.append(
-                    Message(
-                        Role.TOOL,
-                        result.content,
-                        call_id=call.call_id,
-                        ok=result.ok,
-                        refused=result.refused,
-                    )
-                )
+            answered: list[tuple[ToolCall, ToolResult]] = []
+            try:
+                results = await self._run_calls(assistant.tool_calls, answered)
+            except asyncio.CancelledError:
+                # The calls that ran, ran: a file written before the cancel is written.
+                # Recorded with the turn they belong to, every call answered, so the
+                # durable transcript says what happened and can be resumed.
+                await self._settle(transcript, Turn(assistant, tuple(answered)))
+                raise
+            await self._settle(transcript, Turn(assistant, results))
 
             # Every call refused, not merely unsuccessful. A turn spent watching tests fail
             # is work; a turn where the harness declined everything is a model that cannot
@@ -177,8 +187,6 @@ class AgentLoop:
                 consecutive_refusals += 1
             else:
                 consecutive_refusals = 0
-
-            await self._observe(Turn(assistant, results))
 
             if consecutive_refusals >= self.limits.max_consecutive_refusals:
                 return Outcome(
@@ -191,8 +199,23 @@ class AgentLoop:
                     turns,
                 )
 
+    async def _settle(self, transcript: Transcript, turn: Turn) -> None:
+        """Append a turn's results and tell the observers -- the one path a finished
+        turn and a cancelled one share, so the record is the same shape either way."""
+        for call, result in turn.results:
+            transcript.append(
+                Message(
+                    Role.TOOL,
+                    result.content,
+                    call_id=call.call_id,
+                    ok=result.ok,
+                    refused=result.refused,
+                )
+            )
+        await self._observe(turn)
+
     async def _run_calls(
-        self, calls: tuple[ToolCall, ...]
+        self, calls: tuple[ToolCall, ...], answered: list[tuple[ToolCall, ToolResult]]
     ) -> tuple[tuple[ToolCall, ToolResult], ...]:
         """Run one turn's calls, in order, and answer every one.
 
@@ -203,12 +226,33 @@ class AgentLoop:
         Every call gets a result even if it raised, because a missing tool message is a
         broken transcript -- the failure the loop refuses to send above. An exception here
         becomes text the model can read and retry.
+
+        `answered` is the caller's list, filled as each call finishes. A cancel mid-turn
+        leaves it holding every call: the ones that ran with their real answers, the one
+        in flight and the ones after it with a note saying so -- so the turn the caller
+        records is whole, and the assistant's calls are all answered.
         """
-        answered: list[tuple[ToolCall, ToolResult]] = []
-        for call in calls:
+        for index, call in enumerate(calls):
             try:
                 result = await self.run_tool(call)
             except asyncio.CancelledError:
+                answered.append(
+                    (
+                        call,
+                        ToolResult(
+                            f"{call.name} was cancelled while running; whether it took "
+                            + "effect is not known",
+                            ok=False,
+                        ),
+                    )
+                )
+                answered.extend(
+                    (
+                        later,
+                        ToolResult(f"{later.name} was cancelled before it ran", ok=False),
+                    )
+                    for later in calls[index + 1 :]
+                )
                 raise
             except Exception as exc:
                 log.exception("tool %s raised", call.name)

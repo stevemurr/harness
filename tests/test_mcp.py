@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -220,3 +221,92 @@ def test_an_unknown_server_key_is_an_error(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="unknown key"):
         _ = load(path)
+
+
+def scripted_server(tmp_path: Path, body: str, name: str = "scripted") -> McpServer:
+    """A server written for one test: `body` is the Python that answers `tools/call`,
+    with `reply`, `request_id` and `params` in scope, after the fixture's handshake."""
+    script = tmp_path / "server.py"
+    script.write_text(
+        "import json, sys, time\n"
+        + "def reply(request_id, result):\n"
+        + "    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request_id, "
+        + "'result': result}) + '\\n'); sys.stdout.flush()\n"
+        + "TOOLS = json.loads(sys.argv[1])\n"
+        + "for line in sys.stdin:\n"
+        + "    message = json.loads(line); method = message.get('method')\n"
+        + "    request_id = message.get('id'); params = message.get('params') or {}\n"
+        + "    if method == 'initialize':\n"
+        + "        reply(request_id, {'protocolVersion': params['protocolVersion'], "
+        + "'capabilities': {'tools': {}}, 'serverInfo': {'name': 's', 'version': '1'}})\n"
+        + "    elif method == 'tools/list':\n"
+        + "        reply(request_id, {'tools': TOOLS})\n"
+        + "    elif method == 'tools/call':\n"
+        + "".join(f"        {line}\n" for line in body.splitlines())
+    )
+    tools = [
+        {"name": n, "inputSchema": {"type": "object", "properties": {}}}
+        for n in ("do.thing", "do thing", "do_thing", "hang", "big")
+    ]
+    import json
+
+    return McpServer(
+        name=name, command=sys.executable, args=(str(script), json.dumps(tools))
+    )
+
+
+async def test_a_call_the_server_never_answers_ends_with_a_sentence(tmp_path: Path) -> None:
+    """`tools/call` had no timeout: one silent server held the turn open forever."""
+    from harness.mcp.client import _Connected
+
+    server = await connect(scripted_server(tmp_path, "time.sleep(60)"))
+    assert isinstance(server, _Connected)
+    server.call_timeout = 0.5
+    try:
+        hang = next(t for t in server.tools() if t.spec.name == "scripted__hang")
+        async with asyncio.timeout(5):
+            result = await hang.call({}, ToolContext(paths=Workspace.at(tmp_path)))
+    finally:
+        await server.aclose()
+
+    assert result.ok is False
+    assert "did not answer hang in 0s" in result.content
+
+
+async def test_a_result_over_64_kib_is_read_and_the_session_survives(tmp_path: Path) -> None:
+    """The subprocess pipe kept asyncio's default limit, so a large valid reply was a
+    `LimitOverrunError` that closed the connection."""
+    body = "reply(request_id, {'content': [{'type': 'text', 'text': 'x' * 70_000}]})"
+    server = await connect(scripted_server(tmp_path, body))
+    ctx = ToolContext(paths=Workspace.at(tmp_path))
+    try:
+        big = next(t for t in server.tools() if t.spec.name == "scripted__big")
+        first = await big.call({}, ctx)
+        second = await big.call({}, ctx)
+    finally:
+        await server.aclose()
+
+    assert first.ok and first.content.endswith("x" * 70_000)
+    assert second.ok and second.content.endswith("x" * 70_000)
+
+
+async def test_names_that_normalise_the_same_are_numbered_not_fatal(tmp_path: Path) -> None:
+    """`do.thing` and `do thing` are both `do_thing` to the model; the registry refuses
+    duplicates, and that refusal used to take the whole server's tools with it."""
+    from harness.tools import new_registry
+
+    server = await connect(scripted_server(tmp_path, "reply(request_id, {'content': []})"))
+    try:
+        names = sorted(t.spec.name for t in server.tools())
+        registry = new_registry(server.tools())
+    finally:
+        await server.aclose()
+
+    assert names == [
+        "scripted__big",
+        "scripted__do_thing",
+        "scripted__do_thing_2",
+        "scripted__do_thing_3",
+        "scripted__hang",
+    ]
+    assert registry is not None

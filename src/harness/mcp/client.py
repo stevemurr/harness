@@ -35,13 +35,15 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import count
 from pathlib import Path
 from typing import Protocol
 
 import jsonschema
 
-from harness.jsonrpc import INVALID_PARAMS, Peer, RpcError, new_peer
+from harness.jsonrpc import INVALID_PARAMS, LINE_LIMIT, Peer, RpcError, new_peer
 from harness.mcp.base import McpServer
 from harness.tools.base import Handler, ToolContext
 from harness.tools.screenshot import SCREENSHOTS
@@ -55,6 +57,10 @@ PROTOCOL_VERSION = "2025-06-18"
 #: What a tool name may be on the model's side. OpenAI-shaped endpoints reject anything
 #: else, and a server may call a tool whatever it likes.
 _NAME = re.compile(r"[^A-Za-z0-9_-]+")
+
+#: How long one `tools/call` may take. A server that never answers must not hold the
+#: turn open forever; the tool fails with a sentence and the model goes on.
+CALL_TIMEOUT = 120.0
 
 
 class Server(Protocol):
@@ -88,6 +94,9 @@ async def connect(server: McpServer, *, timeout: float = 30.0) -> Server:
             # A server's log is not this harness's, and it must never reach a wire this
             # harness is serving on. Dropped rather than piped, because nothing reads it.
             stderr=asyncio.subprocess.DEVNULL,
+            # The same line limit the peer reads with; the default 64 KiB ends the session
+            # on the first large, valid result.
+            limit=LINE_LIMIT,
         )
     except OSError as exc:
         raise McpError(f"cannot start MCP server {server.name!r}: {exc}") from exc
@@ -138,6 +147,7 @@ class _Connected:
     images: Path = SCREENSHOTS
     serving: asyncio.Task[None] | None = None
     handlers: list[Handler] = field(default_factory=list)
+    call_timeout: float = CALL_TIMEOUT
 
     async def handshake(self) -> None:
         _ = await self.peer.request(
@@ -157,14 +167,14 @@ class _Connected:
             params: JSON = {"cursor": cursor} if cursor else {}
             reply = as_dict(await self.peer.request("tools/list", params))
             for item in as_list(reply.get("tools")):
-                handler = self._handler(as_dict(item))
+                handler = self._handler(as_dict(item), {h.spec.name for h in found})
                 if handler is not None:
                     found.append(handler)
             cursor = as_str(reply.get("nextCursor"))
             if not cursor:
                 return found
 
-    def _handler(self, tool: JSON) -> Handler | None:
+    def _handler(self, tool: JSON, taken: set[str]) -> Handler | None:
         remote = as_str(tool.get("name"))
         schema = as_dict(tool.get("inputSchema")) or {"type": "object", "properties": {}}
         if not remote:
@@ -180,8 +190,19 @@ class _Connected:
             )
             return None
         annotations = as_dict(tool.get("annotations"))
+        name = tool_name(self.name, remote)
+        if name in taken:
+            # Two names that normalise the same -- `do.thing` and `do thing` -- would make
+            # the registry refuse the whole server. The later one is numbered instead.
+            name = next(n for n in _numbered(name) if n not in taken)
+            log.warning(
+                "MCP server %s: tool %s clashes with another once normalised, offered as %s",
+                self.name,
+                remote,
+                name,
+            )
         spec = ToolSpec(
-            name=tool_name(self.name, remote),
+            name=name,
             description=as_str(tool.get("description")) or f"{remote} on {self.name}",
             parameters=schema,
             mutates=annotations.get("readOnlyHint") is not True,
@@ -190,8 +211,15 @@ class _Connected:
 
     async def call(self, remote: str, arguments: JSON) -> ToolResult:
         try:
-            reply = as_dict(
-                await self.peer.request("tools/call", {"name": remote, "arguments": arguments})
+            async with asyncio.timeout(self.call_timeout):
+                reply = as_dict(
+                    await self.peer.request(
+                        "tools/call", {"name": remote, "arguments": arguments}
+                    )
+                )
+        except TimeoutError:
+            return ToolResult(
+                f"{self.name} did not answer {remote} in {self.call_timeout:.0f}s", ok=False
             )
         except RpcError as exc:
             return ToolResult(
@@ -253,6 +281,13 @@ def tool_name(server: str, remote: str) -> str:
     endpoint accepts. Prefixed so two servers' `search` tools are two tools, and so a
     server cannot shadow one of the harness's own."""
     return _NAME.sub("_", f"{server}__{remote}")[:64]
+
+
+def _numbered(name: str) -> Iterator[str]:
+    """`name_2`, `name_3`, ... each inside the 64 characters an endpoint allows."""
+    for n in count(2):
+        suffix = f"_{n}"
+        yield name[: 64 - len(suffix)] + suffix
 
 
 def _text_of(content: list[object], images: Path, stem: str) -> str:

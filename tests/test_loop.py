@@ -582,8 +582,12 @@ async def test_a_steer_answered_with_a_different_call_resets_the_cap() -> None:
     async def always_refuses(call: ToolCall) -> ToolResult:
         return ToolResult("no", ok=False, refused=True)
 
-    async def steering(turn: int) -> list[Message]:
-        return [Message(Role.ARRIVAL, "try again", source=Source.PERSON)]
+    # One steer before each of the three refused turns, and then nothing: an inbox
+    # drains, so a fake that always has something is one no run could ever finish.
+    waiting = [Message(Role.ARRIVAL, "try again", source=Source.PERSON)] * 3
+
+    async def steering(_turn: int) -> list[Message]:
+        return [waiting.pop()] if waiting else []
 
     loop = AgentLoop(
         complete=scripted(
@@ -662,3 +666,54 @@ async def test_a_resumed_run_counts_the_repeats_already_in_the_transcript(
     compacted = Transcript([*history.messages, Message(Role.COMPACTION, "handoff")])
     fresh = await runner(compacted).run(ToolCall("c7", "read_file", read))
     assert fresh.ok
+
+
+async def test_a_cancel_mid_turn_records_the_calls_that_ran_and_answers_the_rest() -> None:
+    """A write that finished before the cancel is on disk whether or not the transcript
+    says so. The turn is observed -- and so persisted -- with the real answers for the
+    calls that ran and a note for the one in flight and the ones after it, so every call
+    is answered and the thread can be resumed."""
+    import asyncio
+
+    import pytest
+
+    started = asyncio.Event()
+
+    async def tool(call: ToolCall) -> ToolResult:
+        if call.name == "slow":
+            started.set()
+            await asyncio.sleep(60)
+        return ToolResult(f"{call.name} ran")
+
+    seen: list[Turn] = []
+    loop = AgentLoop(
+        complete=scripted(
+            calls(("c1", "write_file", {}), ("c2", "slow", {}), ("c3", "after", {})),
+            Message(Role.ASSISTANT, "done"),
+        ),
+        run_tool=tool,
+        observers=[seen.append],
+    )
+    transcript = Transcript([system("s"), user("go")])
+
+    task = asyncio.create_task(loop.run(transcript))
+    await started.wait()
+    _ = task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(seen) == 1
+    turn = seen[0]
+    assert turn.assistant.tool_calls
+    assert [(call.call_id, result.ok) for call, result in turn.results] == [
+        ("c1", True),
+        ("c2", False),
+        ("c3", False),
+    ]
+    assert turn.results[0][1].content == "write_file ran"
+    assert "cancelled while running" in turn.results[1][1].content
+    assert "cancelled before it ran" in turn.results[2][1].content
+    assert not transcript.unanswered_calls()
+    assert [m.role for m in transcript.messages][2:] == [Role.ASSISTANT, Role.TOOL] + [
+        Role.TOOL
+    ] * 2

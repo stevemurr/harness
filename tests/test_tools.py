@@ -108,6 +108,20 @@ def test_writing_through_a_symlink_is_refused(ws: Workspace, tmp_path: Path) -> 
     assert target.read_text() == "original\n"
 
 
+def test_writing_through_a_symlink_inside_the_folder_is_refused(ws: Workspace) -> None:
+    """The link and its target both inside: containment passes, and `resolve()` has
+    already followed the link, so a check on the resolved path sees a plain file. The
+    policy says never write through a link at the final component, and that is checked
+    on the name as given."""
+    real = ws.root / "real.txt"
+    real.write_text("original\n")
+    (ws.root / "link.txt").symlink_to(real)
+
+    with pytest.raises(PathRefused, match="symbolic link"):
+        ws.write("link.txt", "hijacked")
+    assert real.read_text() == "original\n"
+
+
 # --- the tool contract -----------------------------------------------------------------
 
 
@@ -1003,6 +1017,29 @@ async def test_a_changed_answer_starts_the_count_again(tmp_path: Path) -> None:
     assert changed.ok and "two" in changed.content
     for _ in range(2):
         assert (await runner.run(call)).ok
+
+
+async def test_a_repeated_mutating_call_ran_and_is_reported_as_having_run(
+    registry: Registry, ctx: ToolContext
+) -> None:
+    """The call is dispatched before the comparison, so by the fourth `write_file` the
+    file is written. A result saying it was refused is a transcript that lies about a
+    write that happened; the real answer is kept and the repetition is noted beside it."""
+    runner = ToolRunner(registry, ctx, Approvals(ask=approve_all))
+    call = ToolCall("c", "write_file", {"path": "out.txt", "content": "x"})
+    target = ctx.paths.root / "out.txt"
+
+    answers: list[ToolResult] = []
+    for _ in range(4):
+        target.unlink(missing_ok=True)
+        answers.append(await runner.run(call))
+
+    assert [a.ok for a in answers] == [True, True, True, True]
+    assert not any(a.refused for a in answers)
+    assert target.read_text() == "x"
+    assert answers[3].content.startswith("wrote")
+    assert "4 times in a row" in answers[3].content
+    assert "times in a row" not in answers[2].content
 
 
 # -- waiting for a background command ----------------------------------------------------

@@ -139,3 +139,23 @@ async def test_a_line_that_is_not_json_is_answered_and_the_connection_survives()
     async with Pair(_nothing, echo) as peers:
         peers.to_right.feed_data(b"this is not json\n")
         assert await peers.client.request("still", {"ok": True}) == {"ok": True}
+
+
+async def test_a_failed_write_closes_the_peer_rather_than_leaving_a_request_waiting() -> None:
+    """The writer task noticed the pipe was gone and quietly returned, leaving every
+    request parked on a reply that could not be written -- a hang with no name."""
+
+    class Broken:
+        def write(self, _data: bytes) -> None:
+            raise OSError("broken pipe")
+
+        async def drain(self) -> None:
+            await asyncio.sleep(0)
+
+    peer = new_peer(asyncio.StreamReader(), Broken(), _nothing)
+    with pytest.raises(Closed):
+        await asyncio.wait_for(peer.request("ping"), timeout=1)
+    # And closed stays closed: the next request is refused at once.
+    with pytest.raises(Closed):
+        await peer.request("again")
+    await peer.aclose()

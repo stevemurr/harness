@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import ClassVar
 
 from harness.state.approval import Approvals, Request
@@ -36,10 +37,12 @@ class ToolRunner:
     #: Where the workspace is read from, per call, when a run may be widened while it
     #: works. `None` uses `context.paths` as given, which is what a test wants.
     paths: Callable[[], Workspace] | None = None
-    #: Calls that were refused, by their exact arguments, with the mode they were refused
-    #: in. A refusal cannot turn into an acceptance on its own, so asking again with the
-    #: same arguments is a loop rather than a retry -- see `_looping`.
-    _refused: dict[str, tuple[str, str]] = field(default_factory=dict, repr=False)
+    #: Calls that were refused, by their exact arguments, with the mode and the workspace
+    #: they were refused in. A refusal cannot turn into an acceptance on its own, so asking
+    #: again with the same arguments is a loop rather than a retry -- see `_looping`.
+    _refused: dict[str, tuple[str, tuple[Path, ...], str]] = field(
+        default_factory=dict, repr=False
+    )
     #: The last call and its answer, and how many times in a row that exact pair has come
     #: back. The other loop -- see `_repeating`.
     _streak: tuple[str, str, int] | None = field(default=None, repr=False)
@@ -151,11 +154,17 @@ class ToolRunner:
         """A call's identity: its name and its arguments, order-independent."""
         return json.dumps([call.name, call.arguments], sort_keys=True)
 
+    def _workspace(self) -> Workspace:
+        return self.paths() if self.paths is not None else self.context.paths
+
     def _remember(self, call: ToolCall, result: ToolResult) -> ToolResult:
-        if result.refused and self.modes is not None:
-            self._refused[self._fingerprint(call)] = (self.modes.current.name, result.content)
-        elif result.refused:
-            self._refused[self._fingerprint(call)] = ("", result.content)
+        if result.refused:
+            mode = self.modes.current.name if self.modes is not None else ""
+            self._refused[self._fingerprint(call)] = (
+                mode,
+                self._workspace().roots,
+                result.content,
+            )
         return self._repeating(call, result)
 
     def _repeating(self, call: ToolCall, result: ToolResult) -> ToolResult:
@@ -178,6 +187,11 @@ class ToolRunner:
         process while doing other work is never refused. The replacement is not remembered
         as a refusal, so the next identical call is dispatched and compared again; it
         counts as one, so a run that keeps going regardless ends the way a stuck run does.
+
+        A mutating call that ran is reported as having run. It was dispatched before the
+        comparison, so the file is written or the command has exited, and a transcript
+        saying it was refused is a transcript that lies -- the warning is appended to
+        the real answer instead.
         """
         key = self._fingerprint(call)
         if self._streak is not None and self._streak[:2] == (key, result.content):
@@ -187,6 +201,15 @@ class ToolRunner:
         count = self._streak[2]
         if not result.ok or count <= self.STREAK:
             return result
+        tool = self.registry.get(call.name)
+        if tool is not None and tool.spec.mutates:
+            return ToolResult(
+                f"{result.content}\n\nYou have called {call.name} with exactly these "
+                + f"arguments {count} times in a row and the answer has not changed. It "
+                + "ran, again, and did the same thing. If that is not what you want, "
+                + "change the call or do something else.",
+                ok=result.ok,
+            )
         # The answer is quoted, because the model has evidently not read it: "exit 1,
         # cd: No such file or directory" thirteen times is a model that never looked at
         # the second line. The advice depends on the tool. A process read may be
@@ -226,14 +249,16 @@ class ToolRunner:
         recovery, and refusing it would break the thing compaction exists for.
 
         The mode is part of the key, because one refusal *can* change on its own: a tool
-        withheld in plan mode becomes available the moment a plan is approved.
+        withheld in plan mode becomes available the moment a plan is approved. So is the
+        workspace, for the same reason: a path outside the folder is inside it once the
+        person has widened the run to reach it.
         """
         seen = self._refused.get(self._fingerprint(call))
         if seen is None:
             return None
-        mode, why = seen
+        mode, roots, why = seen
         now = self.modes.current.name if self.modes is not None else ""
-        if mode != now:
+        if mode != now or roots != self._workspace().roots:
             return None
         return ToolResult(
             f"You have already called {call.name} with exactly these arguments and it was "

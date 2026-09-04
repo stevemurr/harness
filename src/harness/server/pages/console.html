@@ -83,7 +83,7 @@
 <script>
 // ---------------------------------------------------------------------------- plumbing
 async function api(path, options) {
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(withToken(`/api/v1${path}`), {
     headers: { "content-type": "application/json" }, ...options,
   });
   const body = await response.json().catch(() => ({}));
@@ -220,7 +220,7 @@ function openThread(id, folder) {
   setWho(folder || "opening…", "");
   $("status").textContent = "reading";
   describe(id);
-  history = new EventSource(`/api/v1/watch/${id}/events`);
+  history = new EventSource(withToken(`/api/v1/watch/${id}/events`));
   history.onopen = () => $("status").textContent = "connected";
   history.onerror = () => $("status").textContent = "no transcript yet";
   history.onmessage = (frame) => {
@@ -372,7 +372,7 @@ function follow(id, resumed) {
   $("status").textContent = "running";
   paintClock();
 
-  live = new EventSource(`/api/v1/runs/${id}/events?after_seq=0`);
+  live = new EventSource(withToken(`/api/v1/runs/${id}/events?after_seq=0`));
   live.addEventListener("stream.end", () => finish());
   live.onerror = () => { $("status").textContent = "stream lost"; };
   live.onmessage = (frame) => {

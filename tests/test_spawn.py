@@ -87,3 +87,33 @@ async def test_stopping_reaches_a_child_that_left_the_group(tmp_path: Path) -> N
     await asyncio.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.kill(grandchild, 0)
+
+
+async def test_a_line_longer_than_the_stream_limit_does_not_wedge_the_reader() -> None:
+    """asyncio's 64 KiB default raised `ValueError` on one long line, the reader gave up,
+    and the child sat blocked on a full pipe for as long as anyone waited. (2026-09-04)"""
+    from harness.exec import spawn as module
+
+    original = module.LINE_LIMIT
+    module.LINE_LIMIT = 16 * 1024  # small enough that the test's lines pass it
+    command = (
+        'python3 -c "import sys; sys.stdout.write(\'a\' * 70_000 + chr(10)); '
+        + "[sys.stdout.write('b' * 999 + chr(10)) for _ in range(400)]; "
+        + 'sys.stdout.write(\'end\' + chr(10))"'
+    )
+    try:
+        async with scoped(
+            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        ) as child:
+            seen: list[bytes] = []
+            async with asyncio.timeout(20):
+                async for line in child.read_lines():
+                    seen.append(line)
+                code = await child.wait()
+    finally:
+        module.LINE_LIMIT = original
+
+    assert code == 0
+    assert seen[-1] == b"end\n"
+    assert sum(len(line) for line in seen) == 70_001 + 400 * 1_000 + 4
+    assert sum(1 for line in seen if line.startswith(b"b" * 999)) == 400

@@ -86,12 +86,19 @@ class Workspaces:
             raise WorkspaceTaken(
                 f"{root} is already registered. Re-read the list and use it."
             )
+        identity = await repo_identity(root) if vcs == "git" else ""
+        # Checked again: `repo_identity` yields, and a second register of the same root
+        # can land in the gap. The first check is the cheap answer; this one is the rule.
+        if workspace_id in self.known and not replace_existing:
+            raise WorkspaceTaken(
+                f"{root} is already registered. Re-read the list and use it."
+            )
         record = WorkspaceRecord(
             workspace_id=workspace_id,
             name=name or root.name or str(root),
             root_path=str(root),
             vcs="git" if vcs == "git" else "none",
-            repo_identity=await repo_identity(root) if vcs == "git" else "",
+            repo_identity=identity,
         )
         self.known[workspace_id] = record
         return record

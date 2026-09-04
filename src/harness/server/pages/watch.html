@@ -159,7 +159,7 @@ $("shade").onclick = shut;
 $("dclose").onclick = shut;
 document.onkeydown = (event) => { if (event.key === "Escape") shut(); };
 
-const source = new EventSource(`/api/v1/watch/${thread}/events`);
+const source = new EventSource(withToken(`/api/v1/watch/${thread}/events`));
 source.onopen = () => $("status").textContent = "watching";
 source.onerror = () => $("status").textContent = "waiting for the run…";
 source.onmessage = (event) => {

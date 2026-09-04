@@ -111,6 +111,9 @@ class Session:
     approvals: Approvals
     plan: Plan
     peer: Peer
+    #: The editor's buffers, when it offered to read them. A write goes there, so the
+    #: diff a person approves must be against the buffer and not the disk.
+    files: EditorFiles | None = None
     child_kits: list[Toolkit] = field(default_factory=list)
     #: The tool servers this session connected to, closed with it.
     servers: list[Server] = field(default_factory=list)
@@ -136,9 +139,17 @@ class Session:
         self.peer.notify("session/update", {"sessionId": self.session_id, "update": body})
 
     def announce(
-        self, call_id: str, name: str, arguments: JSON, title: str, status: str
+        self,
+        call_id: str,
+        name: str,
+        arguments: JSON,
+        title: str,
+        status: str,
+        described: JSON | None = None,
     ) -> None:
-        """Send a call once as `tool_call`; after that, as an update to it."""
+        """Send a call once as `tool_call`; after that, as an update to it. A caller
+        that has already described the call -- the approver, against the editor's buffer
+        -- passes that in rather than having it read again from the disk."""
         if call_id in self.announced:
             self.update(
                 {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": status}
@@ -153,7 +164,7 @@ class Session:
             "status": status,
             "rawInput": arguments,
         }
-        body.update(self.describe(name, arguments))
+        body.update(self.describe(name, arguments) if described is None else described)
         self.update(body)
 
     def settle(self, call_id: str, status: str, result: str) -> None:
@@ -204,6 +215,21 @@ class Session:
                 }
             ]
         return described
+
+    async def described(self, name: str, arguments: JSON) -> JSON:
+        """`describe`, with a write's old text read from the editor's buffer when the
+        editor holds one. The disk is the fallback: an editor that cannot read the file
+        will write it fresh, and the diff says so."""
+        found = self.describe(name, arguments)
+        if name != "write_file" or self.files is None or "content" not in found:
+            return found
+        diff = as_dict(as_list(found.get("content"))[0])
+        try:
+            old = await self.files.read(Path(as_str(diff.get("path"))))
+        except RpcError:
+            return found
+        found["content"] = [{**diff, "oldText": old}]
+        return found
 
 
 @dataclass
@@ -270,7 +296,10 @@ def approver_for(session: Session) -> Approver:
     async def approve(request: Request) -> Decision:
         call_id = call_id_for(session.turns, request.tool, request.arguments)
         head, _, tail = request.summary.strip().partition("\n")
-        session.announce(call_id, request.tool, request.arguments, head.strip(), "pending")
+        described = await session.described(request.tool, request.arguments)
+        session.announce(
+            call_id, request.tool, request.arguments, head.strip(), "pending", described
+        )
         tool_call: JSON = {
             "toolCallId": call_id,
             "title": head.strip(),
@@ -278,7 +307,6 @@ def approver_for(session: Session) -> Approver:
             "status": "pending",
             "rawInput": request.arguments,
         }
-        described = session.describe(request.tool, request.arguments)
         if tail.strip():
             # `exit_plan_mode` puts the whole plan under its question, deliberately: there
             # the detail is the decision, and the editor should show it.
@@ -559,11 +587,14 @@ class _Sessions:
         )
         board = self._board_for(root)
         child_kits: list[Toolkit] = []
+        # Minted here rather than by the agent, because the children table and the board
+        # tools carry the id and are built before the agent is. `open_thread` finds it.
+        session_id = session_id or await self.store.create(root)
 
-        # Built before the agent because the collaborators need it, and filled in after
-        # because the agent mints the thread id. The same holder pattern as `Live`.
+        # Built before the agent because the collaborators need it. The same holder
+        # pattern as `Live`.
         session = Session(
-            session_id=session_id or "",
+            session_id=session_id,
             root=root,
             agent=_unopened,
             kit=Toolkit(),
@@ -605,7 +636,7 @@ class _Sessions:
             approvals=approvals,
             modes=modes,
             root=root,
-            parent_thread=session_id or "",
+            parent_thread=session_id,
         )
         connected = await connect_all([*self.mcp, *servers])
         kit = Toolkit.for_workspace(
@@ -615,7 +646,7 @@ class _Sessions:
             inbox=inbox,
             children=children,
             board=board,
-            identity=session_id or "",
+            identity=session_id,
             extra=[tool for server in connected for tool in server.tools()],
         )
         agent = new_agent(
@@ -636,6 +667,7 @@ class _Sessions:
         )
         opened = await agent.open_thread(session_id)
         session.session_id = opened
+        session.files = EditorFiles(session) if self.fs_read else None
         session.agent = agent
         session.kit = kit
         session.plan = kit.plan

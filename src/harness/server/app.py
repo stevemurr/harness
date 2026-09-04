@@ -22,7 +22,8 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
+from urllib.parse import parse_qs
 from uuid import uuid4
 
 from starlette.applications import Starlette
@@ -48,7 +49,7 @@ from harness.state.approval import POLICIES, POLICY_NAMES, named_policy
 from harness.state.board import Status
 from harness.state.mode import MODE_NAMES, MODES, NORMAL, mode_for
 from harness.state.skills import skills_wire
-from harness.store.base import OnDisk, Store, StoreError
+from harness.store.base import OnDisk, Store, StoreError, ThreadInfo
 from harness.types import JSON, Envelope, Source
 from harness.workspace import WorkspaceError
 
@@ -61,6 +62,14 @@ PROTOCOL_VERSION = "1"
 #: down what it holds, not enough to start anything. Two, because the first turn is where
 #: the steer lands and the second is the one it acts in.
 STOP_TURNS = 2
+
+
+@runtime_checkable
+class ByThreadId(Protocol):
+    """A store that can find one thread by id without listing them all. Asked for with
+    `isinstance`, as `OnDisk` is, rather than assumed of every `Store`."""
+
+    async def thread(self, thread_id: str) -> ThreadInfo | None: ...
 
 
 def described(record: WorkspaceRecord) -> JSON:
@@ -371,7 +380,10 @@ def create_app(
                 )
             )
 
-        for info in await store.threads(limit=limit):
+        # Filtered after the store has cut to `limit`, a workspace whose threads are older
+        # than the newest `limit` of everything listed nothing. Ask wider when filtering;
+        # the cut to `limit` is at the end.
+        for info in await store.threads(limit=max(limit, 1000) if wanted else limit):
             # A conversation this process is holding is listed under the thread id its
             # client knows, not twice -- once here and once under the thread it created.
             if info.thread_id in bound or info.thread_id in runtime.conversations:
@@ -482,14 +494,24 @@ def create_app(
         if held is not None:
             return held
 
-        for info in await store.threads(limit=500):
-            if info.thread_id == thread_id:
-                titles[thread_id] = info.title
-                return await open_conversation(thread_id, folders.remember(info.workspace))
+        info = await stored_thread(thread_id)
+        if info is not None:
+            titles[thread_id] = info.title
+            return await open_conversation(thread_id, folders.remember(info.workspace))
 
         if not workspace_id:
             raise ApiError(404, "no_such_thread", f"no conversation {thread_id}.")
         return await open_conversation(thread_id, require_workspace(workspace_id))
+
+    async def stored_thread(thread_id: str) -> ThreadInfo | None:
+        # By id when the store can: this used to scan the newest 500, and a thread older
+        # than those was a 404 after a restart. The scan stays for a store that cannot.
+        if isinstance(store, ByThreadId):
+            return await store.thread(thread_id)
+        for info in await store.threads(limit=500):
+            if info.thread_id == thread_id:
+                return info
+        return None
 
     def require_workspace(workspace_id: str) -> WorkspaceRecord:
         if not workspace_id:
@@ -948,6 +970,12 @@ class BearerToken:
         for name, value in headers:
             if name.lower() == b"authorization":
                 offered = value.decode("latin-1")
+        if not offered:
+            # `?token=`: a browser page sets no header on the URL that opened it, and an
+            # `EventSource` can set none at all. The pages pass it on from there.
+            query = parse_qs(cast("bytes", scope.get("query_string", b"")).decode("latin-1"))
+            if query.get("token"):
+                offered = f"Bearer {query['token'][0]}"
         if offered != self.expected:
             response = error_response(401, "unauthorized", "A bearer token is required.")
             await response(scope, receive, send)

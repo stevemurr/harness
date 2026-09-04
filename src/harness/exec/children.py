@@ -54,6 +54,10 @@ class Lineage:
     mode: Mode
     #: The parent's inbox, which `report` posts into.
     inbox: Inbox
+    #: Keeps a report in the parent's row for this child, so `read_agent` shows it.
+    record: Callable[[str], None] | None = None
+    #: A turn budget the parent chose for it, or `None` for the parent's own.
+    max_turns: int | None = None
 
 
 #: Makes a child for a task and a lineage. Supplied by the composition root.
@@ -92,10 +96,13 @@ class Child:
     outcome: Outcome | None = None
     #: Mid-run reports it sent, so `read_agent` can show them while it is still working.
     reports: list[str] = field(default_factory=list)
+    #: Why it is no longer running: "finished", "stopped" or "failed: ...". Empty while it
+    #: runs. `outcome` alone cannot say, because a failed or stopped child has none.
+    ended: str = ""
 
     @property
     def running(self) -> bool:
-        return self.outcome is None
+        return not self.ended
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started
@@ -119,7 +126,9 @@ class Children:
     #: never ends a child, the way an observer of turns never ends a run.
     observer: ChildObserver | None = None
 
-    def lineage(self, agent_id: str, call_id: str) -> Lineage:
+    def lineage(
+        self, agent_id: str, call_id: str, *, max_turns: int | None = None
+    ) -> Lineage:
         return Lineage(
             agent_id=agent_id,
             root=self.root,
@@ -128,9 +137,13 @@ class Children:
             approvals=self.approvals,
             mode=self.modes.current,
             inbox=self.inbox,
+            record=lambda text: self._record(agent_id, text),
+            max_turns=max_turns,
         )
 
-    async def delegate(self, task: str, *, call_id: str, wait: bool) -> Child | str:
+    async def delegate(
+        self, task: str, *, call_id: str, wait: bool, max_turns: int | None = None
+    ) -> Child | str:
         """Start a child on `task`. Waited, it comes back finished; else it comes back
         started and a notice follows. A string is a refusal, and why."""
         running = [c for c in self.started.values() if c.running]
@@ -140,7 +153,7 @@ class Children:
         child = Child(
             agent_id=agent_id,
             task=task,
-            agent=self.spawner(task, self.lineage(agent_id, call_id)),
+            agent=self.spawner(task, self.lineage(agent_id, call_id, max_turns=max_turns)),
             call_id=call_id,
             started=time.monotonic(),
         )
@@ -153,12 +166,17 @@ class Children:
                 raise
             except Exception as exc:
                 error = exc
+                child.ended = f"failed: {type(exc).__name__}: {exc}"
                 self._tell(lambda o: o.failed(child, error))
                 raise
             child.outcome = outcome
+            child.ended = "finished"
             self._tell(lambda o: o.finished(child, outcome))
             return child
         child.work = asyncio.ensure_future(self._finish(child))
+        # The failure is already in the inbox; without this the loop logs it a second time
+        # as an exception nobody retrieved.
+        child.work.add_done_callback(_retrieved)
         return child
 
     def _tell(self, say: Callable[[ChildObserver], None]) -> None:
@@ -177,6 +195,7 @@ class Children:
         except Exception as exc:
             log.exception("child %s failed", child.agent_id)
             error = exc
+            child.ended = f"failed: {type(exc).__name__}: {exc}"
             self._tell(lambda o: o.failed(child, error))
             self.inbox.post(
                 Envelope(
@@ -189,6 +208,7 @@ class Children:
             )
             raise
         child.outcome = outcome
+        child.ended = "finished"
         self._tell(lambda o: o.finished(child, outcome))
         answer = outcome.answer
         more = " Call read_agent for the rest." if len(answer) > NOTICE_CHARS else ""
@@ -206,10 +226,13 @@ class Children:
     def report(self, agent_id: str, text: str, call_id: str) -> None:
         """A child saying how it is going. Posted to the parent as it is; framing is the
         inbox's job."""
+        self._record(agent_id, text)
+        self.inbox.post(Envelope(Source.AGENT, text, sender=agent_id, call_id=call_id))
+
+    def _record(self, agent_id: str, text: str) -> None:
         child = self.started.get(agent_id)
         if child is not None:
             child.reports.append(text)
-        self.inbox.post(Envelope(Source.AGENT, text, sender=agent_id, call_id=call_id))
 
     def tell(self, agent_id: str, text: str) -> bool:
         """The parent speaking to a running child. False if there is no such child running."""
@@ -225,10 +248,12 @@ class Children:
         if child is None:
             return None
         lines = [f"{agent_id}: {child.task[:120]!r}"]
-        if child.outcome is None:
+        if child.running:
             lines.append(
                 f"[still running, {child.elapsed():.0f}s, {len(child.reports)} reports]"
             )
+        elif child.outcome is None:
+            lines.append(f"[{child.ended}]")
         else:
             lines.append(
                 f"[finished after {child.outcome.turns} turns, {child.outcome.stop.kind}]"
@@ -273,8 +298,11 @@ class Children:
         child = self.started.get(agent_id)
         if child is None:
             return None
+        if child.outcome is not None:
+            return f"had already finished ({child.outcome.stop.kind})"
         if not child.running:
-            return f"had already finished ({child.outcome.stop.kind if child.outcome else ''})"
+            return f"had already {child.ended}"
+        child.ended = "stopped"
         if child.work is not None:
             _ = child.work.cancel()
         await child.agent.aclose()
@@ -288,3 +316,8 @@ class Children:
                 _ = child.work.cancel()
             await child.agent.aclose()
         self.started.clear()
+
+
+def _retrieved(task: asyncio.Task[Outcome]) -> None:
+    if not task.cancelled():
+        _ = task.exception()

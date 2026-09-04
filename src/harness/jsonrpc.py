@@ -166,6 +166,13 @@ class _Peer:
                 await self.writer.drain()
             except (ConnectionError, OSError) as exc:
                 log.warning("jsonrpc write failed: %s", exc)
+                # The peer is gone, and this is the only task that knows. Fail what is
+                # waiting and stop the reader; `aclose` cannot be awaited from the task it
+                # would wait for.
+                self._closed = True
+                self._fail_pending()
+                if self._reading is not None and not self._reading.done():
+                    _ = self._reading.cancel()
                 return
 
     # -- inbound ------------------------------------------------------------------------
@@ -277,9 +284,7 @@ class _Peer:
         if self._closed:
             return
         self._closed = True
-        for waiting in list(self._pending.values()):
-            if not waiting.done():
-                waiting.set_exception(Closed())
+        self._fail_pending()
         for task in list(self._tasks):
             _ = task.cancel()
         if self._tasks:
@@ -292,6 +297,11 @@ class _Peer:
             self._outbound.put_nowait(None)
             await self._sender
             self._sender = None
+
+    def _fail_pending(self) -> None:
+        for waiting in list(self._pending.values()):
+            if not waiting.done():
+                waiting.set_exception(Closed())
 
 
 async def stdio_streams(

@@ -307,6 +307,9 @@ class LspIndex:
                 self._warm = self._warm or bool(found)
                 return found
             if asyncio.get_running_loop().time() >= deadline:
+                # A full warmup with nothing found: the index is as warm as it gets, and
+                # the next absent symbol must not pay this again.
+                self._warm = True
                 return found
             await asyncio.sleep(0.25)
 

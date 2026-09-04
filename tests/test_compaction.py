@@ -779,3 +779,32 @@ def test_a_widening_is_pinned_across_a_boundary() -> None:
 
     assert added in rendered
     assert noise not in rendered
+
+
+async def test_a_second_compaction_that_grows_the_render_is_rejected(folder: Path) -> None:
+    """Measured against the render, not the raw transcript. On a thread compacted once
+    the raw transcript holds everything behind the first boundary, so a summary that
+    made the render *bigger* still counted as a saving against it -- and every later
+    request paid for that permanently."""
+    from harness.agent import _Agent
+    from harness.agent.compaction import chars
+
+    messages = history(30)
+    messages.append(boundary_at(messages, len(messages) - 4))
+    for name in ("d0", "d1", "d2"):
+        messages.extend(turn(name))
+    transcript = Transcript(messages)
+    before = chars(view(transcript))
+    assert before < chars(transcript)  # the raw transcript is the larger, by far
+    model = Model(Message(Role.ASSISTANT, "done"), summary="s" * before)
+    agent = agent_over(folder, model)
+    assert isinstance(agent, _Agent)
+    state = State(agent.settings.compaction)
+
+    compacted = await agent._compact(transcript, "t", state, 20_000)
+
+    assert compacted is False
+    assert state.exhausted
+    assert len(model.summarised) == 1
+    assert transcript.messages[-1].role is not Role.COMPACTION
+    assert chars(view(transcript)) == before
